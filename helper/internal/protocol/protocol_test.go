@@ -45,6 +45,12 @@ func TestDecodeParamsIsStrict(t *testing.T) {
 	if err := DecodeParams(json.RawMessage(`{"skipRestore":"yes"}`), &p); err == nil || err.Code != CodeBadRequest {
 		t.Fatalf("wrong type must be bad_request, got %v", err)
 	}
+	for _, raw := range []string{`{}}`, `{}]`, `{} {}`, `{} x`, `{"skipRestore":true} {"skipRestore":true}`} {
+		var q DisableParams
+		if err := DecodeParams(json.RawMessage(raw), &q); err == nil || err.Code != CodeBadRequest {
+			t.Errorf("trailing data %q must be bad_request, got %v", raw, err)
+		}
+	}
 }
 
 func TestValidateLanes(t *testing.T) {

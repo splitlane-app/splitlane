@@ -293,7 +293,9 @@ func DecodeParams(raw json.RawMessage, v any) *Error {
 	if err := dec.Decode(v); err != nil {
 		return Errorf(CodeBadRequest, "params: %v", err)
 	}
-	if dec.More() {
+	// dec.More() is false before a closing bracket, so "{}}" and "{}]" would pass;
+	// requiring a clean EOF rejects every kind of trailing data.
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return Errorf(CodeBadRequest, "params: trailing data")
 	}
 	return nil
