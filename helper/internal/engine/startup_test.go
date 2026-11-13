@@ -50,7 +50,7 @@ func TestStartAfterHelperDiedBetweenSteps6And9(t *testing.T) {
 // The previous helper failed while on ("was on" set): restore, stop the old core, enable again.
 func TestStartAfterCrashWhileOn(t *testing.T) {
 	h := newHarness(t)
-	leftover(h)
+	old := leftover(h)
 	h.store.journal = &store.Journal{ExitNode: exitNode, AllowLAN: true}
 	h.store.state.WasOn = true
 	h.sys.set(func(s *fakeSys) { s.on = false })
@@ -59,8 +59,13 @@ func TestStartAfterCrashWhileOn(t *testing.T) {
 	if got := strings.Join(h.phases(), ","); got != "stopping,starting,on" {
 		t.Fatalf("phases %s", got)
 	}
-	if h.rec.index("core:interrupt 777") > h.rec.index("core:start") {
-		t.Fatal("the old core must be stopped before the new one starts")
+	// All three steps must have happened, in this order: the exit node given back (the first
+	// sys:set, before any new core exists), the old core stopped, the new core started.
+	set := h.rec.index("sys:set 100.64.0.1 true")
+	stop := h.rec.index("core:interrupt 777")
+	start := h.rec.index("core:start")
+	if set < 0 || stop <= set || start <= stop || old.alive() {
+		t.Fatalf("restore, then stop the old core, then start the new one (old alive %v): %v", old.alive(), h.rec.list())
 	}
 }
 
