@@ -10,7 +10,13 @@ import (
 
 // beginEnableLocked starts 5.3 in the background; e.mu must be held.
 // unattended: the enable after a failure or at the start of the helper (no route yet is not a refusal).
+// While another operation runs (also in the short window after a disable or rollback published its
+// final phase and before its startOp cleanup clears e.op) it returns false and changes nothing:
+// a phase "starting" without an operation behind it would leave the helper wedged.
 func (e *Engine) beginEnableLocked(unattended bool) bool {
+	if e.op != nil {
+		return false
+	}
 	e.setPhase(protocol.PhaseStarting, nil)
 	return e.startOp("enable", func(ctx context.Context) { e.runEnable(ctx, unattended) })
 }

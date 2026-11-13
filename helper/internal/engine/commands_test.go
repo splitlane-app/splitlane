@@ -670,3 +670,127 @@ func TestShutdown(t *testing.T) {
 		t.Fatalf("shutdown in starting rolls back: %+v", h.e.State())
 	}
 }
+
+// holdOp puts an operation in place that has ended in substance but whose cleanup has not run: the
+// enable and restart operations publish "on" and release e.mu before startOp's deferred cleanup
+// clears e.op. release is that cleanup.
+func holdOp(h *harness) (release func()) {
+	o := &op{kind: "enable", cancel: func() {}, done: make(chan struct{})}
+	h.e.mu.Lock()
+	h.e.op = o
+	h.e.mu.Unlock()
+	return func() {
+		h.e.mu.Lock()
+		h.e.op = nil
+		h.e.mu.Unlock()
+		close(o.done)
+	}
+}
+
+// helper.shutdown in a live phase while the operation that published it still holds e.op: the
+// helper must neither exit with the core running nor leave the system exit node off. The disabling
+// of 5.4 runs as soon as the operation is gone, and only then the process ends.
+func TestShutdownWhileAnOpFinishes(t *testing.T) {
+	for _, phase := range []string{protocol.PhaseOn, protocol.PhaseDegraded, protocol.PhaseBlocked} {
+		t.Run(phase, func(t *testing.T) {
+			h, _ := inPhase(t, phase)
+			release := holdOp(h)
+			if err := call(h, protocol.MethodShutdown, nil); err != nil {
+				t.Fatalf("shutdown must be accepted in every phase: %v", err)
+			}
+			if exitedNow(h) || h.e.State().Phase != phase || !h.core.anyAlive() {
+				t.Fatalf("the helper must wait for the operation: phase %s, events %v", h.e.State().Phase, h.rec.list())
+			}
+			release()
+			h.waitFor("exit", func() bool { return exitedNow(h) })
+			if h.e.State().Phase != protocol.PhaseOff || h.core.anyAlive() || h.store.hasJournal() || h.store.saved().WasOn {
+				t.Fatalf("the helper exited before 5.4 was done: phase %s, events %v", h.e.State().Phase, h.rec.list())
+			}
+			on, ip := systemExitNode(h)
+			switch phase {
+			case protocol.PhaseBlocked: // the exit node the user selected stays (5.7)
+				if !on || ip != "100.64.0.99" {
+					t.Fatalf("the user's exit node must stay: %v", h.rec.list())
+				}
+			default: // the system exit node is given back (5.4 step 1)
+				if !on || ip != exitNode {
+					t.Fatalf("the system exit node must be given back: %v", h.rec.list())
+				}
+			}
+		})
+	}
+}
+
+// A core that crashes after helper.shutdown was accepted in that window is still stopped by the
+// disabling (the watcher ignores it once exiting is set); the process ends only afterwards.
+func TestShutdownWhileAnOpFinishesAfterTheCoreDied(t *testing.T) {
+	h := enabled(t)
+	release := holdOp(h)
+	call(h, protocol.MethodShutdown, nil)
+	h.core.last().crash()
+	release()
+	h.waitFor("exit", func() bool { return exitedNow(h) })
+	if h.e.State().Phase != protocol.PhaseOff || h.core.anyAlive() || h.store.hasJournal() {
+		t.Fatalf("phase %s, events %v", h.e.State().Phase, h.rec.list())
+	}
+	if on, ip := systemExitNode(h); !on || ip != exitNode {
+		t.Fatalf("the system exit node must be given back: %v", h.rec.list())
+	}
+}
+
+// tailscale.setExitNode in a live phase while an operation still holds e.op: busy, and nothing
+// changes (no phase "stopping" without an operation behind it, no new choice saved); once the
+// operation is gone the same command works.
+func TestSetExitNodeBusyWhileAnOpFinishes(t *testing.T) {
+	h := enabled(t)
+	release := holdOp(h)
+	states, events := publishedCount(h), len(h.rec.list())
+	wantCode(t, call(h, protocol.MethodSetExitNode, map[string]string{"id": "100.64.0.5"}), protocol.CodeBusy)
+	if s := h.e.State(); s.Phase != protocol.PhaseOn || s.Reason != nil {
+		t.Fatalf("phase must stay on: %+v", s)
+	}
+	if got := h.store.saved().SelectedExitNode; got != exitNode {
+		t.Fatalf("a refused command must not save the choice: %q", got)
+	}
+	if got := publishedCount(h); got != states {
+		t.Fatalf("a refused command must not publish: %d new states", got-states)
+	}
+	if got := h.rec.list(); len(got) != events {
+		t.Fatalf("a refused command must not touch the core or the system client: %v", got[events:])
+	}
+	release()
+	if err := call(h, protocol.MethodSetExitNode, map[string]string{"id": "100.64.0.5"}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("second core on", func() bool {
+		return h.rec.count("core:start") == 2 && h.e.State().Phase == protocol.PhaseOn && h.idle()
+	})
+}
+
+// routing.enable in off or error while an operation still holds e.op (the cleanup of a disable or a
+// rollback that has published its final phase): busy, and the phase does not move to "starting"
+// without an operation behind it; once the operation is gone the enable works.
+func TestEnableBusyWhileAnOpFinishes(t *testing.T) {
+	for _, phase := range []string{protocol.PhaseOff, protocol.PhaseError} {
+		t.Run(phase, func(t *testing.T) {
+			h, _ := inPhase(t, phase)
+			release := holdOp(h)
+			states, events := publishedCount(h), len(h.rec.list())
+			wantCode(t, call(h, protocol.MethodEnable, nil), protocol.CodeBusy)
+			if got := h.e.State().Phase; got != phase {
+				t.Fatalf("phase must stay %s, got %s", phase, got)
+			}
+			if got := publishedCount(h); got != states {
+				t.Fatalf("a refused command must not publish: %d new states", got-states)
+			}
+			if got := h.rec.list(); len(got) != events {
+				t.Fatalf("a refused command must not touch the core: %v", got[events:])
+			}
+			release()
+			if err := call(h, protocol.MethodEnable, nil); err != nil {
+				t.Fatal(err)
+			}
+			h.waitPhase(protocol.PhaseOn)
+		})
+	}
+}

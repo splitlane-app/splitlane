@@ -69,6 +69,8 @@ func wrongPhase(phase string) *protocol.Error {
 }
 
 // cmdEnable: off and error start 5.3; degraded runs an extra check ("Повторить"); stopping is busy.
+// In off and error an operation that is still finishing (its cleanup has not cleared e.op) is busy too:
+// beginEnableLocked refuses before it changes the phase.
 func (e *Engine) cmdEnable(params json.RawMessage) *protocol.Error {
 	if err := noParams(params); err != nil {
 		return err
@@ -349,7 +351,10 @@ func (e *Engine) cmdSetExitNode(params json.RawMessage) *protocol.Error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	phase := e.st.Phase
-	if e.exiting || phase == protocol.PhaseStarting || phase == protocol.PhaseStopping {
+	// A live phase with an operation still in place is the short window after an enable or restart
+	// published it and before its cleanup: the reconnect has no operation to run in, and a phase
+	// "stopping" without one would wedge the helper. Nothing is saved or published then.
+	if e.exiting || phase == protocol.PhaseStarting || phase == protocol.PhaseStopping || (live(phase) && e.op != nil) {
 		return busy()
 	}
 	if err := protocol.ValidateExitNodeID(p.ID, e.saved.ExitNodes); err != nil {
@@ -419,11 +424,33 @@ func (e *Engine) cmdShutdown(params json.RawMessage) *protocol.Error {
 			e.op.cancel()
 		}
 	case protocol.PhaseOn, protocol.PhaseDegraded, protocol.PhaseBlocked:
-		e.beginDisableLocked()
+		e.beginDisableLocked() // refused in the window of an operation that is finishing: exitWhenDone retries
 	}
-	go func() {
-		e.Wait()
-		e.d.OnExit()
-	}()
+	go e.exitWhenDone()
 	return nil
+}
+
+// exitWhenDone waits for the operations to end, disables as long as a live phase is left, then calls
+// OnExit. The loop closes the window in which an enable or restart has published a live phase but
+// startOp's cleanup has not yet cleared e.op: beginDisableLocked refuses there, so shutdown would
+// otherwise end the process with the core running and the system exit node off. exiting keeps every
+// other command and the watcher out, so nothing but this loop starts an operation now.
+func (e *Engine) exitWhenDone() {
+	for {
+		e.Wait()
+		e.mu.Lock()
+		if e.op != nil { // an operation began between Wait and the lock: wait for it too
+			e.mu.Unlock()
+			continue
+		}
+		again := live(e.st.Phase)
+		if again {
+			e.beginDisableLocked()
+		}
+		e.mu.Unlock()
+		if !again {
+			break
+		}
+	}
+	e.d.OnExit()
 }
