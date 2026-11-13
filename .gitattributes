@@ -1,0 +1,9 @@
+# core.autocrlf=true (the Git for Windows default) turns text files into CRLF on checkout.
+# gofmt -l then lists every .go file, and golden comparisons see \r\n. Keep LF in the working tree.
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.ps1 text eol=lf
+*.sha256 text eol=lf
