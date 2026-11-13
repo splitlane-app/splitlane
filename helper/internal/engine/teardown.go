@@ -147,8 +147,14 @@ func (e *Engine) teardown() bool {
 }
 
 // beginDisableLocked starts the disabling of 5.4 for routing.disable and helper.shutdown;
-// e.mu must be held. "Was on" is cleared at its very beginning (5.2).
+// e.mu must be held. "Was on" is cleared at its very beginning (5.2), once the disabling is
+// accepted: while another operation runs (also in the short window after an enable or restart
+// published "on" and before its startOp cleanup clears e.op) it returns false and changes nothing,
+// neither the phase, nor "was on", nor state.json, so no operation is left without a driver.
 func (e *Engine) beginDisableLocked() bool {
+	if e.op != nil {
+		return false
+	}
 	e.saved.WasOn = false
 	e.save()
 	e.setPhase(protocol.PhaseStopping, nil)

@@ -164,3 +164,54 @@ func TestRollbackFinalPhase(t *testing.T) {
 		t.Fatal("the internal cancel reason must never be published")
 	}
 }
+
+// publishedCount is the number of states published so far.
+func publishedCount(h *harness) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.states)
+}
+
+// While another operation still holds e.op (the enable and restart ops publish "on" and unlock
+// before startOp's deferred cleanup clears it), a refused beginDisableLocked must change nothing:
+// not the phase, not "was on", not state.json, not the published states, not the core or the system client.
+func TestBusyDisableChangesNothing(t *testing.T) {
+	h := newHarness(t)
+	p := h.running()
+	busy := &op{kind: "enable", cancel: func() {}, done: make(chan struct{})}
+	h.e.mu.Lock()
+	h.e.op = busy
+	h.e.mu.Unlock()
+	statesBefore := publishedCount(h)
+	eventsBefore := len(h.rec.list())
+
+	h.e.mu.Lock()
+	started := h.e.beginDisableLocked()
+	h.e.mu.Unlock()
+
+	if started {
+		t.Fatal("beginDisableLocked must refuse while another operation runs")
+	}
+	s := h.e.State()
+	if s.Phase != protocol.PhaseOn || s.Reason != nil {
+		t.Fatalf("phase must stay on without a reason: %+v", s)
+	}
+	h.e.mu.Lock()
+	wasOn, same := h.e.saved.WasOn, h.e.op == busy
+	h.e.mu.Unlock()
+	if !wasOn || !h.store.saved().WasOn {
+		t.Fatalf("was-on must stay set: engine %v, state.json %v", wasOn, h.store.saved().WasOn)
+	}
+	if !same {
+		t.Fatal("the running operation must stay in place")
+	}
+	if got := publishedCount(h); got != statesBefore {
+		t.Fatalf("no state may be published by a refused disable: %d new", got-statesBefore)
+	}
+	if got := h.rec.list(); len(got) != eventsBefore {
+		t.Fatalf("a refused disable must not touch the core or the system client: %v", got[eventsBefore:])
+	}
+	if !p.alive() || !h.store.hasJournal() {
+		t.Fatal("the core must keep running and the journal must stay")
+	}
+}
