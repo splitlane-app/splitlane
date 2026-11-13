@@ -142,6 +142,12 @@ func TestNormalizeRejectsMalformedInput(t *testing.T) {
 	bad := []protocol.AppRule{
 		rule("a", protocol.LaneVPN, protocol.KindFile, `tools\curl.exe`),
 		rule("b", protocol.LaneVPN, protocol.KindFile, `\\server\share\curl.exe`),
+		// the same UNC and device volumes written with forward slashes, and the device form with backslashes
+		rule("b1", protocol.LaneVPN, protocol.KindFile, `//server/share/curl.exe`),
+		rule("b2", protocol.LaneVPN, protocol.KindFile, `//?/C:/Tools/curl.exe`),
+		rule("b3", protocol.LaneVPN, protocol.KindFile, `\\?\C:\Tools\curl.exe`),
+		rule("b4", protocol.LaneVPN, protocol.KindFile, `\\.\C:\Tools\curl.exe`),
+		rule("b5", protocol.LaneVPN, protocol.KindFile, `1:\Tools\curl.exe`),
 		rule("c", protocol.LaneVPN, protocol.KindFile, `C:\Tools\script.cmd`),
 		rule("d", protocol.LaneVPN, "glob", `C:\Tools\curl.exe`),
 		{ID: "e", Exe: `C:\Tools\curl.exe`, Matcher: protocol.Matcher{Kind: protocol.KindFile, Value: `C:\Other\curl.exe`}, Lane: protocol.LaneVPN},
@@ -150,6 +156,48 @@ func TestNormalizeRejectsMalformedInput(t *testing.T) {
 	for _, a := range bad {
 		if _, err := Normalize(a, testEnv); err == nil {
 			t.Errorf("rule %s must be rejected as malformed", a.ID)
+		}
+	}
+}
+
+func TestNormalizeAcceptsAForwardSlashDrivePath(t *testing.T) {
+	n := normalized(t, protocol.KindFile, `c:/Tools/curl.exe`)
+	if n.Exe != `c:\Tools\curl.exe` || n.Matcher.Value != `c:\Tools\curl.exe` {
+		t.Errorf("a drive path with forward slashes must be cleaned to backslashes, got %+v", n)
+	}
+}
+
+// Expressions has no error result, so a rule that did not go through Normalize
+// (state.json, a caller that skips it) must give nil: never a catch-all
+// expression such as "(?i)^" and never a panic.
+func TestExpressionsRefuseEmptyOrMalformedValues(t *testing.T) {
+	cases := []struct{ name, kind, value string }{
+		{"empty folder", protocol.KindFolder, ""},
+		{"empty file", protocol.KindFile, ""},
+		{"empty package", protocol.KindPackage, ""},
+		{"empty value of an unknown kind", "glob", ""},
+		{"empty kind and value", "", ""},
+		{"package without slash", protocol.KindPackage, `Microsoft.WindowsTerminal_8wekyb3d8bbwe`},
+		{"package without underscore", protocol.KindPackage, `Microsoft.WindowsTerminal/WindowsTerminal.exe`},
+		{"package without name", protocol.KindPackage, `_8wekyb3d8bbwe/WindowsTerminal.exe`},
+		{"package without publisher", protocol.KindPackage, `Microsoft.WindowsTerminal_/WindowsTerminal.exe`},
+		{"package without file", protocol.KindPackage, `Microsoft.WindowsTerminal_8wekyb3d8bbwe/`},
+		{"package with a slash in the id", protocol.KindPackage, `a/Microsoft.WindowsTerminal_8wekyb3d8bbwe/WindowsTerminal.exe`},
+		{"package with a backslash in the file", protocol.KindPackage, `Microsoft.WindowsTerminal_8wekyb3d8bbwe/sub\WindowsTerminal.exe`},
+	}
+	for _, c := range cases {
+		a := protocol.AppRule{ID: "x", Matcher: protocol.Matcher{Kind: c.kind, Value: c.value}, Lane: protocol.LaneDirect}
+		var got []string
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s: Expressions panicked: %v", c.name, r)
+				}
+			}()
+			got = Expressions(a, testEnv)
+		}()
+		if got != nil {
+			t.Errorf("%s: want nil, got %q", c.name, got)
 		}
 	}
 }

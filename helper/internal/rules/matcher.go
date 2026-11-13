@@ -78,14 +78,29 @@ func Normalize(a protocol.AppRule, env Env) (protocol.AppRule, error) {
 }
 
 func cleanExe(exe string) (string, error) {
-	if exe == "" || !filepath.IsAbs(exe) || filepath.VolumeName(exe) == "" || strings.HasPrefix(exe, `\\`) {
+	if exe == "" {
 		return "", fmt.Errorf("exe must be an absolute local path")
 	}
+	// Clean first: it turns "/" into "\", so "//server/share" and "//?/C:" show
+	// their real UNC and device volumes to the check below.
 	exe = filepath.Clean(exe)
+	if !filepath.IsAbs(exe) || !isDriveVolume(filepath.VolumeName(exe)) {
+		return "", fmt.Errorf("exe must be an absolute local path")
+	}
 	if !strings.EqualFold(filepath.Ext(exe), ".exe") {
 		return "", fmt.Errorf("exe must end with .exe")
 	}
 	return exe, nil
+}
+
+// isDriveVolume reports a plain drive letter volume such as "C:". UNC
+// ("\\server\share") and device ("\\?\C:") volumes are longer.
+func isDriveVolume(v string) bool {
+	if len(v) != 2 || v[1] != ':' {
+		return false
+	}
+	c := v[0]
+	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
 }
 
 func isRoot(dir string) bool {
@@ -135,11 +150,24 @@ func packageValue(exe string) (string, bool) {
 	return "", false
 }
 
-func splitPackage(value string) (name, publisher, file string) {
+// splitPackage is the inverse of packageValue. ok is false for a value that
+// packageValue cannot have produced: a missing "/" or "_", an empty part, or a
+// path separator inside a part.
+func splitPackage(value string) (name, publisher, file string, ok bool) {
 	slash := strings.LastIndex(value, "/")
+	if slash < 0 {
+		return "", "", "", false
+	}
 	id := value[:slash]
 	under := strings.LastIndex(id, "_")
-	return id[:under], id[under+1:], value[slash+1:]
+	if under < 0 {
+		return "", "", "", false
+	}
+	name, publisher, file = id[:under], id[under+1:], value[slash+1:]
+	if name == "" || publisher == "" || file == "" || strings.ContainsAny(id, `/\`) || strings.Contains(file, `\`) {
+		return "", "", "", false
+	}
+	return name, publisher, file, true
 }
 
 func svchost(env Env) string {
@@ -165,15 +193,30 @@ func truncate(s string) string {
 }
 
 // Expressions are the case-insensitive process_path_regex expressions of a normalized rule (spec 8.1).
+// It returns nil, never a catch-all expression, when the rule is not usable: an
+// unknown kind, an empty folder or file value, or a package value that does not
+// parse. Normalize never produces such a rule, but one loaded from state.json
+// or passed by a caller that skipped Normalize can be, and an empty folder
+// value would give "(?i)^", which matches every process. A caller must treat nil
+// for a rule as an error.
 func Expressions(a protocol.AppRule, env Env) []string {
 	v := a.Matcher.Value
 	switch a.Matcher.Kind {
 	case protocol.KindFolder:
+		if v == "" {
+			return nil
+		}
 		return []string{`(?i)^` + regexp.QuoteMeta(v)}
 	case protocol.KindFile:
+		if v == "" {
+			return nil
+		}
 		return []string{`(?i)^` + regexp.QuoteMeta(v) + `$`}
 	case protocol.KindPackage:
-		name, publisher, file := splitPackage(v)
+		name, publisher, file, ok := splitPackage(v)
+		if !ok {
+			return nil
+		}
 		return []string{`(?i)^.*\\WindowsApps\\` + regexp.QuoteMeta(name) + `_[^\\]*_` +
 			regexp.QuoteMeta(publisher) + `\\(?:[^\\]*\\)*` + regexp.QuoteMeta(file) + `$`}
 	case protocol.KindSystem:
