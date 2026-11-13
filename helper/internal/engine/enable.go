@@ -19,12 +19,25 @@ func (e *Engine) beginEnableLocked(unattended bool) bool {
 func (e *Engine) runEnable(ctx context.Context, unattended bool) {
 	why := e.enable(ctx, unattended)
 	if why == nil && ctx.Err() == nil {
-		e.mu.Lock()
-		e.finishOn()
-		e.mu.Unlock()
-		return
+		if why = e.finishOnChecked(); why == nil {
+			return
+		}
 	}
 	e.rollback(why, ctx.Err() != nil)
+}
+
+// finishOnChecked is step 9 of 5.3 with the last look at the core: the look and finishOn are one
+// hold of e.mu. A core that exited after the last check of the steps before (for instance during
+// the very probe that completed step 8) is a crash, not an "on": the reason core_crashed is
+// returned and the phase stays as it is.
+func (e *Engine) finishOnChecked() *protocol.Reason {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if r := e.run; r != nil && !r.stopping && exited(r.proc) {
+		return reason(protocol.ReasonCoreCrashed)
+	}
+	e.finishOn()
+	return nil
 }
 
 // enable is steps 1–8 of 5.3; the order was proven on the PC (appendix A) and does not change.
@@ -72,9 +85,14 @@ func (e *Engine) enable(ctx context.Context, unattended bool) *protocol.Reason {
 	}
 	e.mu.Lock()
 	stop := e.ending || e.exiting
+	dead := exited(r.proc) && !r.stopping
 	e.mu.Unlock()
 	if stop || ctx.Err() != nil {
 		return errCancelled
+	}
+	if dead {
+		// The core failed after the proof: nothing was switched yet, nothing is left to give back.
+		return reason(protocol.ReasonCoreCrashed)
 	}
 	// Step 6: the journal first, flushed to disk, then the system exit node off (5.7).
 	if sys.ExitNodeOn {
@@ -99,6 +117,7 @@ func (e *Engine) enable(ctx context.Context, unattended bool) *protocol.Reason {
 		}
 		e.mu.Lock()
 		e.st.SystemTailscale.Installed, e.st.SystemTailscale.ExitNodeOn = true, false
+		r.cleared = true // from now on the watcher of this core gives the exit node back at once (5.5)
 		e.mu.Unlock()
 	}
 	// Step 7.
@@ -201,6 +220,9 @@ func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, boo
 			return r, nil, false
 		}
 		if exited(proc) {
+			e.mu.Lock()
+			r.stopping = true // given up on purpose (a retry follows): its watcher has nothing to do
+			e.mu.Unlock()
 			return r, reason(protocol.ReasonCoreStartTimeout, protocol.ParamError, "the core exited before its start line"), true
 		}
 		if !e.d.Clock.Now().Before(deadline) {
@@ -310,9 +332,17 @@ func (e *Engine) checkSwitch(ctx context.Context, r *coreRun, directIP string) *
 
 // watch is the separate thread of 5.5: on an unexpected exit of the core it gives the system
 // exit node back at once (journal present), without waiting for anything, then restarts the core.
+// The restore is only for a run that switched the system exit node off (step 6 of 5.3, r.cleared):
+// a core that exits before that, for instance before its start line, has nothing to give back and
+// must not touch the system exit node (5.7: the proof of the tunnel leaves the system VPN alone).
+// The check and the snapshot of the journal are one hold of e.mu, right before the call.
 // In phase blocked the user has selected an exit node in the system client himself: it is neither
 // overwritten from the journal nor switched off at step 6 of a restart (5.7 wins over 5.5 here).
 // Then 5.4 runs without a restart: the journal goes, the user's choice stays, error core_crashed.
+// While an operation runs it sees the exit itself at its next check; but the last check of an
+// operation is followed by a short stretch (the last probe, finishOn, the cleanup of the
+// operation) in which nobody looks, so the watcher waits for the operation and then acts on
+// the core if it is still the current one in a live phase: a crash is never dropped.
 func (e *Engine) watch(r *coreRun) {
 	<-r.proc.Done()
 	e.mu.Lock()
@@ -320,24 +350,32 @@ func (e *Engine) watch(r *coreRun) {
 		e.mu.Unlock()
 		return
 	}
-	j := e.journal
-	busy := e.op != nil
-	blocked := e.sysExitOn // the user selected an exit node himself: it stays (5.7)
-	e.mu.Unlock()
 	e.d.Log("core exited unexpectedly")
-	if j != nil && !blocked {
+	blocked := e.sysExitOn // the user selected an exit node himself: it stays (5.7)
+	var restore *store.Journal
+	if r.cleared && e.journal != nil && !blocked {
+		j := *e.journal
+		restore = &j
+	}
+	e.mu.Unlock()
+	if restore != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-		if err := e.d.Sys.SetExitNode(ctx, j.ExitNode, j.AllowLAN); err != nil {
+		if err := e.d.Sys.SetExitNode(ctx, restore.ExitNode, restore.AllowLAN); err != nil {
 			e.d.Log("immediate restore failed: %v", err)
 		}
 		cancel()
 	}
-	if busy {
-		return // the running operation sees the exit itself
-	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.run != r || e.op != nil || e.exiting || e.ending {
+	waited := false
+	for e.op != nil && e.run == r && !r.stopping && !e.exiting && !e.ending {
+		o := e.op
+		e.mu.Unlock()
+		<-o.done
+		e.mu.Lock()
+		waited = true
+	}
+	if e.run != r || r.stopping || e.exiting || e.ending || (waited && !live(e.st.Phase)) {
 		return
 	}
 	if blocked {
@@ -367,17 +405,17 @@ func (e *Engine) runRestart(ctx context.Context, why string) {
 			e.rollback(errCancelled, true)
 			return
 		}
-		if got := e.enable(ctx, true); got == nil && ctx.Err() == nil {
-			e.mu.Lock()
-			e.finishOn()
-			e.mu.Unlock()
-			return
-		} else if ctx.Err() != nil {
+		got := e.enable(ctx, true)
+		if got == nil && ctx.Err() == nil {
+			if got = e.finishOnChecked(); got == nil {
+				return
+			}
+		}
+		if ctx.Err() != nil {
 			e.rollback(errCancelled, true)
 			return
-		} else {
-			e.d.Log("restart attempt failed: %s", got.Code)
 		}
+		e.d.Log("restart attempt failed: %s", got.Code)
 	}
 	e.rollback(reason(why), false)
 }

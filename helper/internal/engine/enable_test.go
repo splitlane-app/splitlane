@@ -1,8 +1,12 @@
 package engine
 
 import (
+	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"splitlane/helper/internal/protocol"
 	"splitlane/helper/internal/store"
@@ -360,5 +364,268 @@ func TestThreeFailedRestarts(t *testing.T) {
 	}
 	if h.store.hasJournal() || h.store.saved().WasOn {
 		t.Fatal("after the last failure: exit node restored, was-on cleared")
+	}
+}
+
+// hookProbe lets a test act inside the helper's own request of step 8 (the path through the
+// adapter): call counts those requests from 1.
+type hookProbe struct {
+	*fakeProbe
+	cmu      sync.Mutex
+	calls    int
+	onDirect func(call int)
+}
+
+func (p *hookProbe) Direct(ctx context.Context, url string) ProbeResult {
+	p.cmu.Lock()
+	p.calls++
+	n := p.calls
+	p.cmu.Unlock()
+	if p.onDirect != nil {
+		p.onDirect(n)
+	}
+	return p.fakeProbe.Direct(ctx, url)
+}
+
+// slowCheckCore makes the second `check` of the core wait a moment, so that everything that
+// started at the first (failed) start has certainly run by the time the retry goes on.
+type slowCheckCore struct {
+	*fakeCore
+	checks atomic.Int32
+	delay  time.Duration
+}
+
+func (c *slowCheckCore) Check(ctx context.Context, path string) error {
+	if c.checks.Add(1) == 2 {
+		time.Sleep(c.delay)
+	}
+	return c.fakeCore.Check(ctx, path)
+}
+
+// onceOnState runs f the first time a published state satisfies when; it runs under the
+// engine's lock, exactly where the operation publishes.
+func onceOnState(h *harness, when func(protocol.State) bool, f func()) {
+	var once sync.Once
+	orig := h.e.d.OnState
+	h.e.d.OnState = func(s protocol.State) {
+		orig(s)
+		if when(s) {
+			once.Do(f)
+		}
+	}
+}
+
+// crashInProbe ends the current core from inside a probe of the operation and returns only once
+// the watcher has acted (its restore is the sign): the watcher has then looked at the engine
+// while the operation was still busy, which is the case these tests are about.
+func crashInProbe(h *harness) {
+	mark := len(h.rec.list())
+	h.core.last().crash()
+	deadline := time.Now().Add(2 * time.Second)
+	for countSince(h, mark, "sys:set") == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// Section 10 row 4 while an operation is busy: the core fails inside step 8 and the operation
+// hangs in its probe, so it cannot restore anything. The exit node must come back from the
+// watcher alone, at once, with the phase still starting.
+func TestCrashWhileBusyRestoresAtOnce(t *testing.T) {
+	h := newHarness(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(free)
+	h.e.d.Probe = &hookProbe{fakeProbe: h.probe, onDirect: func(call int) {
+		if call == 1 {
+			close(entered)
+			<-release
+		}
+	}}
+	h.load()
+	startEnable(h)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("step 8 never started: %v", h.rec.list())
+	}
+	h.core.last().crash()
+	h.waitFor("the immediate restore", func() bool { return h.rec.index("sys:set 100.64.0.1 true") >= 0 })
+	if h.idle() || h.e.State().Phase != protocol.PhaseStarting {
+		t.Fatalf("the operation must still hang in its probe, phase %s: %v", h.e.State().Phase, h.rec.list())
+	}
+	if on, ip := systemExitNode(h); !on || ip != exitNode {
+		t.Fatalf("exit node on=%v ip=%s", on, ip)
+	}
+	free()
+	wantError(t, h, protocol.ReasonCoreCrashed)
+	if n := h.rec.count("sys:set"); n != 1 {
+		t.Fatalf("one restore expected, got %d: %v", n, h.rec.list())
+	}
+}
+
+// The core fails inside the very probe that completes step 8, and that probe still gets a good
+// answer: the enable must not end in "on" with a dead core. Here it is a first enable: the rollback of
+// 5.4 runs, error core_crashed, the exit node is back.
+func TestCrashDuringTheLastProbeIsNotOn(t *testing.T) {
+	h := newHarness(t)
+	h.e.d.Probe = &hookProbe{fakeProbe: h.probe, onDirect: func(call int) {
+		if call == 2 {
+			crashInProbe(h)
+		}
+	}}
+	h.load()
+	startEnable(h)
+	wantError(t, h, protocol.ReasonCoreCrashed)
+	if got := strings.Join(h.phases(), ","); got != "starting,stopping,error" || h.rec.count("core:start") != 1 {
+		t.Fatalf("phases %s, no restart expected: %v", got, h.rec.list())
+	}
+	if on, ip := systemExitNode(h); !on || ip != exitNode || h.store.hasJournal() || h.store.saved().WasOn {
+		t.Fatalf("exit node restored, journal gone, was-on clear: on=%v ip=%s %v", on, ip, h.rec.list())
+	}
+}
+
+// The same crash during a restart is one failed attempt: the loop of 5.5 goes on and the next
+// core ends in "on"; nothing is published as an error and no attempt is lost.
+func TestRestartCrashDuringTheLastProbeTriesAgain(t *testing.T) {
+	h := newHarness(t)
+	var armed atomic.Bool
+	var seen atomic.Int32
+	h.e.d.Probe = &hookProbe{fakeProbe: h.probe, onDirect: func(int) {
+		if armed.Load() && seen.Add(1) == 2 {
+			crashInProbe(h)
+		}
+	}}
+	h.load()
+	startEnable(h)
+	h.waitPhase(protocol.PhaseOn)
+	armed.Store(true)
+	h.core.last().crash()
+	h.waitFor("third core on", func() bool {
+		return h.rec.count("core:start") == 3 && h.e.State().Phase == protocol.PhaseOn && h.idle()
+	})
+	if got := strings.Join(h.phases(), ","); got != "starting,on,starting,on" || h.sawReason(protocol.ReasonCoreCrashed) {
+		t.Fatalf("phases %s: %v", got, h.rec.list())
+	}
+}
+
+// The core fails while an operation is still registered (for instance in the short window after
+// an enable published "on" and before its cleanup): the watcher restores at once, waits for that
+// operation and then, the core being still the current one in a live phase, restarts it.
+func TestWatcherActsAfterTheBusyOperationEnds(t *testing.T) {
+	h := newHarness(t)
+	p := h.running()
+	busy := &op{kind: "enable", cancel: func() {}, done: make(chan struct{})}
+	h.e.mu.Lock()
+	r := h.e.run
+	r.cleared = true // as after step 6 of 5.3
+	h.e.op = busy
+	h.e.mu.Unlock()
+	go h.e.watch(r)
+	p.crash()
+	h.waitFor("the immediate restore", func() bool { return h.rec.index("sys:set 100.64.0.1 true") >= 0 })
+	time.Sleep(20 * time.Millisecond)
+	if n := h.rec.count("core:start"); n != 1 || h.e.State().Phase != protocol.PhaseOn {
+		t.Fatalf("no restart while the operation runs (starts %d, phase %s): %v", n, h.e.State().Phase, h.rec.list())
+	}
+	h.e.mu.Lock()
+	h.e.op = nil
+	h.e.mu.Unlock()
+	close(busy.done)
+	h.waitFor("second core on", func() bool {
+		return h.rec.count("core:start") == 2 && h.e.State().Phase == protocol.PhaseOn && h.idle()
+	})
+	if got := strings.Join(h.phases(), ","); got != "on,starting,on" || !h.core.last().alive() {
+		t.Fatalf("phases %s: %v", got, h.rec.list())
+	}
+}
+
+// A run that never switched the system exit node off has nothing to give back: while an
+// operation is busy its watcher leaves the system alone, even with a journal at hand.
+func TestWatcherDoesNotRestoreForARunThatSwitchedNothing(t *testing.T) {
+	h := newHarness(t)
+	p := h.running()
+	busy := &op{kind: "enable", cancel: func() {}, done: make(chan struct{})}
+	h.e.mu.Lock()
+	r := h.e.run // r.cleared is false: step 6 was not reached
+	h.e.op = busy
+	h.e.mu.Unlock()
+	go h.e.watch(r)
+	p.crash()
+	time.Sleep(50 * time.Millisecond)
+	if h.rec.index("sys:") >= 0 {
+		t.Fatalf("nothing to restore for this run: %v", h.rec.list())
+	}
+	h.e.mu.Lock()
+	r.stopping, h.e.op = true, nil // the operation ends by stopping this core
+	h.e.mu.Unlock()
+	close(busy.done)
+}
+
+// A core that exits before its start line is given up on purpose: it is marked stopping at once,
+// so nothing acts for it, not even a watcher that is late.
+func TestEarlyExitMarksTheCoreStopping(t *testing.T) {
+	h := newHarness(t)
+	h.core.dieEarly = 1
+	h.load()
+	busy := &op{kind: "enable", cancel: func() {}, done: make(chan struct{})}
+	h.e.mu.Lock()
+	h.e.op = busy
+	h.e.mu.Unlock()
+	t.Cleanup(func() {
+		h.e.mu.Lock()
+		h.e.op = nil
+		h.e.mu.Unlock()
+		close(busy.done)
+	})
+	r, why, retry := h.e.startCore(context.Background())
+	h.e.mu.Lock()
+	stopping := r.stopping
+	h.e.mu.Unlock()
+	if why == nil || !retry || !stopping {
+		t.Fatalf("reason %+v retry %v stopping %v", why, retry, stopping)
+	}
+}
+
+// The core fails between the proof of the tunnel and step 6: nothing may be switched, nothing
+// may be restored (neither with nor without an older journal); error core_crashed.
+func TestCrashBeforeStep6LeavesTheSystemAlone(t *testing.T) {
+	for name, journal := range map[string]*store.Journal{
+		"no journal":       nil,
+		"existing journal": {ExitNode: "100.64.0.50", AllowLAN: false},
+	} {
+		h := newHarness(t)
+		h.store.journal = journal
+		onceOnState(h, func(s protocol.State) bool { return s.Addresses.VPN != nil }, func() { h.core.last().crash() })
+		h.load()
+		startEnable(h)
+		wantError(t, h, protocol.ReasonCoreCrashed)
+		if h.rec.index("sys:") >= 0 || h.rec.index("journal:save") >= 0 {
+			t.Errorf("%s: the system exit node must stay as it was: %v", name, h.rec.list())
+		}
+		if on, ip := systemExitNode(h); !on || ip != exitNode {
+			t.Errorf("%s: exit node on=%v ip=%s", name, on, ip)
+		}
+	}
+}
+
+// 5.7 and the proof without touching the system VPN: a core that exits before its start line,
+// with an older journal at hand, never makes its watcher restore anything: that run switched nothing.
+func TestEarlyExitWatcherLeavesTheSystemAlone(t *testing.T) {
+	h := newHarness(t)
+	h.store.journal = &store.Journal{ExitNode: "100.64.0.50", AllowLAN: false}
+	h.core.dieEarly = 1
+	h.e.d.Core = &slowCheckCore{fakeCore: h.core, delay: 100 * time.Millisecond}
+	h.load()
+	startEnable(h)
+	h.waitPhase(protocol.PhaseOn)
+	if n := h.rec.count("core:start"); n != 2 {
+		t.Fatalf("starts %d", n)
+	}
+	if h.rec.index("sys:set") >= 0 {
+		t.Fatalf("no restore for a run that never switched the exit node: %v", h.rec.list())
+	}
+	if on, _ := systemExitNode(h); on {
+		t.Fatalf("the second run must have switched the system exit node off: %v", h.rec.list())
 	}
 }

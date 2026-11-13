@@ -67,6 +67,7 @@ type coreRun struct {
 	direct   []byte
 	vpn      []byte
 	stopping bool // guarded by Engine.mu: the helper stops this core on purpose
+	cleared  bool // guarded by Engine.mu: this run has switched the system exit node off (step 6 of 5.3)
 }
 
 // op is the one background operation: enabling, disabling, a restart or the start-up.
