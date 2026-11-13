@@ -5,3 +5,14 @@ spike/
 .superpowers/
 
 node_modules/
+
+# Скачанное ядро (scripts/fetch-core.ps1).
+/.cache/
+
+# Данные режима разработки: состояние встроенного узла, журналы, конфиг ядра.
+/.dev/
+
+# Каталоги сборки.
+/helper/bin/
+/app/out/
+/app/dist/
