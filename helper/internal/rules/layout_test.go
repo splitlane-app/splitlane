@@ -120,6 +120,56 @@ func TestNestedDirectFileInsideVPNFolder(t *testing.T) {
 	}
 }
 
+// unusableRule is a rule that skipped Normalize: Expressions returns nil for it.
+func unusableRule(id, lane, kind, exe, value string) protocol.AppRule {
+	return protocol.AppRule{ID: id, Exe: exe, Matcher: protocol.Matcher{Kind: kind, Value: value}, Lane: lane}
+}
+
+func TestDocumentsAndCompileRejectRulesWithoutExpression(t *testing.T) {
+	cases := map[string]protocol.AppRule{
+		"empty folder value":  unusableRule("bad", protocol.LaneDirect, protocol.KindFolder, `C:\Games\Steam\steam.exe`, ""),
+		"empty file value":    unusableRule("bad", protocol.LaneDirect, protocol.KindFile, `C:\Games\Steam\steam.exe`, ""),
+		"unparsable package":  unusableRule("bad", protocol.LaneVPN, protocol.KindPackage, `C:\Games\Steam\steam.exe`, "no-separators"),
+		"unknown kind":        unusableRule("bad", protocol.LaneVPN, "bogus", `C:\Games\Steam\steam.exe`, `C:\Games\Steam\`),
+		"empty folder in vpn": unusableRule("bad", protocol.LaneVPN, protocol.KindFolder, `C:\Games\Steam\steam.exe`, ""),
+	}
+	good := checked(t, rule("good", protocol.LaneVPN, protocol.KindFile, `C:\Tools\curl-a.exe`))
+	for name, bad := range cases {
+		t.Run(name, func(t *testing.T) {
+			apps := append([]protocol.AppRule{bad}, good...)
+			if _, _, err := Documents(apps, testEnv); err == nil || !strings.Contains(err.Error(), "rule bad") {
+				t.Errorf("Documents: want an error naming the rule, got %v", err)
+			}
+			if _, _, err := Files(apps, testEnv); err == nil {
+				t.Error("Files: want an error")
+			}
+			if _, err := Compile(apps, testEnv); err == nil || !strings.Contains(err.Error(), "rule bad") {
+				t.Errorf("Compile: want an error naming the rule, got %v", err)
+			}
+		})
+	}
+}
+
+func TestDocumentsRejectsNestedRuleWithoutExpression(t *testing.T) {
+	outer := checked(t, rule("outer", protocol.LaneDirect, protocol.KindFolder, `C:\Games\Steam\steam.exe`))
+	// inside outer by its exe, but its package value cannot be parsed
+	inner := unusableRule("inner", protocol.LaneVPN, protocol.KindPackage, `C:\Games\Steam\apps\app.exe`, "no-separators")
+	d, v, err := Documents(append(outer, inner), testEnv)
+	if err == nil || !strings.Contains(err.Error(), "rule inner") {
+		t.Fatalf("want an error naming the nested rule, got %v", err)
+	}
+	// an inverted part without expressions would exclude nothing and write {"invert": true}
+	for _, doc := range []RuleSet{d, v} {
+		for _, r := range doc.Rules {
+			for _, part := range r.Rules {
+				if part.Invert && len(part.ProcessPathRegex) == 0 {
+					t.Fatalf("inverted part without expressions in %+v", doc)
+				}
+			}
+		}
+	}
+}
+
 func TestNestingChainAndLaneOf(t *testing.T) {
 	apps := checked(t,
 		rule("a", protocol.LaneDirect, protocol.KindFolder, `C:\Nest\outer\a.exe`),

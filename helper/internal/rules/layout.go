@@ -148,11 +148,16 @@ type RuleSet struct {
 // Documents builds the rule sets of the direct and the VPN lane from a checked layout.
 // A broader rule gets the nested rules of the other lane as inverted parts of a
 // logical "and" rule (spec 8.2). Every expression is compiled here first (spec 6.5).
+// A rule without a usable expression (Expressions returns nil: it skipped Normalize)
+// is an error, never an empty entry that matches nothing or excludes nothing.
 func Documents(apps []protocol.AppRule, env Env) (direct, vpn RuleSet, err error) {
 	direct = RuleSet{Version: 3, Rules: []Headless{{ProcessPathRegex: []string{Stub}}}}
 	vpn = RuleSet{Version: 3, Rules: []Headless{{ProcessPathRegex: []string{Stub}}}}
 	for _, a := range apps {
 		own := Expressions(a, env)
+		if len(own) == 0 {
+			return direct, vpn, fmt.Errorf("rule %s: no usable expression", a.ID)
+		}
 		if err := compileAll(own); err != nil {
 			return direct, vpn, fmt.Errorf("rule %s: %v", a.ID, err)
 		}
@@ -160,7 +165,11 @@ func Documents(apps []protocol.AppRule, env Env) (direct, vpn RuleSet, err error
 		var excluded []Headless
 		for _, b := range apps {
 			if b.Lane != a.Lane && contains(a, b, env) {
-				excluded = append(excluded, Headless{ProcessPathRegex: Expressions(b, env), Invert: true})
+				nested := Expressions(b, env)
+				if len(nested) == 0 {
+					return direct, vpn, fmt.Errorf("rule %s: no usable expression", b.ID)
+				}
+				excluded = append(excluded, Headless{ProcessPathRegex: nested, Invert: true})
 			}
 		}
 		if len(excluded) > 0 {
@@ -212,7 +221,8 @@ type entry struct {
 	res   []*regexp.Regexp
 }
 
-// Compile prepares a checked layout for LaneOf.
+// Compile prepares a checked layout for LaneOf. A rule without a usable expression
+// is an error: it would never match, and LaneOf would report no lane for it.
 func Compile(apps []protocol.AppRule, env Env) (*Set, error) {
 	s := &Set{}
 	for _, a := range apps {
@@ -226,6 +236,9 @@ func Compile(apps []protocol.AppRule, env Env) (*Set, error) {
 				return nil, fmt.Errorf("rule %s: %v", a.ID, err)
 			}
 			e.res = append(e.res, re)
+		}
+		if len(e.res) == 0 {
+			return nil, fmt.Errorf("rule %s: no usable expression", a.ID)
 		}
 		s.entries = append(s.entries, e)
 	}
