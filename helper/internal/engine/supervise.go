@@ -63,7 +63,7 @@ func (e *Engine) checkHealth(ctx context.Context) {
 		e.mu.Unlock()
 		return
 	}
-	before, dirty := e.degraded, false
+	dirty := false
 	// An answer of probe-direct equal to probe-vpn's is not the direct lane (the system exit node
 	// is on again, 5.6): the stored direct address stays.
 	if d.IP != "" && d.IP != v.IP && (e.st.Addresses.Direct == nil || *e.st.Addresses.Direct != d.IP) {
@@ -119,16 +119,19 @@ func (e *Engine) checkHealth(ctx context.Context) {
 		e.refreshLive()
 	}
 	e.mu.Unlock()
-	if before != now && mode != current {
-		// degraded: names through the provider's DNS (6.3, 6.4); the Windows DNS cache is flushed both ways
+	// The mode follows the state, not the transition: every round tries again until the core matches.
+	// degraded: names through the provider's DNS (6.3, 6.4); the Windows DNS cache is flushed both ways,
+	// once per mode actually set. A refused mode would otherwise leave the direct lane without names
+	// (degraded) or the VPN lane on the provider's DNS behind a healthy phase (back to on).
+	if mode != current {
 		if err := r.clash.SetMode(ctx, mode); err != nil {
 			e.d.Log("mode %s not set: %v", mode, err)
 		} else {
 			e.mu.Lock()
 			r.mode = mode
 			e.mu.Unlock()
+			e.flushDNS()
 		}
-		e.flushDNS()
 	}
 }
 

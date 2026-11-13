@@ -42,6 +42,62 @@ func TestDegradedAndBack(t *testing.T) {
 	}
 }
 
+// The core mode follows the state, not the transition: a refused clash mode is tried again on every
+// round until the core matches. Otherwise degraded would keep the VPN DNS (the direct lane loses
+// names), and a refused way back would publish "on" while the core stays on the provider's DNS.
+func TestModeFollowsStateAfterRefusedSwitch(t *testing.T) {
+	h := newHarness(t)
+	h.running()
+	refuse := func(mode string, on bool) {
+		h.clash.mu.Lock()
+		defer h.clash.mu.Unlock()
+		h.clash.refuse[mode] = on
+	}
+
+	// Into degraded while the core refuses vpn-localdns: the phase is published, the mode is not set.
+	refuse("vpn-localdns", true)
+	h.probe.script([]ProbeResult{noAnswer}, []ProbeResult{atDirect}, []ProbeResult{noAnswer})
+	rounds(h, 3)
+	if h.e.State().Phase != protocol.PhaseDegraded || h.clash.currentMode() != "vpn" {
+		t.Fatalf("phase %s, mode %s, events %v", h.e.State().Phase, h.clash.currentMode(), h.rec.list())
+	}
+	if h.rec.count("dns:flush") != 0 {
+		t.Fatalf("the cache is flushed only when the mode changed: %v", h.rec.list())
+	}
+	rounds(h, 2) // still refused: tried again, still not taken
+	if h.clash.currentMode() != "vpn" || h.rec.count("clash:mode vpn-localdns") != 3 {
+		t.Fatalf("a refused mode is tried on every round: mode %s, events %v", h.clash.currentMode(), h.rec.list())
+	}
+
+	// The refusal is lifted: the next round sets the mode and flushes the cache once.
+	refuse("vpn-localdns", false)
+	rounds(h, 1)
+	if h.clash.currentMode() != "vpn-localdns" || h.rec.count("dns:flush") != 1 {
+		t.Fatalf("mode %s, events %v", h.clash.currentMode(), h.rec.list())
+	}
+	rounds(h, 3) // the core matches: no more switching, no more flushing
+	if h.rec.count("clash:mode") != 4 || h.rec.count("dns:flush") != 1 {
+		t.Fatalf("a matching core is left alone: %v", h.rec.list())
+	}
+
+	// The way back: probe-vpn answers, the core refuses vpn. The phase is on, the mode is retried.
+	refuse("vpn", true)
+	h.probe.script([]ProbeResult{atVPN}, nil, []ProbeResult{atVPN})
+	rounds(h, 2)
+	if h.e.State().Phase != protocol.PhaseOn || h.clash.currentMode() != "vpn-localdns" || h.rec.count("clash:mode") != 6 {
+		t.Fatalf("phase %s, mode %s, events %v", h.e.State().Phase, h.clash.currentMode(), h.rec.list())
+	}
+	refuse("vpn", false)
+	rounds(h, 1)
+	if h.clash.currentMode() != "vpn" || h.rec.count("dns:flush") != 2 {
+		t.Fatalf("mode %s, events %v", h.clash.currentMode(), h.rec.list())
+	}
+	rounds(h, 3)
+	if h.rec.count("clash:mode") != 7 || h.rec.count("dns:flush") != 2 {
+		t.Fatalf("a matching core is left alone: %v", h.rec.list())
+	}
+}
+
 // No network at all (both probes silent) is not a VPN failure: nothing changes.
 func TestNoNetworkChangesNothing(t *testing.T) {
 	h := newHarness(t)
