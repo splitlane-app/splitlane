@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"splitlane/helper/internal/atomicfile"
 	"splitlane/helper/internal/coreconfig"
@@ -91,8 +92,16 @@ func (d Dir) SaveState(s State) error {
 	return d.writeJSON(d.state(), s)
 }
 
+// renameFile is os.Rename; the tests replace it to simulate a rename that fails.
+var renameFile = os.Rename
+
+// maxBadJournals bounds how many set-aside journals are kept side by side.
+const maxBadJournals = 100
+
 // LoadJournal reads restore.json; nil without error when there is none.
-// An unreadable journal is renamed to restore.json.bad and reported as an error.
+// An unreadable journal is renamed to restore.json.bad (or the first free restore.json.bad.<n>)
+// and reported as an error that gives the cause. If it cannot be renamed, the error says so
+// and the journal stays where it is.
 func (d Dir) LoadJournal() (*Journal, error) {
 	b, err := os.ReadFile(d.journal())
 	if errors.Is(err, os.ErrNotExist) {
@@ -102,11 +111,38 @@ func (d Dir) LoadJournal() (*Journal, error) {
 		return nil, err
 	}
 	var j Journal
-	if err := json.Unmarshal(b, &j); err != nil || j.ExitNode == "" {
-		_ = os.Rename(d.journal(), d.journal()+".bad")
-		return nil, fmt.Errorf("restore.json is unreadable and was set aside as restore.json.bad")
+	cause := json.Unmarshal(b, &j)
+	if cause == nil && j.ExitNode == "" {
+		cause = errors.New("empty exitNode")
+	}
+	if cause != nil {
+		bad, err := d.setAsideJournal()
+		if err != nil {
+			return nil, fmt.Errorf("restore.json is unreadable (%v) and could not be set aside: %w", cause, err)
+		}
+		return nil, fmt.Errorf("restore.json is unreadable (%v) and was set aside as %s", cause, filepath.Base(bad))
 	}
 	return &j, nil
+}
+
+// setAsideJournal renames restore.json to the first free name among restore.json.bad,
+// restore.json.bad.1, restore.json.bad.2 ... so that an earlier set-aside journal is never replaced.
+func (d Dir) setAsideJournal() (string, error) {
+	for n := 0; n < maxBadJournals; n++ {
+		bad := d.journal() + ".bad"
+		if n > 0 {
+			bad += "." + strconv.Itoa(n)
+		}
+		_, err := os.Lstat(bad)
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		return bad, renameFile(d.journal(), bad)
+	}
+	return "", fmt.Errorf("all %d names restore.json.bad ... are taken", maxBadJournals)
 }
 
 // SaveJournal writes restore.json atomically and flushed to disk, before `tailscale set` runs (spec 5.7).

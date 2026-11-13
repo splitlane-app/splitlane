@@ -2,8 +2,11 @@ package store
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"splitlane/helper/internal/protocol"
@@ -71,6 +74,82 @@ func TestUnreadableJournalIsSetAside(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(d.Path, "restore.json.bad")); err != nil {
 		t.Fatal("restore.json.bad missing")
+	}
+	if _, err := os.Stat(filepath.Join(d.Path, "restore.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restore.json must be gone after it was set aside: %v", err)
+	}
+}
+
+func TestUnreadableJournalErrorNamesCauseAndFile(t *testing.T) {
+	for name, tc := range map[string]struct{ content, cause string }{
+		"broken json":  {"{broken", "invalid character"},
+		"empty target": {"{}", "empty exitNode"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := Dir{Path: t.TempDir()}
+			os.WriteFile(filepath.Join(d.Path, "restore.json"), []byte(tc.content), 0o644)
+			_, err := d.LoadJournal()
+			if err == nil || !strings.Contains(err.Error(), tc.cause) || !strings.Contains(err.Error(), "restore.json.bad") {
+				t.Fatalf("want the cause %q and the new file name, got %v", tc.cause, err)
+			}
+		})
+	}
+}
+
+func TestSecondUnreadableJournalKeepsEarlierEvidence(t *testing.T) {
+	d := Dir{Path: t.TempDir()}
+	for _, content := range []string{"{first", "{second"} {
+		os.WriteFile(filepath.Join(d.Path, "restore.json"), []byte(content), 0o644)
+		if _, err := d.LoadJournal(); err == nil {
+			t.Fatalf("%s: want an error", content)
+		}
+	}
+	for file, want := range map[string]string{"restore.json.bad": "{first", "restore.json.bad.1": "{second"} {
+		got, err := os.ReadFile(filepath.Join(d.Path, file))
+		if err != nil || string(got) != want {
+			t.Errorf("%s: %q %v, want %q", file, got, err, want)
+		}
+	}
+}
+
+func TestJournalThatCannotBeSetAsideSaysSo(t *testing.T) {
+	d := Dir{Path: t.TempDir()}
+	os.WriteFile(filepath.Join(d.Path, "restore.json"), []byte("{broken"), 0o644)
+	locked := errors.New("locked by antivirus")
+	old := renameFile
+	renameFile = func(string, string) error { return locked }
+	defer func() { renameFile = old }()
+	j, err := d.LoadJournal()
+	if j != nil || !errors.Is(err, locked) {
+		t.Fatalf("want the rename error, got %v %v", j, err)
+	}
+	if !strings.Contains(err.Error(), "could not be set aside") || strings.Contains(err.Error(), "was set aside") ||
+		!strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("message must say it was not set aside and give the cause: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d.Path, "restore.json")); err != nil {
+		t.Fatalf("the journal must stay in place: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d.Path, "restore.json.bad")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("no .bad file expected: %v", err)
+	}
+}
+
+func TestJournalSetAsideGivesUpWhenAllNamesAreTaken(t *testing.T) {
+	d := Dir{Path: t.TempDir()}
+	os.WriteFile(filepath.Join(d.Path, "restore.json"), []byte("{broken"), 0o644)
+	os.WriteFile(filepath.Join(d.Path, "restore.json.bad"), []byte("0"), 0o644)
+	for n := 1; n < maxBadJournals; n++ {
+		os.WriteFile(filepath.Join(d.Path, "restore.json.bad."+strconv.Itoa(n)), []byte("x"), 0o644)
+	}
+	if _, err := d.LoadJournal(); err == nil || !strings.Contains(err.Error(), "could not be set aside") {
+		t.Fatalf("want a could-not-be-set-aside error, got %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(d.Path, "restore.json.bad")); string(b) != "0" {
+		t.Fatalf("restore.json.bad was overwritten: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(d.Path, "restore.json")); err != nil {
+		t.Fatalf("the journal must stay in place: %v", err)
 	}
 }
 
