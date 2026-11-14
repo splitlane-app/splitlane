@@ -572,6 +572,8 @@ type fakeHost struct {
 	dnsOverride  bool
 	otherCore    bool
 	adapterStuck bool
+	staleAdapter bool  // a forced end of a core left its Wintun device behind; the next removal takes it
+	removeErr    error // the removal of the stale Wintun device fails
 }
 
 func (h *fakeHost) HasDefaultRoute() bool {
@@ -602,6 +604,18 @@ func (h *fakeHost) FreePorts(n int) ([]int, error) {
 }
 
 func (h *fakeHost) Secret() string { return "0123456789abcdef0123456789abcdef" }
+
+func (h *fakeHost) RemoveStaleAdapter() (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.rec.add("host:removestale")
+	if h.removeErr != nil {
+		return false, h.removeErr
+	}
+	removed := h.staleAdapter
+	h.staleAdapter = false
+	return removed, nil
+}
 
 // harness wires an engine to the fakes. By default: logged in, exit node selected,
 // the system client on with the same exit node and LAN access allowed.

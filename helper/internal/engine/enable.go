@@ -209,6 +209,14 @@ func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, boo
 	if err := e.d.Core.Check(ctx, path); err != nil {
 		return invalid(err)
 	}
+	// A forced end of an earlier core leaves its Wintun device behind, non-present, and the next core
+	// may then fail to create its adapter (appendix A, checks of plan 1B). A failed removal does not
+	// stop the start: the core may still take the device, and an early exit is tried again.
+	if removed, err := e.d.Host.RemoveStaleAdapter(); err != nil {
+		e.d.Log("stale Wintun device of the adapter not removed: %v", err)
+	} else if removed {
+		e.d.Log("removed the stale Wintun device of the adapter")
+	}
 	proc, err := e.d.Core.Start(path)
 	if err != nil {
 		return nil, reason(protocol.ReasonCoreStartTimeout, protocol.ParamError, err.Error()), false
