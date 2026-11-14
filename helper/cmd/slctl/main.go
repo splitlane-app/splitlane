@@ -1,6 +1,7 @@
 // Command slctl is the test client of the helper's pipe (Plan 1): every method of spec 5.1, waiting
 // for phases, a lane check with renamed copies of curl.exe, and a development seed of state.json.
-// Addresses are masked in the output unless -show-addresses is given.
+// Addresses are masked in the output unless -show-addresses is given; the login link always is, but
+// in the one line of slctl login that shows it.
 package main
 
 import (
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -38,6 +40,7 @@ const usage = `usage: slctl [-pipe NAME] [-timeout 150s] [-show-addresses] [-url
   clear-system-exit-node         systemTailscale.clearExitNode
   login [-timeout 300s]          tailscale.login, print the login link once, wait until logged in
   logout [-timeout 60s]          tailscale.logout, wait for backend needs_login
+  activity [-seconds 10] [-detail KEY]   activity.subscribe, print each event; 3 when none came
   shutdown                       helper.shutdown, wait until the pipe closes
   call METHOD [PARAMS|@FILE]     any method, params as JSON or from a file
   wait PHASE[,PHASE...]          wait for one of the phases; success when it is the first one
@@ -73,7 +76,7 @@ func exitCodeFor(err error) int {
 
 // pipeCommands are the commands that talk to the helper.
 var pipeCommands = []string{"state", "enable", "disable", "alldirect", "lanes", "exitnode", "clear-system-exit-node",
-	"login", "logout", "shutdown", "call", "wait", "watch", "expect-lanes"}
+	"login", "logout", "activity", "shutdown", "call", "wait", "watch", "expect-lanes"}
 
 // A helper that was just started opens its pipe a moment later (its log, the SHA-256 of the core,
 // the engine). go-winio retries only a busy pipe, so slctl tries a missing one again itself.
@@ -99,23 +102,34 @@ func dial(name string, wait time.Duration) (net.Conn, error) {
 func main() { os.Exit(run(os.Args[1:], os.Stdout)) }
 
 type client struct {
-	conn    net.Conn
-	r       *bufio.Reader
-	out     io.Writer
-	show    bool
-	nextID  int
-	state   *protocol.State
-	timeout time.Time
-	lastErr error
-	onState func(protocol.State) // sees every state that comes, by event or by state.get (login, logout)
+	conn       net.Conn
+	r          *bufio.Reader
+	out        io.Writer
+	show       bool
+	nextID     int
+	state      *protocol.State
+	timeout    time.Time
+	lastErr    error
+	onState    func(protocol.State)    // sees every state that comes, by event or by state.get (login, logout)
+	onActivity func(protocol.Activity) // sees every activity event (activity)
 }
 
+// print writes one line: addresses masked unless -show-addresses is given, the login link always.
 func (c *client) print(format string, args ...any) {
-	line := fmt.Sprintf(format, args...)
+	line := hideLoginLink(fmt.Sprintf(format, args...))
 	if !c.show {
 		line = protocol.MaskAddresses(line)
 	}
 	fmt.Fprintln(c.out, line)
+}
+
+// authURLRe is tailscale.authUrl with a link in the JSON of a state (RESULT lines).
+var authURLRe = regexp.MustCompile(`"authUrl"\s*:\s*"(?:[^"\\]|\\.)*"`)
+
+// hideLoginLink masks the login link in the JSON of a state: it goes only to the user's console, in the
+// one line of slctl login, never into a report or a log (Global Constraints of plan 1B).
+func hideLoginLink(line string) string {
+	return authURLRe.ReplaceAllString(line, `"authUrl":"<login link>"`)
 }
 
 // read returns the next message; events update the known state and are printed.
@@ -132,7 +146,8 @@ func (c *client) read() (map[string]json.RawMessage, error) {
 	if ev, ok := m["event"]; ok {
 		var name string
 		json.Unmarshal(ev, &name)
-		if name == "state" {
+		switch name {
+		case "state":
 			var s protocol.State
 			json.Unmarshal(m["data"], &s)
 			c.state = &s
@@ -140,7 +155,17 @@ func (c *client) read() (map[string]json.RawMessage, error) {
 			if c.onState != nil {
 				c.onState(s)
 			}
-		} else {
+		case protocol.EventActivity:
+			var a protocol.Activity
+			json.Unmarshal(m["data"], &a)
+			c.print("%s", activityLine(a))
+			if d := a.Detail; d != nil {
+				c.print("DETAIL key=%s exes=%d connections=%d", d.Key, len(d.Exes), len(d.Connections))
+			}
+			if c.onActivity != nil {
+				c.onActivity(a)
+			}
+		default:
 			c.print("EVENT %s", name)
 		}
 	}
@@ -205,6 +230,23 @@ func summary(s protocol.State) string {
 	return fmt.Sprintf("phase=%s reason=%s allDirect=%v defaultLane=%s apps=%d vpn=%s direct=%s systemExitNode=%v restoreOnDisable=%v backend=%s path=%s exitNodes=%d",
 		s.Phase, reason, s.AllDirect, s.DefaultLane, len(s.Apps), str(s.Addresses.VPN), str(s.Addresses.Direct),
 		s.SystemTailscale.ExitNodeOn, s.SystemTailscale.RestoreOnDisable, s.Tailscale.Backend, str(s.Tailscale.Path), len(s.Tailscale.ExitNodes))
+}
+
+// activityLine is an activity event in one line (spec 8.4): the rates of both lanes as down/up in bytes
+// a second, the number of groups, and the busiest group (the first of the summary) with its name, or
+// its key when it has none, its lane and its down+up.
+func activityLine(a protocol.Activity) string {
+	top := "-"
+	if len(a.Apps) > 0 {
+		g := a.Apps[0]
+		name := g.Name
+		if name == "" {
+			name = g.Key
+		}
+		top = fmt.Sprintf("%s:%s:%d", name, g.Lane, g.Down+g.Up)
+	}
+	return fmt.Sprintf("ACTIVITY vpn=%d/%d direct=%d/%d apps=%d top=%s",
+		a.Lanes.VPN.Down, a.Lanes.VPN.Up, a.Lanes.Direct.Down, a.Lanes.Direct.Up, len(a.Apps), top)
 }
 
 func str(p *string) string {
@@ -408,6 +450,8 @@ func command(c *client, cmd string, args []string, url string) int {
 		return simple(protocol.MethodClearSystemExitNode, nil)
 	case "login", "logout":
 		return nodeCommand(c, cmd, args)
+	case "activity":
+		return activityCommand(c, args)
 	case "shutdown":
 		if code := simple(protocol.MethodShutdown, nil); code != exitOK {
 			return code
@@ -517,6 +561,48 @@ func nodeCommand(c *client, cmd string, args []string) int {
 func loggedIn(s protocol.State) bool {
 	b := s.Tailscale.Backend
 	return (b == protocol.BackendStarting || b == protocol.BackendRunning) && s.Tailscale.AuthURL == nil
+}
+
+// activityCommand is activity.subscribe (spec 5.1, 8.4), with -detail KEY as detailFor, then the events
+// for -seconds: read prints an ACTIVITY line for each, and the DETAIL line of the group when the event has
+// it. Exit code 0 when at least one event came, 3 when none did: the event goes only while the core with
+// the adapter runs (on, degraded, blocked).
+func activityCommand(c *client, args []string) int {
+	fs := flag.NewFlagSet("activity", flag.ContinueOnError)
+	fs.SetOutput(c.out)
+	seconds := fs.Int("seconds", 10, "how long to print the events")
+	detail := fs.String("detail", "", "the key of a group (spec 8.4): print its detail too")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || *seconds <= 0 {
+		return exitUsage
+	}
+	events := 0
+	c.onActivity = func(protocol.Activity) { events++ }
+	var params any
+	if *detail != "" {
+		params = protocol.SubscribeParams{DetailFor: *detail}
+	}
+	_, perr, err := c.call(protocol.MethodActivitySubscribe, params)
+	switch {
+	case err != nil:
+		return c.fail(err)
+	case perr != nil:
+		return exitFailed // call printed its ERROR line
+	}
+	c.timeout = time.Now().Add(time.Duration(*seconds) * time.Second)
+	for {
+		if _, err := c.read(); err != nil {
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				return c.fail(err)
+			}
+			break
+		}
+	}
+	if events == 0 {
+		c.print("SLCTL: no activity event in %d s: it comes only while the core with the adapter runs (on, degraded, blocked)", *seconds)
+		return exitTimeout
+	}
+	c.print("SLCTL: %d activity events in %d s", events, *seconds)
+	return exitOK
 }
 
 // laneName says which lane an address belongs to.

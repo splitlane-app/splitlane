@@ -1,0 +1,105 @@
+package engine
+
+import (
+	"context"
+	"slices"
+	"time"
+
+	"splitlane/helper/internal/activity"
+	"splitlane/helper/internal/protocol"
+	"splitlane/helper/internal/rules"
+)
+
+// activityEvery: the connections of the core are read once a second (spec 8.4).
+const activityEvery = time.Second
+
+// liveActivity is the live activity of spec 8.4: the tracker of the current run of the core and the
+// layout its samples are grouped by.
+type liveActivity struct {
+	tracker *activity.Tracker
+	run     *coreRun // guarded by Engine.mu: the run the tracker's samples are of; nil after a reset
+	fresh   bool     // guarded by Engine.mu: the last tick sampled run while a window was connected
+
+	// Owned by sampleActivity.
+	apps   []protocol.AppRule // the layout that set was compiled from
+	set    *rules.Set         // nil until the first sample
+	failed string             // the last error of the connection list, masked; "" while it works
+}
+
+// sampleActivity is one tick of spec 8.4, once a second from Run: while the core with the adapter runs
+// (on, degraded, blocked) and a window is connected, the connections of the run go into the tracker,
+// grouped by the saved layout (compiled again when it changes), the unpinned programs on the main lane:
+// direct in "all direct", else the default lane. The tracker starts again from nothing for each run of
+// the core and when the phase leaves on, degraded and blocked. Without a window nothing is read, and
+// the summary of the last sample is no longer offered: it would be old when a window comes back. A
+// failed read is logged masked, once while it repeats; the summary of that tick is not offered either.
+func (e *Engine) sampleActivity(ctx context.Context) {
+	a := &e.act
+	e.mu.Lock()
+	r := e.run
+	if r == nil || r.stopping || !live(e.st.Phase) {
+		if a.run != nil {
+			a.tracker.Reset()
+		}
+		a.run, a.fresh = nil, false
+		e.mu.Unlock()
+		return
+	}
+	if a.run != r {
+		a.tracker.Reset()
+		a.run, a.fresh = r, false
+	}
+	if e.clients.Load() == 0 {
+		a.fresh = false
+		e.mu.Unlock()
+		return
+	}
+	apps, mainLane := slices.Clone(e.saved.Apps), e.saved.DefaultLane
+	if e.st.AllDirect {
+		mainLane = protocol.LaneDirect
+	}
+	e.mu.Unlock()
+	if a.set == nil || !slices.Equal(a.apps, apps) {
+		set, err := rules.Compile(apps, e.d.Rules)
+		if err != nil {
+			e.d.Log("activity: the layout does not compile, every program is grouped by its folder: %v", err)
+			set = &rules.Set{}
+		}
+		a.apps, a.set = apps, set
+	}
+	conns, err := r.clash.Connections(ctx)
+	now := e.d.Clock.Now()
+	if err != nil {
+		e.mu.Lock()
+		a.fresh = false
+		gone := e.run != r || r.stopping
+		e.mu.Unlock()
+		if text := protocol.MaskAddresses(err.Error()); !gone && text != a.failed {
+			a.failed = text
+			e.d.Log("activity: the connections of the core: %s", text)
+		}
+		return
+	}
+	a.failed = ""
+	sample := make([]activity.Conn, 0, len(conns))
+	for _, c := range conns {
+		sample = append(sample, activity.Conn{ID: c.ID, ProcessPath: c.ProcessPath, Lane: c.Lane, Host: c.Host,
+			Upload: c.Upload, Download: c.Download})
+	}
+	a.tracker.Sample(now, sample, a.set, mainLane)
+	e.mu.Lock()
+	a.fresh = e.run == r
+	e.mu.Unlock()
+}
+
+// Activity is the summary of the last sample (spec 8.4) with the detail of the group detailFor ("" for
+// none): the data of the activity event. false while no core with the adapter runs (any phase but on,
+// degraded and blocked), and until the run has been sampled with a window connected.
+func (e *Engine) Activity(detailFor string) (protocol.Activity, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if r := e.run; r == nil || r.stopping || r != e.act.run || !e.act.fresh || !live(e.st.Phase) {
+		return protocol.Activity{}, false
+	}
+	return e.act.tracker.Summary(detailFor), true
+}

@@ -25,7 +25,11 @@ func (e *Engine) Handle(ctx context.Context, method string, params json.RawMessa
 			return nil, err
 		}
 		return e.State(), nil
-	case protocol.MethodActivitySubscribe, protocol.MethodDiagnosticsExport:
+	case protocol.MethodActivitySubscribe:
+		// The pipe answers it and keeps the subscription of each client (package pipe); the events come
+		// from Activity. It never reaches the engine.
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "activity.subscribe is answered by the pipe")
+	case protocol.MethodDiagnosticsExport:
 		return nil, protocol.Errorf(protocol.CodeInternal, "%s is not available in this build (Plan 1B)", method)
 	}
 	e.queue.Lock()

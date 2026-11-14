@@ -50,9 +50,9 @@ func setPhase(h *harness, phase string) {
 func TestUnknownAndLaterMethods(t *testing.T) {
 	h := newHarness(t)
 	wantCode(t, call(h, "routing.toggle", nil), protocol.CodeUnknownMethod)
-	for _, m := range []string{protocol.MethodActivitySubscribe, protocol.MethodDiagnosticsExport} {
-		wantCode(t, call(h, m, nil), protocol.CodeInternal)
-	}
+	// the pipe answers activity.subscribe itself (package pipe): one that reaches the engine is refused
+	wantCode(t, call(h, protocol.MethodActivitySubscribe, nil), protocol.CodeBadRequest)
+	wantCode(t, call(h, protocol.MethodDiagnosticsExport, nil), protocol.CodeInternal)
 	res, err := h.e.Handle(context.Background(), protocol.MethodStateGet, nil)
 	if err != nil || res.(protocol.State).Phase != protocol.PhaseOff {
 		t.Fatalf("state.get: %v %v", res, err)

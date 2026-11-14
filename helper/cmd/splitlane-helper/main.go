@@ -181,6 +181,7 @@ func run(args []string) int {
 	eng.Start()
 	go eng.Run(ctx)
 	go srv.Serve()
+	go srv.RunActivity(eng, time.Second) // the activity event once a second (spec 8.4)
 	<-exit
 	logf("helper.shutdown done; exiting")
 	cancel()

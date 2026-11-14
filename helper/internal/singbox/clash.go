@@ -81,16 +81,22 @@ func (c *Clash) SetMode(ctx context.Context, mode string) error {
 }
 
 // Connections is GET /connections: id, process path, the lane (the first of "chains" is the
-// outbound, and the config names the outbounds after the lanes) and whether rules 8–11 chose it.
+// outbound, and the config names the outbounds after the lanes), whether rules 8–11 chose it, and for
+// the activity (8.4) the cumulative counters and the host: metadata.host, the domain the core knows
+// (the reverse mapping of DNS answers, 6.4), else metadata.destinationIP ("" without an address).
 func (c *Clash) Connections(ctx context.Context) ([]engine.Conn, error) {
 	var data struct {
 		Connections []struct {
 			ID       string `json:"id"`
 			Metadata struct {
-				ProcessPath string `json:"processPath"`
+				ProcessPath   string `json:"processPath"`
+				Host          string `json:"host"`
+				DestinationIP string `json:"destinationIP"`
 			} `json:"metadata"`
-			Chains []string `json:"chains"`
-			Rule   string   `json:"rule"`
+			Upload   int64    `json:"upload"`
+			Download int64    `json:"download"`
+			Chains   []string `json:"chains"`
+			Rule     string   `json:"rule"`
 		} `json:"connections"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/connections", nil, &data); err != nil {
@@ -98,7 +104,11 @@ func (c *Clash) Connections(ctx context.Context) ([]engine.Conn, error) {
 	}
 	out := make([]engine.Conn, 0, len(data.Connections))
 	for _, x := range data.Connections {
-		conn := engine.Conn{ID: x.ID, ProcessPath: x.Metadata.ProcessPath, ByLanes: byLanes(x.Rule)}
+		conn := engine.Conn{ID: x.ID, ProcessPath: x.Metadata.ProcessPath, ByLanes: byLanes(x.Rule),
+			Host: x.Metadata.Host, Upload: x.Upload, Download: x.Download}
+		if conn.Host == "" {
+			conn.Host = x.Metadata.DestinationIP
+		}
 		if len(x.Chains) > 0 {
 			conn.Lane = x.Chains[0]
 		}

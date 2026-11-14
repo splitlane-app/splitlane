@@ -115,6 +115,23 @@ type fakeHelper struct {
 	release  chan struct{}        // lets the silent methods return
 	stateErr *protocol.Error      // state.get is rejected with it
 	login    []protocol.Tailscale // the node's states after tailscale.login, one state event each, 30 ms apart
+
+	activity *protocol.Activity                 // the live activity (spec 8.4); nil: no core with the adapter runs
+	details  map[string]protocol.ActivityDetail // the detail of each group key
+}
+
+// Activity is the engine's summary for the pipe's activity events: the detail of detailFor when it has one.
+func (f *fakeHelper) Activity(detailFor string) (protocol.Activity, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.activity == nil {
+		return protocol.Activity{}, false
+	}
+	a := *f.activity
+	if d, ok := f.details[detailFor]; ok {
+		a.Detail = &d
+	}
+	return a, true
 }
 
 func (f *fakeHelper) set(phase string) {
@@ -355,6 +372,93 @@ func TestSummaryShowsTheConnector(t *testing.T) {
 	}
 	if got := summary(protocol.State{Tailscale: protocol.Tailscale{Backend: protocol.BackendExpired}}); !strings.HasSuffix(got, " backend=expired path=null exitNodes=0") {
 		t.Fatalf("summary %q", got)
+	}
+}
+
+// Addition of plan 1B: the RESULT lines carry the raw JSON of the answers, tailscale.authUrl of state.get
+// among them. The login link is masked there as in every line slctl prints, with -show-addresses too;
+// only slctl login prints it, once, in its own line (TestLoginPrintsTheLinkOnce).
+func TestResultLinesHideTheLoginLink(t *testing.T) {
+	link := "https://login.example/a/1f2e3d?next=%2F&x=1"
+	name := testPipeName()
+	srv, err := serveState(name, protocol.State{Phase: protocol.PhaseOff, Apps: []protocol.AppRule{},
+		Tailscale: protocol.Tailscale{Backend: protocol.BackendNeedsLogin, AuthURL: &link}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	for _, args := range [][]string{{"state"}, {"-show-addresses", "state"}, {"call", "state.get"}} {
+		var out strings.Builder
+		if code := run(append([]string{"-pipe", name}, args...), &out); code != exitOK {
+			t.Fatalf("%v: %d\n%s", args, code, out.String())
+		}
+		if text := out.String(); strings.Contains(text, "1f2e3d") || !strings.Contains(text, `"authUrl":"<login link>"`) {
+			t.Errorf("%v:\n%s", args, text)
+		}
+	}
+	for line, want := range map[string]string{
+		`RESULT {"authUrl":null,"backend":"stopped"}`:  `RESULT {"authUrl":null,"backend":"stopped"}`,
+		`{"authUrl":"https://x.example/a\"b\\","n":1}`: `{"authUrl":"<login link>","n":1}`,
+		`{"authUrl" : "https://x.example/"}`:           `{"authUrl":"<login link>"}`,
+	} {
+		if got := hideLoginLink(line); got != want {
+			t.Errorf("%s: %s", line, got)
+		}
+	}
+}
+
+// slctl activity (spec 8.4, task 16): activity.subscribe, then one ACTIVITY line per event for -seconds,
+// the busiest group as top (its name, or its key when it has none); with -detail also the DETAIL line of
+// that group. Exit code 0 when at least one event came, 3 when none did (no core with the adapter runs).
+func TestActivityCommand(t *testing.T) {
+	steam := "0b5c2a6e-6a43-4c55-9d43-2f1f4a0c9e11"
+	f := &fakeHelper{st: protocol.State{Phase: protocol.PhaseOn, Apps: []protocol.AppRule{}},
+		activity: &protocol.Activity{
+			Lanes: protocol.ActivityLanes{VPN: protocol.Traffic{Down: 5000, Up: 300}, Direct: protocol.Traffic{Down: 400, Up: 20}},
+			Apps: []protocol.ActivityApp{
+				{Key: `C:\Games\Game\`, Kind: protocol.KindApp, Name: "Game", Lane: protocol.LaneVPN, Down: 5000, Up: 300, Connections: 3},
+				{Key: steam, Kind: protocol.KindApp, Name: "Steam Client", RuleID: &steam, Lane: protocol.LaneDirect, Down: 400, Up: 20, Connections: 2},
+				{Key: protocol.KeyUnattributed, Kind: protocol.KindUnattributed, Lane: protocol.LaneVPN},
+			}},
+		details: map[string]protocol.ActivityDetail{steam: {Key: steam, Exes: []string{`C:\Games\Steam\steam.exe`, `C:\Games\Steam\bin\helper.exe`},
+			Connections: []protocol.ActivityConn{{Host: "203.0.113.7", Lane: protocol.LaneDirect, Down: 400, Up: 20}}}},
+	}
+	name := testPipeName()
+	srv, err := serveHelper(name, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.RunActivity(f, 50*time.Millisecond)
+	t.Cleanup(srv.Close)
+	var out strings.Builder
+	code := run([]string{"-pipe", name, "activity", "-seconds", "1"}, &out)
+	text := out.String()
+	if code != exitOK || !strings.Contains(text, "ACTIVITY vpn=5000/300 direct=400/20 apps=3 top=Game:vpn:5300\n") || strings.Contains(text, "DETAIL") {
+		t.Fatalf("exit %d:\n%s", code, text)
+	}
+	out.Reset()
+	code = run([]string{"-pipe", name, "activity", "-seconds", "1", "-detail", steam}, &out)
+	text = out.String()
+	if code != exitOK || !strings.Contains(text, "ACTIVITY vpn=5000/300") || !strings.Contains(text, "DETAIL key="+steam+" exes=2 connections=1\n") {
+		t.Fatalf("with -detail, exit %d:\n%s", code, text)
+	}
+	if got := activityLine(protocol.Activity{Apps: []protocol.ActivityApp{{Key: protocol.KeyUnattributed, Lane: protocol.LaneVPN, Down: 1, Up: 2}}}); got != "ACTIVITY vpn=0/0 direct=0/0 apps=1 top=unattributed:vpn:3" {
+		t.Fatalf("a group without a name: %q", got)
+	}
+	f.mu.Lock()
+	f.activity = nil
+	f.mu.Unlock()
+	out.Reset()
+	start := time.Now()
+	code = run([]string{"-pipe", name, "activity", "-seconds", "1"}, &out)
+	if text = out.String(); code != exitTimeout || strings.Contains(text, "ACTIVITY") || !strings.Contains(text, "SLCTL: no activity event") {
+		t.Fatalf("no core: exit %d:\n%s", code, text)
+	}
+	if waited := time.Since(start); waited < 900*time.Millisecond || waited > 5*time.Second {
+		t.Fatalf("waited %s for -seconds 1", waited)
+	}
+	if code := run([]string{"-pipe", name, "activity", "-seconds", "0"}, &out); code != exitUsage {
+		t.Fatalf("-seconds 0: %d", code)
 	}
 }
 
