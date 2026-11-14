@@ -11,6 +11,10 @@ export const ru = {
   pin: 'Закрепить',
   'card.quiet': 'тихо',
 
+  // special tiles of the board (spec 8.4)
+  'tile.system': 'Службы Windows',
+  'tile.unattributed': 'WSL и виртуальные машины',
+
   // speed units
   'unit.bps': 'Б/с',
   'unit.kbps': 'КБ/с',
@@ -82,7 +86,10 @@ export const ru = {
   // rule rejection reasons (error.rules[].reason)
   'reject.too_broad': 'Слишком много: корень диска, папка Windows или Program Files целиком',
   'reject.protected': 'Это часть SplitLane или Tailscale, её нельзя переносить',
-  'reject.duplicate': 'Эта программа уже закреплена в другой дорожке'
+  'reject.duplicate': 'Эта программа уже закреплена в другой дорожке',
+
+  // notices over the board: one rejected rule, joined with "; " when there are several
+  'notice.rejected': '{name}: {reason}'
 } as const
 
 export type Key = keyof typeof ru
