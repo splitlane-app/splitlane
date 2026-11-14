@@ -19,9 +19,10 @@ func (e *Engine) Start() {
 
 // startup is 5.7: the journal first (phase stopping, step 1 of 5.4, whether a core is left or
 // not; a journal that could not be read is read again until it reads), then the helper's own core
-// left from an earlier run is stopped; a foreign sing-box.exe is never touched. If "was on" is
-// still set, the previous helper ended abnormally: enable again. A routing.disable in phase
-// stopping without restore_pending clears it (cmdDisable, 5.1): the start-up then ends in off.
+// left from an earlier run is stopped, the main core or the setup mode's (spec 7: both record their
+// identity in state.json); a foreign sing-box.exe is never touched. If "was on" is still set, the
+// previous helper ended abnormally: enable again. A routing.disable in phase stopping without
+// restore_pending clears it (cmdDisable, 5.1): the start-up then ends in off.
 func (e *Engine) startup(ctx context.Context) {
 	e.readJournal()
 	e.mu.Lock()
@@ -70,20 +71,31 @@ const sessionEndCall = 3 * time.Second
 // waiting for a confirmation. The journal stays and is handled at the next start (5.7).
 // In blocked the user has selected an exit node in the system client again: that choice is not
 // overwritten (5.7); the next start finds the exit node on and deletes the journal.
+// The core of the setup mode (spec 7) is ended the same way, without waiting.
 // It must finish within the few seconds Windows gives the process.
 func (e *Engine) SessionEnding() {
 	e.mu.Lock()
 	e.ending = true
 	e.saved.WasOn = false
 	e.save()
-	j, r, o := e.journal, e.run, e.op
+	j, r, o, s := e.journal, e.run, e.op, e.setup
 	blocked := e.sysExitOn
 	if r != nil {
 		r.stopping = true
 	}
+	var setupProc CoreProc
+	if s != nil {
+		s.again, setupProc = false, s.proc
+	}
 	e.mu.Unlock()
 	if o != nil {
 		o.cancel()
+	}
+	if s != nil {
+		s.cancel()
+	}
+	if setupProc != nil {
+		_ = setupProc.Kill()
 	}
 	switch {
 	case j != nil && blocked:

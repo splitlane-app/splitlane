@@ -111,9 +111,10 @@ type fakeHelper struct {
 	srv *pipe.Server
 	st  protocol.State
 
-	silent   map[string]bool // methods that get no answer until release is closed
-	release  chan struct{}   // lets the silent methods return
-	stateErr *protocol.Error // state.get is rejected with it
+	silent   map[string]bool      // methods that get no answer until release is closed
+	release  chan struct{}        // lets the silent methods return
+	stateErr *protocol.Error      // state.get is rejected with it
+	login    []protocol.Tailscale // the node's states after tailscale.login, one state event each, 30 ms apart
 }
 
 func (f *fakeHelper) set(phase string) {
@@ -147,6 +148,18 @@ func (f *fakeHelper) Handle(ctx context.Context, method string, params json.RawM
 	case protocol.MethodLanesSet:
 		return nil, &protocol.Error{Code: protocol.CodeRuleRejected, Message: "rules rejected",
 			Rules: []protocol.RuleRejection{{ID: "x", Reason: protocol.RejectProtected}}}
+	case protocol.MethodLogin:
+		go func() {
+			for _, ts := range f.login {
+				time.Sleep(30 * time.Millisecond)
+				f.mu.Lock()
+				f.st.Tailscale = ts
+				s := f.st
+				f.mu.Unlock()
+				f.srv.Broadcast(s)
+			}
+		}()
+		return struct{}{}, nil
 	}
 	return nil, protocol.Errorf(protocol.CodeUnknownMethod, "unknown")
 }
@@ -327,6 +340,40 @@ func TestEnableWaitsForOn(t *testing.T) {
 	}
 	text := out.String()
 	if !strings.Contains(text, "EVENT state phase=starting") || !strings.Contains(text, "SLCTL: phase=on") {
+		t.Fatalf("output:\n%s", text)
+	}
+}
+
+// slctl login (spec 7): tailscale.login, then the state events. Each change of the backend is printed;
+// the login link once, though several states carry it; needs_approval is not the end. The command ends
+// with exit code 0 when the node is logged in: backend starting or running without a link.
+func TestLoginPrintsTheLinkOnce(t *testing.T) {
+	link := "https://login.example/a/1f2e3d"
+	name := testPipeName()
+	srv, err := serveHelper(name, &fakeHelper{
+		st: protocol.State{Phase: protocol.PhaseOff, Apps: []protocol.AppRule{}, Tailscale: protocol.Tailscale{Backend: protocol.BackendStopped}},
+		login: []protocol.Tailscale{
+			{Backend: protocol.BackendNeedsLogin, AuthURL: &link},
+			{Backend: protocol.BackendNeedsLogin, AuthURL: &link, DeviceName: "pc-splitlane"},
+			{Backend: protocol.BackendNeedsApproval},
+			{Backend: protocol.BackendStarting},
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	var out strings.Builder
+	code := run([]string{"-pipe", name, "login", "-timeout", "10s"}, &out)
+	text := out.String()
+	if code != exitOK || strings.Count(text, link) != 1 || !strings.Contains(text, "SLCTL: open this link to log in: "+link) {
+		t.Fatalf("exit %d, the link %d times:\n%s", code, strings.Count(text, link), text)
+	}
+	for _, b := range []string{"needs_login", "needs_approval", "starting"} {
+		if n := strings.Count(text, "SLCTL: backend="+b+"\n"); n != 1 {
+			t.Errorf("backend=%s printed %d times", b, n)
+		}
+	}
+	if t.Failed() {
 		t.Fatalf("output:\n%s", text)
 	}
 }

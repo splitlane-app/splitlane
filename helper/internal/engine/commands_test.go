@@ -50,7 +50,7 @@ func setPhase(h *harness, phase string) {
 func TestUnknownAndLaterMethods(t *testing.T) {
 	h := newHarness(t)
 	wantCode(t, call(h, "routing.toggle", nil), protocol.CodeUnknownMethod)
-	for _, m := range []string{protocol.MethodLogin, protocol.MethodLogout, protocol.MethodActivitySubscribe, protocol.MethodDiagnosticsExport} {
+	for _, m := range []string{protocol.MethodActivitySubscribe, protocol.MethodDiagnosticsExport} {
 		wantCode(t, call(h, m, nil), protocol.CodeInternal)
 	}
 	res, err := h.e.Handle(context.Background(), protocol.MethodStateGet, nil)
@@ -571,7 +571,7 @@ func disabledAct(skip bool) func(t *testing.T, h *harness, phase string, mark in
 }
 
 // TestPhaseTable walks the phase table of 5.1 cell by cell for the methods of this build
-// (tailscale.login and tailscale.logout answer internal in every phase: TestUnknownAndLaterMethods).
+// (tailscale.login and tailscale.logout: TestLoginPhaseTable).
 // routing.disable with skipRestore disables without a restore wherever it disables (5.1).
 func TestPhaseTable(t *testing.T) {
 	busy, wrong := protocol.CodeBusy, protocol.CodeWrongPhase

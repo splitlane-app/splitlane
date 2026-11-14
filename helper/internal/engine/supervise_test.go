@@ -489,6 +489,7 @@ func TestLastWindowGoneKeepsRouting(t *testing.T) {
 // While routing is off the system client is read only for a connected window (5.6).
 func TestPollWhileOffNeedsAWindow(t *testing.T) {
 	h := newHarness(t)
+	h.store.state.LoggedIn = false // so the window starts no setup mode (spec 7): only 5.6 is looked at here
 	h.load()
 	h.e.pollSystem(context.Background())
 	if h.e.State().SystemTailscale.Installed {

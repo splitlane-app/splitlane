@@ -65,10 +65,17 @@ type Engine struct {
 	adapterFails int
 	leakHits     int
 	clients      atomic.Int32 // connected windows; atomic, so the pipe may set it under its own lock
+	lastGone     atomic.Int64 // Clock time (UnixNano) at which the last window went (spec 7)
 	ending       bool         // the Windows session ends (5.4)
 	exiting      bool         // helper.shutdown was accepted
 	skip         bool         // "disable without restore" (5.4)
 	wake         chan struct{}
+
+	// The connector (spec 7, connector.go).
+	setup       *setupRun  // the setup mode now; nil when it does not run
+	nodeBackend string     // tailscale.backend as the setup core's node says; stopped when it does not run
+	nodeAuthURL string     // the login link of the setup core's node, "" when there is none
+	connector   sync.Mutex // logouts one at a time; stopSetup waits for the one under way
 }
 
 // coreRun is one running core with its ports and the rule files it reads now.
@@ -102,12 +109,12 @@ func New(d Deps) *Engine {
 	if d.OnExit == nil {
 		d.OnExit = func() {}
 	}
-	e := &Engine{d: d, wake: make(chan struct{}, 1), saved: store.Defaults()}
+	e := &Engine{d: d, wake: make(chan struct{}, 1), saved: store.Defaults(), nodeBackend: protocol.BackendStopped}
 	e.st = protocol.State{
 		Phase:       protocol.PhaseOff,
 		DefaultLane: protocol.LaneVPN,
 		Apps:        []protocol.AppRule{},
-		Tailscale:   protocol.Tailscale{Backend: "stopped", ExitNodes: []protocol.ExitNode{}},
+		Tailscale:   protocol.Tailscale{Backend: protocol.BackendStopped, ExitNodes: []protocol.ExitNode{}},
 	}
 	e.syncSaved()
 	return e
@@ -202,8 +209,19 @@ func (e *Engine) Hello() protocol.HelloResult {
 	return protocol.HelloResult{Protocol: protocol.Version, Helper: e.d.Settings.HelperVersion, Core: e.d.Settings.CoreVersion}
 }
 
-// SetClients tells how many windows are connected (5.6: the system client is polled for them).
-func (e *Engine) SetClients(n int) { e.clients.Store(int32(n)) }
+// SetClients tells how many windows are connected (5.6: the system client is polled for them; spec 7:
+// the first window that comes starts the setup mode when "logged in" is saved, and the setup mode
+// stops 5 minutes after the last one went). The pipe calls it under its own lock, which a published
+// state takes after e.mu, so it takes no lock of the engine: the start runs on its own goroutine.
+func (e *Engine) SetClients(n int) {
+	old := e.clients.Swap(int32(n))
+	switch {
+	case n == 0 && old > 0:
+		e.lastGone.Store(e.d.Clock.Now().UnixNano())
+	case n > 0 && old == 0:
+		go e.windowCame()
+	}
+}
 
 // Wait blocks until no background operation runs.
 func (e *Engine) Wait() {
@@ -294,13 +312,18 @@ func (e *Engine) save() error {
 	return err
 }
 
-// publish sends the state to the clients; e.mu must be held.
+// publish sends the state to the clients; e.mu must be held. tailscale.backend and authUrl come from
+// the connector (spec 7): the node of the setup core, stopped when no core runs (5.2); while the main
+// core runs in a live phase, running.
 func (e *Engine) publish() {
 	e.syncSaved()
+	ts := &e.st.Tailscale
+	ts.Backend, ts.AuthURL = e.nodeBackend, nil
 	if e.run != nil && live(e.st.Phase) {
-		e.st.Tailscale.Backend = "running"
-	} else {
-		e.st.Tailscale.Backend = "stopped"
+		ts.Backend = protocol.BackendRunning
+	} else if e.nodeAuthURL != "" {
+		u := e.nodeAuthURL
+		ts.AuthURL = &u
 	}
 	e.d.OnState(e.st.Clone())
 }

@@ -47,7 +47,10 @@ func (e *Engine) finishOnChecked() *protocol.Reason {
 }
 
 // enable is steps 1–8 of 5.3; the order was proven on the PC (appendix A) and does not change.
+// Its first action ends the setup mode (spec 7): the main core shares the node's state folder with
+// it, and step 1 must not meet it as another core.
 func (e *Engine) enable(ctx context.Context, unattended bool) *protocol.Reason {
+	e.stopSetup()
 	if why := e.preflight(ctx, unattended); why != nil {
 		return why
 	}
