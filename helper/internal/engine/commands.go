@@ -25,7 +25,7 @@ func (e *Engine) Handle(ctx context.Context, method string, params json.RawMessa
 			return nil, err
 		}
 		return e.State(), nil
-	case protocol.MethodLogin, protocol.MethodLogout, protocol.MethodActivitySubscribe, protocol.MethodDiagnosticsExport:
+	case protocol.MethodActivitySubscribe, protocol.MethodDiagnosticsExport:
 		return nil, protocol.Errorf(protocol.CodeInternal, "%s is not available in this build (Plan 1B)", method)
 	}
 	e.queue.Lock()
@@ -49,6 +49,10 @@ func (e *Engine) Handle(ctx context.Context, method string, params json.RawMessa
 		err = e.cmdSetExitNode(params)
 	case protocol.MethodClearSystemExitNode:
 		keep, err = e.cmdClearSystemExitNode(params)
+	case protocol.MethodLogin:
+		err = e.cmdLogin(params)
+	case protocol.MethodLogout:
+		err = e.cmdLogout(params)
 	case protocol.MethodShutdown:
 		err = e.cmdShutdown(params)
 	}
@@ -523,11 +527,12 @@ func (e *Engine) cmdShutdown(params json.RawMessage) *protocol.Error {
 	return nil
 }
 
-// exitWhenDone waits for the operations to end, disables as long as a live phase is left, then calls
-// OnExit. The loop closes the window in which an enable or restart has published a live phase but
-// startOp's cleanup has not yet cleared e.op: beginDisableLocked refuses there, so shutdown would
-// otherwise end the process with the core running and the system exit node off. exiting keeps every
-// other command and the watcher out, so nothing but this loop starts an operation now.
+// exitWhenDone waits for the operations to end, disables as long as a live phase is left, stops the
+// setup mode (spec 7), then calls OnExit. The loop closes the window in which an enable or restart has
+// published a live phase but startOp's cleanup has not yet cleared e.op: beginDisableLocked refuses
+// there, so shutdown would otherwise end the process with the core running and the system exit node
+// off. exiting keeps every other command, the watcher and a new setup mode out, so nothing but this
+// loop starts an operation now.
 func (e *Engine) exitWhenDone() {
 	for {
 		e.Wait()
@@ -545,5 +550,6 @@ func (e *Engine) exitWhenDone() {
 			break
 		}
 	}
+	e.stopSetup()
 	e.d.OnExit()
 }

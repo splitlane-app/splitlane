@@ -215,6 +215,7 @@ type fakeProc struct {
 	once            sync.Once
 	ignoreInterrupt bool
 	interruptErr    error
+	setup           bool // a core of the setup mode (spec 7): started from the setup config
 }
 
 func (p *fakeProc) Identity() store.CoreIdentity { return p.id }
@@ -264,12 +265,14 @@ type fakeCore struct {
 	opts      CoreOptions  // of the last BuildConfig
 	setupOpts SetupOptions // of the last BuildSetupConfig
 	node      *fakeNode    // the API service of every run
+	setupNext bool         // the last config built was the setup mode's: the next start is a setup core
 }
 
 func (c *fakeCore) BuildConfig(o CoreOptions) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.opts = o
+	c.setupNext = false
 	return json.Marshal(o)
 }
 
@@ -307,9 +310,14 @@ func (c *fakeCore) Start(path string) (CoreProc, error) {
 	if c.startErr != nil {
 		return nil, c.startErr
 	}
-	p := &fakeProc{rec: c.rec, id: store.CoreIdentity{PID: 1000 + len(c.procs), Created: int64(len(c.procs) + 1), Path: `C:\core\sing-box.exe`}, done: make(chan struct{})}
+	p := &fakeProc{rec: c.rec, id: store.CoreIdentity{PID: 1000 + len(c.procs), Created: int64(len(c.procs) + 1), Path: `C:\core\sing-box.exe`},
+		done: make(chan struct{}), setup: c.setupNext}
 	c.procs = append(c.procs, p)
-	c.rec.add("core:start %d", p.id.PID)
+	if p.setup {
+		c.rec.add("core:start %d setup", p.id.PID)
+	} else {
+		c.rec.add("core:start %d", p.id.PID)
+	}
 	c.log = ""
 	switch {
 	case c.dieEarly > 0:
@@ -366,7 +374,20 @@ func (c *fakeCore) BuildSetupConfig(o SetupOptions) ([]byte, error) {
 	defer c.mu.Unlock()
 	c.rec.add("core:setupconfig")
 	c.setupOpts = o
+	c.setupNext = true
 	return json.Marshal(o)
+}
+
+// setupAlive tells whether a core of the setup mode runs.
+func (c *fakeCore) setupAlive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, p := range c.procs {
+		if p.setup && p.alive() {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *fakeCore) Node(port int, secret string) NodeAPI { return c.node }
@@ -677,8 +698,16 @@ func (h *fakeHost) HasDefaultRoute() bool {
 
 func (h *fakeHost) IPForwarding() bool   { h.mu.Lock(); defer h.mu.Unlock(); return h.forwarding }
 func (h *fakeHost) DNSOverride() bool    { h.mu.Lock(); defer h.mu.Unlock(); return h.dnsOverride }
-func (h *fakeHost) CoreRunning() bool    { h.mu.Lock(); defer h.mu.Unlock(); return h.otherCore }
 func (h *fakeHost) AdapterPresent() bool { return h.adapterStuck || h.core.anyAlive() }
+
+// CoreRunning sees a foreign sing-box.exe (otherCore) and, as the real check does, a core of the
+// setup mode that still runs: step 1 of 5.3 must never meet one (spec 7).
+func (h *fakeHost) CoreRunning() bool {
+	h.mu.Lock()
+	other := h.otherCore
+	h.mu.Unlock()
+	return other || h.core.setupAlive()
+}
 
 func (h *fakeHost) FlushDNS() error {
 	h.rec.add("dns:flush")

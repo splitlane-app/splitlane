@@ -36,6 +36,8 @@ const usage = `usage: slctl [-pipe NAME] [-timeout 150s] [-show-addresses] [-url
   lanes FILE                     lanes.set with the params in FILE (JSON)
   exitnode IP                    tailscale.setExitNode
   clear-system-exit-node         systemTailscale.clearExitNode
+  login [-timeout 300s]          tailscale.login, print the login link once, wait until logged in
+  logout [-timeout 60s]          tailscale.logout, wait for backend needs_login
   shutdown                       helper.shutdown, wait until the pipe closes
   call METHOD [PARAMS|@FILE]     any method, params as JSON or from a file
   wait PHASE[,PHASE...]          wait for one of the phases; success when it is the first one
@@ -71,7 +73,7 @@ func exitCodeFor(err error) int {
 
 // pipeCommands are the commands that talk to the helper.
 var pipeCommands = []string{"state", "enable", "disable", "alldirect", "lanes", "exitnode", "clear-system-exit-node",
-	"shutdown", "call", "wait", "watch", "expect-lanes"}
+	"login", "logout", "shutdown", "call", "wait", "watch", "expect-lanes"}
 
 // A helper that was just started opens its pipe a moment later (its log, the SHA-256 of the core,
 // the engine). go-winio retries only a busy pipe, so slctl tries a missing one again itself.
@@ -105,6 +107,7 @@ type client struct {
 	state   *protocol.State
 	timeout time.Time
 	lastErr error
+	onState func(protocol.State) // sees every state that comes, by event or by state.get (login, logout)
 }
 
 func (c *client) print(format string, args ...any) {
@@ -134,6 +137,9 @@ func (c *client) read() (map[string]json.RawMessage, error) {
 			json.Unmarshal(m["data"], &s)
 			c.state = &s
 			c.print("EVENT state %s", summary(s))
+			if c.onState != nil {
+				c.onState(s)
+			}
 		} else {
 			c.print("EVENT %s", name)
 		}
@@ -218,6 +224,9 @@ func (c *client) fetchState() (protocol.State, error) {
 	var s protocol.State
 	json.Unmarshal(raw, &s)
 	c.state = &s
+	if c.onState != nil {
+		c.onState(s)
+	}
 	return s, nil
 }
 
@@ -395,6 +404,8 @@ func command(c *client, cmd string, args []string, url string) int {
 		return simple(protocol.MethodSetExitNode, protocol.SetExitNodeParams{ID: args[0]})
 	case "clear-system-exit-node":
 		return simple(protocol.MethodClearSystemExitNode, nil)
+	case "login", "logout":
+		return nodeCommand(c, cmd, args)
 	case "shutdown":
 		if code := simple(protocol.MethodShutdown, nil); code != exitOK {
 			return code
@@ -456,6 +467,54 @@ func command(c *client, cmd string, args []string, url string) int {
 	}
 	fmt.Fprintln(c.out, usage)
 	return exitUsage
+}
+
+// nodeTimeouts: login waits for the user in the browser; logout for the setup core and the core's call.
+var nodeTimeouts = map[string]time.Duration{"login": 300 * time.Second, "logout": 60 * time.Second}
+
+// nodeCommand is login and logout (spec 7): the method, then the states until the node is logged in
+// (login: backend starting or running without a login link) or out (logout: backend needs_login). Each
+// change of the backend is printed; the login link once, to this console only: it never goes into a
+// report or a log.
+func nodeCommand(c *client, cmd string, args []string) int {
+	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	fs.SetOutput(c.out)
+	wait := fs.Duration("timeout", nodeTimeouts[cmd], "how long to wait for the node")
+	if fs.Parse(args) != nil || fs.NArg() != 0 {
+		return exitUsage
+	}
+	c.timeout = time.Now().Add(*wait)
+	method, done := protocol.MethodLogin, loggedIn
+	if cmd == "logout" {
+		method = protocol.MethodLogout
+		done = func(s protocol.State) bool { return s.Tailscale.Backend == protocol.BackendNeedsLogin }
+	}
+	backend, linked := "", false
+	c.onState = func(s protocol.State) {
+		if b := s.Tailscale.Backend; b != backend {
+			backend = b
+			c.print("SLCTL: backend=%s", b)
+		}
+		if cmd == "login" && !linked && s.Tailscale.AuthURL != nil {
+			linked = true
+			c.print("SLCTL: open this link to log in: %s", *s.Tailscale.AuthURL)
+		}
+	}
+	_, perr, err := c.call(method, nil)
+	switch {
+	case err != nil:
+		return c.fail(err)
+	case perr != nil:
+		return exitFailed // call printed its ERROR line
+	}
+	s, err := c.waitFor(done)
+	return c.finish(s, err, done)
+}
+
+// loggedIn is the end of slctl login (spec 7): the backend starting or running, no login link.
+func loggedIn(s protocol.State) bool {
+	b := s.Tailscale.Backend
+	return (b == protocol.BackendStarting || b == protocol.BackendRunning) && s.Tailscale.AuthURL == nil
 }
 
 // laneName says which lane an address belongs to.
