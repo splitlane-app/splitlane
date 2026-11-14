@@ -68,6 +68,8 @@ type Engine struct {
 	net          *netWatch    // the sequence after a network change (section 10, network.go); nil when none runs
 	clients      atomic.Int32 // connected windows; atomic, so the pipe may set it under its own lock
 	lastGone     atomic.Int64 // Clock time (UnixNano) at which the last window went (spec 7)
+	windowSeen   atomic.Bool  // a window has connected since the start: no exit without a window (4.3)
+	reenabled    bool         // the start-up of 5.7 enabled again because "was on" was set (4.3)
 	ending       bool         // the Windows session ends (5.4)
 	exiting      bool         // helper.shutdown was accepted
 	skip         bool         // "disable without restore" (5.4)
@@ -228,9 +230,13 @@ func (e *Engine) Hello() protocol.HelloResult {
 
 // SetClients tells how many windows are connected (5.6: the system client is polled for them; spec 7:
 // the first window that comes starts the setup mode when "logged in" is saved, and the setup mode
-// stops 5 minutes after the last one went). The pipe calls it under its own lock, which a published
-// state takes after e.mu, so it takes no lock of the engine: the start runs on its own goroutine.
+// stops 5 minutes after the last one went; spec 4.3: a helper that a window has reached does not end
+// on its own). The pipe calls it under its own lock, which a published state takes after e.mu, so it
+// takes no lock of the engine: the start runs on its own goroutine.
 func (e *Engine) SetClients(n int) {
+	if n > 0 {
+		e.windowSeen.Store(true)
+	}
 	old := e.clients.Swap(int32(n))
 	switch {
 	case n == 0 && old > 0:

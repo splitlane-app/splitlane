@@ -141,6 +141,27 @@ func TestFindOnlyTheSameProcess(t *testing.T) {
 	}
 }
 
+// 5.7: the own core is also the image of the driver's sing-box.exe, in the product the one in
+// %ProgramFiles%\SplitLane\. The same process seen by a driver of another sing-box.exe is not its core;
+// the driver's path written with forward slashes is the same file.
+func TestFindOnlyTheDriversCore(t *testing.T) {
+	d, config := fakeDriver(t)
+	proc, err := d.Start(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { proc.Kill(); <-proc.Done() })
+	waitLog(t, d, "started")
+	other := &Driver{Exe: filepath.Join(t.TempDir(), "sing-box.exe"), DataDir: d.DataDir}
+	if _, ok := other.Find(proc.Identity()); ok {
+		t.Fatal("a process of another image is not the driver's core")
+	}
+	slashes := &Driver{Exe: filepath.ToSlash(d.Exe), DataDir: d.DataDir}
+	if _, ok := slashes.Find(proc.Identity()); !ok {
+		t.Fatal("the driver's own exe written with forward slashes")
+	}
+}
+
 func TestCheckReportsTheCoreMessage(t *testing.T) {
 	d, config := fakeDriver(t)
 	if err := d.Check(context.Background(), config); err != nil {
