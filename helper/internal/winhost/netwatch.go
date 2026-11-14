@@ -39,8 +39,8 @@ func (d *debounce) over(now time.Time) bool {
 }
 
 // One notification of route changes serves every watcher of the process: Windows calls routeChanged on
-// a thread of its own, which only wakes the watchers. NewCallback is called once: a process has only so
-// many callbacks.
+// a thread of its own, which only reads the interface of the route and wakes the watchers. NewCallback
+// is called once: a process has only so many callbacks.
 var (
 	routeCallback = windows.NewCallback(routeChanged)
 	routeMu       sync.Mutex     // registers and cancels the notification; the callback never takes it
@@ -49,9 +49,30 @@ var (
 	routeWatchers sync.Map       // *routeWatch -> struct{}: every watcher the callback wakes
 )
 
-// routeChanged is the callback of NotifyRouteChange2 (callerContext, the changed MIB_IPFORWARD_ROW2 and the
-// kind of change are not used): any change of a route, IPv4 or IPv6, wakes every watcher.
-func routeChanged(callerContext, row, notificationType uintptr) uintptr {
+// routeIface reads the interface of a route as the decisions see it; the tests replace it.
+var routeIface = ifaceOf
+
+// ifaceOf reads the alias and the type of the interface with this LUID.
+func ifaceOf(luid uint64) (Iface, error) {
+	row := windows.MibIfRow2{InterfaceLuid: luid}
+	if err := windows.GetIfEntry2Ex(windows.MibIfTableNormalWithoutStatistics, &row); err != nil {
+		return Iface{}, err
+	}
+	return Iface{LUID: luid, Alias: windows.UTF16ToString(row.Alias[:]), Type: row.Type}, nil
+}
+
+// routeCounts: a change of a route on this interface is a change of the network (section 10). The routes
+// of the core's own adapter and the system Tailscale's change with the helper's own steps (the TUN of
+// 5.3, the exit node switched off in step 6) and with the tailnet, not with the network: they are left
+// out, the set HasDefaultRoute leaves out. An interface that cannot be read (gone already) counts.
+func routeCounts(i Iface, err error) bool { return err != nil || !ignored(i) }
+
+// routeChanged is the callback of NotifyRouteChange2 (callerContext and the kind of change are not used):
+// a change of a route, IPv4 or IPv6, that counts (routeCounts) wakes every watcher.
+func routeChanged(callerContext uintptr, row *windows.MibIpForwardRow2, notificationType uintptr) uintptr {
+	if row != nil && !routeCounts(routeIface(row.InterfaceLuid)) {
+		return 0
+	}
 	routeWatchers.Range(func(w, _ any) bool {
 		w.(*routeWatch).kick()
 		return true
@@ -96,7 +117,8 @@ func (w *routeWatch) loop(onChange func(), log func(string, ...any)) {
 }
 
 // WatchRoutes calls onChange when the routes of Windows change (section 10): once per burst, 2 s after
-// its last notification, on a goroutine of its own. The notification is NotifyRouteChange2 of
+// its last notification, on a goroutine of its own; changes on the core's own adapter and the system
+// Tailscale's are left out (routeCounts). The notification is NotifyRouteChange2 of
 // iphlpapi.dll for IPv4 and IPv6, without the initial notification; stop ends the watcher and, with the
 // last watcher, cancels the notification (CancelMibChangeNotify2). stop may be called more than once.
 // Only the notification is registered: nothing in the system changes.
