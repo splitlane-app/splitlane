@@ -24,9 +24,10 @@ const (
 // the answer comes when the archive is written. The archive holds the logs of the helper and of the core,
 // the saved state (state.json as this run holds it; never the core config, the rule files, the node's
 // state folder, the journal or a secret: spec 11) and meta.txt: the versions, the phase, its reason and the
-// reason's params (as the state line of helper.log has them: diag.ReasonParams), the time, and whether a
-// restore journal is there (one that could not be read counts as there, as for restoreOnDisable). The state
-// is read under e.mu; the archive is built without it.
+// reason's params (as the state line of helper.log has them: diag.ReasonParams), the time, whether a
+// restore journal is there (one that could not be read counts as there, as for restoreOnDisable) and whether
+// state.json was read (while it cannot be, the archive's state.json is the defaults in memory). The state is
+// read under e.mu; the archive is built without it.
 func (e *Engine) cmdExport(params json.RawMessage) (any, *protocol.Error) {
 	if err := noParams(params); err != nil {
 		return nil, err
@@ -45,8 +46,14 @@ func (e *Engine) cmdExport(params json.RawMessage) (any, *protocol.Error) {
 	if e.journal != nil || e.journalErr != nil {
 		journal = "present"
 	}
+	saved := "read"
+	if e.stateErr != nil {
+		// the archive's state.json is then the defaults in memory, not the user's state
+		saved = "unreadable (" + strings.ReplaceAll(protocol.MaskAddresses(e.stateErr.Error()), "\n", " ") + ")"
+	}
 	meta := map[string]string{"helper": e.d.Settings.HelperVersion, "core": e.d.Settings.CoreVersion,
-		"phase": e.st.Phase, "reason": why, "reason params": whyParams, "time": now.Format(time.RFC3339), "journal": journal}
+		"phase": e.st.Phase, "reason": why, "reason params": whyParams, "time": now.Format(time.RFC3339), "journal": journal,
+		"state": saved}
 	e.mu.Unlock()
 	if err != nil {
 		return nil, protocol.Errorf(protocol.CodeInternal, "diagnostics.export: state: %v", err)

@@ -138,7 +138,7 @@ func TestDiagnosticsExportInAnyPhase(t *testing.T) {
 			code = c.why.Code
 		}
 		meta := "core: 1.14.4\nhelper: 0.1.0\njournal: " + journal + "\nphase: " + c.phase + "\nreason: " + code +
-			"\nreason params: -\ntime: " + h.clock.Now().Local().Format(time.RFC3339) + "\n"
+			"\nreason params: -\nstate: read\ntime: " + h.clock.Now().Local().Format(time.RFC3339) + "\n"
 		if got["meta.txt"] != meta || got["state.json"] != string(state)+"\n" {
 			t.Fatalf("%s: meta.txt\n%s\nstate.json\n%s", c.phase, got["meta.txt"], got["state.json"])
 		}
@@ -170,6 +170,38 @@ func TestExportHasReasonParams(t *testing.T) {
 		`command="tailscale set --exit-node=<ip> --exit-node-allow-lan-access" error="tailscale set: exit status 1\nvisit <login link>"` + "\n"
 	if meta := archiveEntries(t, path)["meta.txt"]; !strings.Contains(meta, want) {
 		t.Fatalf("meta.txt:\n%s", meta)
+	}
+}
+
+// While state.json cannot be read, the state.json of the archive is the defaults in memory; meta.txt says so,
+// with the read error, so that support does not take the defaults for the user's state (review of plan 1B,
+// final, minor 3). Once the file reads, meta.txt says read.
+func TestExportSaysStateUnreadable(t *testing.T) {
+	h := newHarness(t)
+	exportData(h)
+	h.store.stateReadFails = 1000
+	h.e.Start()
+	h.waitPhase(protocol.PhaseOff)
+	path, err := export(h, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "state: unreadable (store: read failed: open C:\\data\\state.json: The process cannot access the file because it is being used by another process.)\n"
+	if meta := archiveEntries(t, path)["meta.txt"]; !strings.Contains(meta, want) {
+		t.Fatalf("meta.txt:\n%s", meta)
+	}
+	h.store.mu.Lock()
+	h.store.stateReadFails = 0
+	h.store.mu.Unlock()
+	h.e.mu.Lock()
+	h.e.save() // the next save reads the file first
+	h.e.mu.Unlock()
+	<-h.clock.After(time.Second) // the next archive, the next second
+	if path, err = export(h, nil); err != nil {
+		t.Fatal(err)
+	}
+	if meta := archiveEntries(t, path)["meta.txt"]; !strings.Contains(meta, "state: read\n") {
+		t.Fatalf("meta.txt once state.json reads:\n%s", meta)
 	}
 }
 
