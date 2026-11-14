@@ -271,6 +271,74 @@ func TestRelayWithoutDirectBeforeKeepsTheCore(t *testing.T) {
 	}
 }
 
+// blockedOn is netOn in phase blocked: the user selected an exit node of their own in the system client
+// again (5.6).
+func blockedOn(t *testing.T) *harness {
+	t.Helper()
+	h := netOn(t)
+	h.sys.set(func(s *fakeSys) { s.on, s.ip = true, "100.64.0.99" })
+	h.e.pollSystem(context.Background())
+	if s := h.e.State(); s.Phase != protocol.PhaseBlocked {
+		t.Fatalf("setup: %+v", s)
+	}
+	return h
+}
+
+// 5.7: in blocked a network change restarts no core, neither for checks that do not pass in 60 s nor for
+// a path that stays relay 60 s after they passed: step 6 of the enable would switch off the exit node the
+// user selected, and 5.4 would replace it with the one of the journal. The core and the user's exit node
+// stay, the sequence ends.
+func TestNoRestartInBlockedAfterNetworkChange(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		setup func(h *harness)
+		n     int
+		log   string
+	}{
+		{"checks fail", func(h *harness) {
+			h.probe.script([]ProbeResult{noAnswer}, []ProbeResult{atDirect}, nil)
+		}, 9, "network changed and the checks did not pass in 60 s"},
+		{"relay", func(h *harness) {
+			h.core.node.set(func(n *fakeNode) { n.path = protocol.PathRelay })
+		}, 7, "the path to the exit node stayed relay after the network change"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := blockedOn(t)
+			core := h.core.last()
+			mark := len(h.rec.list())
+			c.setup(h)
+			h.e.NetworkChanged("route")
+			ticks(h, c.n)
+			h.e.Wait()
+			on, ip := systemExitNode(h)
+			if s := h.e.State(); s.Phase != protocol.PhaseBlocked || !core.alive() || following(h) || !on || ip != "100.64.0.99" ||
+				countSince(h, mark, "core:") != 0 || countSince(h, mark, "sys:") != 0 {
+				t.Fatalf("blocked: no restart, the user's exit node stays: phase %s, exit node %v %s, events %v", s.Phase, on, ip, h.rec.list()[mark:])
+			}
+			if countSince(h, mark, "log:"+c.log+"; no restart in phase blocked") != 1 {
+				t.Fatalf("the restart that did not come is logged once: %v", h.rec.list()[mark:])
+			}
+		})
+	}
+}
+
+// Spec 7: with the login expired a network change restarts no core: no enable passes before the login.
+// The checks that do not pass in 60 s leave the core and the phase (degraded, login_expired) as they are.
+func TestNoRestartWhileExpiredAfterNetworkChange(t *testing.T) {
+	h := expiredOn(t)
+	core := h.core.last()
+	mark := len(h.rec.list())
+	h.probe.script([]ProbeResult{noAnswer}, []ProbeResult{atDirect}, []ProbeResult{noAnswer})
+	h.e.NetworkChanged("route")
+	ticks(h, 9)
+	h.e.Wait()
+	s := h.e.State()
+	if s.Phase != protocol.PhaseDegraded || s.Reason == nil || s.Reason.Code != protocol.ReasonLoginExpired ||
+		!core.alive() || following(h) || countSince(h, mark, "core:") != 0 || countSince(h, mark, "sys:") != 0 {
+		t.Fatalf("expired: no restart: %+v, events %v", s, h.rec.list()[mark:])
+	}
+}
+
 // While the helper waits for the default route, a leak (two answers in a row from the address of the
 // direct lane through the adapter, 5.5) still rolls back at once: 5.4, error leak_detected.
 func TestLeakStillRollsBackDuringTheWait(t *testing.T) {
