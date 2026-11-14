@@ -14,11 +14,18 @@
   display: none;
 }
 
+.content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .lanes {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   padding: 12px 16px 16px;
 }

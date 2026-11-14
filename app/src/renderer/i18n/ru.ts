@@ -39,6 +39,43 @@ export const ru = {
   'card.role': 'карточка программы',
   'menu.label': 'Действия: {name}',
 
+  // the add panel (spec 9.3)
+  'add.title': 'Добавить программу',
+  'add.close': 'Закрыть',
+  'add.tabs': 'Откуда взять программу',
+  'add.tabOnline': 'Сейчас в сети',
+  'add.tabInstalled': 'Установленные',
+  'add.pick': 'Выбрать файл…',
+  'add.picked': 'Выбранный файл',
+  'add.onlineOff': 'Включите деление: тогда здесь появятся программы, которые сейчас выходят в сеть',
+  'add.onlineEmpty': 'Сейчас в сети нет незакреплённых программ',
+  'add.installedLoading': 'Ищем установленные программы…',
+  'add.installedEmpty': 'Установленных программ не найдено',
+  'add.installedFailed': 'Не удалось получить список установленных программ',
+  'add.dragHint': 'Строку можно перетащить на дорожку',
+  'add.here': 'сейчас: {lane}',
+  'add.pinnedIn': 'закреплена: {lane}',
+
+  // the program card (spec 9.4)
+  'program.close': 'Закрыть',
+  'program.statePinnedVpn': 'закреплена · через VPN',
+  'program.statePinnedDirect': 'закреплена · напрямую',
+  'program.stateUnpinned': 'не закреплена · по основной дорожке',
+  'program.identity': 'Что считается этой программой',
+  'program.wholeFolder': 'Вся папка программы',
+  'program.wholeFolderOn': 'Все файлы из этой папки считаются этой программой',
+  'program.wholeFolderOff': 'Считается только этот файл',
+  'program.wholeFolderFixed': 'Для программы из магазина правило своё, переключатель недоступен',
+  'program.path': 'Путь',
+  'program.exes': 'Замеченные файлы',
+  'program.noExes': 'Пока не замечены',
+  'program.connections': 'Соединения сейчас',
+  'program.noConnections': 'Нет соединений',
+  'program.connectionsOff': 'Соединения видны, когда деление включено',
+  'program.colHost': 'Узел',
+  'program.colLane': 'Дорожка',
+  'program.colSpeed': 'Скорость',
+
   // dragging a card (said by the screen reader)
   'dnd.instructions':
     'Пробел — взять карточку, стрелки — перенести, пробел — положить, Escape — отменить. Ввод — открыть карточку программы, Shift+F10 — действия',
@@ -46,6 +83,7 @@ export const ru = {
   'dnd.action': '{name}: {action}',
   'dnd.stay': '{name}: на своём месте',
   'dnd.canceled': '{name}: перенос отменён',
+  'dnd.addAction': '{name}: закрепить, {lane}',
 
   // speeds: down and up of a lane
   'speed.down': '↓ {speed}',

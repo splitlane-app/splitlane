@@ -15,15 +15,21 @@ import {
 import { DragDropProvider, useDragOperation, useDroppable } from '@dnd-kit/react'
 import { useMemo, type ReactNode } from 'react'
 import type { StoreApi } from 'zustand'
+import type { Program } from '../../shared/programs'
 import type { Lane } from '../../shared/protocol'
 import { t } from '../i18n/t'
+import { addRowDrop } from '../model/addRows'
 import type { CardVM } from '../model/board'
+import { addPrograms } from '../model/layout'
 import { useServices } from '../services'
 import { effectiveLayout, type AppState, type LayoutChange } from '../store/appStore'
 import { changeOf, dropOp, opLabel, parseZone, zoneId, type DropOp, type DropZone } from './dropTarget'
 
 /** The type of the draggables of the cards of the board; their data is the card (CardVM). */
 export const CARD = 'card'
+
+/** The type of the rows of the add panel that are programs of the Start menu or a picked file; their data is the Program. */
+export const ADD_ROW = 'add-row'
 
 /**
  * How a card is dragged. With the mouse: after a move of 5 pixels, so that a click (and a slow click) still opens
@@ -53,6 +59,18 @@ function draggedCard(operation: { readonly source: Draggable | null | undefined 
   return source != null && source.type === CARD ? (source.data as CardVM) : null
 }
 
+/** The program of an add-panel row (not an online one: those are cards) a drag operation moves. */
+function draggedProgram(operation: { readonly source: Draggable | null | undefined }): Program | null {
+  const { source } = operation
+  return source != null && source.type === ADD_ROW ? (source.data as Program) : null
+}
+
+/** The lane a row of the add panel dropped on the operation's target is pinned in. */
+function addRowLane(operation: Operation): Lane | null {
+  const zone = operation.target != null ? parseZone(String(operation.target.id)) : null
+  return zone === null ? null : addRowDrop(zone)
+}
+
 /** The card of the operation and what dropping it on the operation's target does, by the layout on screen. */
 function dropOf(store: StoreApi<AppState>, operation: Operation): { card: CardVM; op: DropOp } | null {
   const card = draggedCard(operation)
@@ -65,6 +83,13 @@ function dropOf(store: StoreApi<AppState>, operation: Operation): { card: CardVM
 /** The words a screen reader says while a card is dragged: what letting it go there would do. */
 function announcements(store: StoreApi<AppState>): AccessibilityOptions['announcements'] {
   const said = (operation: Operation): string | undefined => {
+    const program = draggedProgram(operation)
+    if (program !== null) {
+      const lane = addRowLane(operation)
+      return lane === null
+        ? t('dnd.stay', { name: program.name })
+        : t('dnd.addAction', { name: program.name, lane: t(lane === 'vpn' ? 'lane.vpn' : 'lane.direct') })
+    }
     const drop = dropOf(store, operation)
     if (drop === null) return undefined
     const { card, op } = drop
@@ -72,14 +97,14 @@ function announcements(store: StoreApi<AppState>): AccessibilityOptions['announc
   }
   return {
     dragstart: ({ operation }) => {
-      const card = draggedCard(operation)
-      return card === null ? undefined : t('dnd.picked', { name: card.name })
+      const name = (draggedCard(operation) ?? draggedProgram(operation))?.name
+      return name === undefined ? undefined : t('dnd.picked', { name })
     },
     dragover: ({ operation }) => said(operation),
     dragend: ({ operation, canceled }) => {
-      const card = draggedCard(operation)
-      if (card === null) return undefined
-      return canceled ? t('dnd.canceled', { name: card.name }) : said(operation)
+      const name = (draggedCard(operation) ?? draggedProgram(operation))?.name
+      if (name === undefined) return undefined
+      return canceled ? t('dnd.canceled', { name }) : said(operation)
     }
   }
 }
@@ -112,13 +137,16 @@ export function BoardDnd({ children }: { children: ReactNode }): React.JSX.Eleme
 
   const onDragEnd = (event: DragEndEvent, manager: DragDropManager): void => {
     const drop = event.canceled ? null : dropOf(store, event.operation)
-    const change: LayoutChange | null = drop?.op != null ? changeOf(drop.card, drop.op) : null
+    let change: LayoutChange | null = drop?.op != null ? changeOf(drop.card, drop.op) : null
+    const program = event.canceled ? null : draggedProgram(event.operation)
+    const lane = program !== null ? addRowLane(event.operation) : null
+    if (program !== null && lane !== null) change = (l, newId) => addPrograms(l, [program], lane, newId)
     const layout = effectiveLayout(store.getState())
     // does it change anything? (the ids of the rules it would add do not matter for that)
     const moves = change !== null && layout !== null && change(layout, () => PROBE_ID) !== layout
     const feedback = manager.registry.plugins.get(Feedback)
     if (feedback !== undefined) feedback.dropAnimation = moves ? STAY_WHERE_DROPPED : undefined
-    if (moves) void store.getState().change(change)
+    if (moves && change !== null) void store.getState().change(change)
   }
 
   return (
@@ -162,6 +190,11 @@ export function useDropZone(
     disabled,
     ...(below ? { collisionDetector: pointerInside, collisionPriority: CollisionPriority.Highest } : {})
   })
-  const card = draggedCard(useDragOperation())
-  return { ref, over: isDropTarget && card !== null && dropOp(card, zone, defaultLane) !== null }
+  const operation = useDragOperation()
+  const card = draggedCard(operation)
+  const over =
+    isDropTarget &&
+    ((card !== null && dropOp(card, zone, defaultLane) !== null) ||
+      (draggedProgram(operation) !== null && addRowDrop(zone) !== null))
+  return { ref, over }
 }

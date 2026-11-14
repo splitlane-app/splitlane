@@ -1,0 +1,221 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(7 8 11 / 62%);
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(560px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 16px;
+  border: 1px solid var(--line3);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 20px 50px rgb(0 0 0 / 55%);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  margin: 0;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state {
+  margin: 1px 0 0;
+  color: var(--muted);
+}
+
+.dialog[data-lane='vpn'] .state {
+  color: var(--vpn-soft);
+}
+
+.dialog[data-lane='direct'] .state {
+  color: var(--direct-soft);
+}
+
+.close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--line2);
+  color: var(--text);
+}
+
+.close svg {
+  width: 12px;
+  height: 12px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.action {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line3);
+  border-radius: 7px;
+  background: var(--card);
+  cursor: pointer;
+}
+
+.action:hover {
+  background: var(--line2);
+}
+
+.action[data-lane='vpn'] {
+  border-color: color-mix(in srgb, var(--vpn) 50%, var(--line3));
+}
+
+.action[data-lane='direct'] {
+  border-color: color-mix(in srgb, var(--direct) 50%, var(--line3));
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  background: var(--lane-bg);
+}
+
+.blockTitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.switchRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.hint {
+  color: var(--muted);
+  margin: 0;
+}
+
+.path,
+.exes {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  min-width: 0;
+}
+
+.label {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.value {
+  overflow-wrap: anywhere;
+  color: var(--num);
+  font-family: var(--font-num);
+  font-size: 11px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tableWrap {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  padding: 3px 8px 3px 0;
+  background: var(--lane-bg);
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.table td {
+  padding: 3px 8px 3px 0;
+  border-top: 1px solid var(--line2);
+}
+
+.host {
+  overflow-wrap: anywhere;
+}
+
+.laneCell[data-lane='vpn'] {
+  color: var(--vpn-soft);
+}
+
+.laneCell[data-lane='direct'] {
+  color: var(--direct-soft);
+}
+
+.table .num {
+  padding-right: 0;
+  text-align: right;
+  white-space: nowrap;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+.num[data-quiet='true'] {
+  color: var(--dim);
+  font-family: var(--font-ui);
+}
