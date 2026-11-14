@@ -466,6 +466,7 @@ type fakeClash struct {
 	conns     []Conn
 	connsErr  error
 	reconnect func(c Conn) *Conn // a closed connection comes back like this (nil: it does not)
+	onConns   func()             // runs at each call of Connections, before the answer, outside the lock
 }
 
 func (k *fakeClash) SetMode(ctx context.Context, mode string) error {
@@ -480,6 +481,12 @@ func (k *fakeClash) SetMode(ctx context.Context, mode string) error {
 }
 
 func (k *fakeClash) Connections(ctx context.Context) ([]Conn, error) {
+	k.mu.Lock()
+	hook := k.onConns
+	k.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return append([]Conn{}, k.conns...), k.connsErr

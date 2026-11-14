@@ -44,7 +44,7 @@ func (e *Engine) Handle(ctx context.Context, method string, params json.RawMessa
 	case protocol.MethodAllDirect:
 		keep, err = e.cmdAllDirect(params)
 	case protocol.MethodLanesSet:
-		err = e.cmdLanesSet(ctx, params)
+		err = e.cmdLanesSet(params)
 	case protocol.MethodSetExitNode:
 		err = e.cmdSetExitNode(params)
 	case protocol.MethodClearSystemExitNode:
@@ -96,6 +96,10 @@ func (e *Engine) cmdEnable(params json.RawMessage) *protocol.Error {
 
 // cmdDisable: 5.4 with the phase table of 5.1; "was on" is cleared at the beginning. With
 // skipRestore the journal goes without a restore in every phase that disables (5.1, 5.4).
+// In stopping without restore_pending a plain disable gives up the enable that the operation would
+// start after its stopping half (reenablesLocked): "was on" is cleared, and the operation, which
+// reads it before it enables, ends in off. With restore_pending a plain disable is "Повторить":
+// one more restore attempt now, and the enable that follows stays.
 func (e *Engine) cmdDisable(params json.RawMessage) *protocol.Error {
 	var p protocol.DisableParams
 	if err := protocol.DecodeParams(params, &p); err != nil {
@@ -121,11 +125,15 @@ func (e *Engine) cmdDisable(params json.RawMessage) *protocol.Error {
 		e.skip = p.SkipRestore // read by the operation under e.mu, so it is set before its first look
 	case protocol.PhaseStopping:
 		pending := e.st.Reason != nil && e.st.Reason.Code == protocol.ReasonRestorePending
-		if p.SkipRestore {
+		switch {
+		case p.SkipRestore:
 			e.skip = true
 			if e.op != nil {
 				e.op.cancel()
 			}
+		case !pending && e.reenablesLocked():
+			e.saved.WasOn = false
+			e.save()
 		}
 		if p.SkipRestore || pending {
 			select {
@@ -137,7 +145,19 @@ func (e *Engine) cmdDisable(params json.RawMessage) *protocol.Error {
 	return nil
 }
 
+// reenablesLocked: the current operation enables after its stopping half while "was on" is set:
+// the reconnect of tailscale.setExitNode (7) or the start-up of 5.7; e.mu must be held. Both read
+// "was on" right before they enable, so clearing it gives that enable up (5.1).
+func (e *Engine) reenablesLocked() bool {
+	return e.op != nil && e.saved.WasOn && (e.op.kind == "reconnect" || e.op.kind == "startup")
+}
+
 // cmdAllDirect: applied in on and degraded; the answer comes at once, the result in state events.
+// The switch with its reconciliation (8.3) is an operation, like systemTailscale.clearExitNode: a
+// crash of the core during it is handled by the watcher after it, never beside it (the restart would
+// otherwise meet a switch that still sets the mode and the flag of the core that is gone). Another
+// operation still in place is busy. The queue stays taken until the operation is gone (5.1: the next
+// command waits for the reconciliation).
 func (e *Engine) cmdAllDirect(params json.RawMessage) (bool, *protocol.Error) {
 	var p protocol.AllDirectParams
 	if err := protocol.DecodeParams(params, &p); err != nil {
@@ -146,24 +166,32 @@ func (e *Engine) cmdAllDirect(params json.RawMessage) (bool, *protocol.Error) {
 	if p.On == nil {
 		return false, protocol.Errorf(protocol.CodeBadRequest, "params.on is required")
 	}
+	on := *p.On
 	e.mu.Lock()
-	phase, exiting := e.st.Phase, e.exiting
-	e.mu.Unlock()
+	defer e.mu.Unlock()
+	phase := e.st.Phase
 	switch {
-	case exiting || phase == protocol.PhaseStarting || phase == protocol.PhaseStopping:
+	case e.exiting || phase == protocol.PhaseStarting || phase == protocol.PhaseStopping:
 		return false, busy()
 	case phase != protocol.PhaseOn && phase != protocol.PhaseDegraded:
 		return false, wrongPhase(phase)
 	}
+	if !e.startOp("alldirect", func(ctx context.Context) { e.applyAllDirect(ctx, on) }) {
+		return false, busy()
+	}
+	o := e.op
 	go func() {
-		defer e.queue.Unlock()
-		e.applyAllDirect(context.Background(), *p.On)
+		<-o.done
+		e.queue.Unlock()
 	}()
 	return true, nil
 }
 
-// cmdLanesSet is 8.3: check the whole layout, apply it while the core runs, save it.
-func (e *Engine) cmdLanesSet(ctx context.Context, params json.RawMessage) *protocol.Error {
+// cmdLanesSet is 8.3: check the whole layout, apply it while the core runs, save it. While the core
+// runs (on, degraded, blocked) the apply and the save are one operation, which the answer waits for:
+// the watcher waits for it too, so the core restarted after a crash during the reconciliation reads
+// the layout that state.json holds once the apply is over. Another operation still in place is busy.
+func (e *Engine) cmdLanesSet(params json.RawMessage) *protocol.Error {
 	var p protocol.LanesSetParams
 	if err := protocol.DecodeParams(params, &p); err != nil {
 		return err
@@ -184,18 +212,43 @@ func (e *Engine) cmdLanesSet(ctx context.Context, params json.RawMessage) *proto
 	if len(rejected) > 0 {
 		return &protocol.Error{Code: protocol.CodeRuleRejected, Message: "rules rejected", Rules: rejected}
 	}
+	// The phase is read again: the core may have failed while the layout was checked.
+	e.mu.Lock()
+	phase = e.st.Phase
+	switch {
+	case e.exiting || phase == protocol.PhaseStarting || phase == protocol.PhaseStopping:
+		e.mu.Unlock()
+		return busy()
+	case !live(phase):
+		e.mu.Unlock()
+		return e.setLanes(context.Background(), apps, p.DefaultLane, false)
+	}
+	var aerr *protocol.Error
+	started := e.startOp("lanes", func(ctx context.Context) { aerr = e.setLanes(ctx, apps, p.DefaultLane, true) })
+	o := e.op
+	e.mu.Unlock()
+	if !started {
+		return busy()
+	}
+	<-o.done
+	return aerr
+}
+
+// setLanes is steps 2 and 3 of 8.3 for a checked layout: with apply (the core runs) the files and the
+// mode first, with the reconciliation; then the layout goes into state.json. The answer comes only
+// after the layout is in state.json. A write that fails is apply_failed: the previous layout stays,
+// and the core gets its previous files and mode back.
+func (e *Engine) setLanes(ctx context.Context, apps []protocol.AppRule, defaultLane string, apply bool) *protocol.Error {
 	var undo func()
-	if live(phase) {
+	if apply {
 		var aerr *protocol.Error
-		if undo, aerr = e.applyLanes(ctx, apps, p.DefaultLane); aerr != nil {
+		if undo, aerr = e.applyLanes(ctx, apps, defaultLane); aerr != nil {
 			return aerr
 		}
 	}
-	// Step 3: the answer comes only after the layout is in state.json. A write that fails is
-	// apply_failed: the previous layout stays, and the core gets its previous files and mode back.
 	e.mu.Lock()
 	prevApps, prevLane := e.saved.Apps, e.saved.DefaultLane
-	e.saved.Apps, e.saved.DefaultLane = apps, p.DefaultLane
+	e.saved.Apps, e.saved.DefaultLane = apps, defaultLane
 	saveErr := e.save()
 	switch {
 	case saveErr == nil, errors.Is(saveErr, errStateLate):
@@ -366,7 +419,9 @@ func (e *Engine) applyAllDirect(ctx context.Context, on bool) {
 	e.publish()
 }
 
-// cmdSetExitNode saves the choice; while routing is on it disables and enables again (7).
+// cmdSetExitNode saves the choice; while routing is on it disables and enables again (7). The
+// enable follows only while "was on" is still set: a routing.disable during the disabling (phase
+// stopping without restore_pending) clears it, and the reconnect then ends in off (5.1).
 func (e *Engine) cmdSetExitNode(params json.RawMessage) *protocol.Error {
 	var p protocol.SetExitNodeParams
 	if err := protocol.DecodeParams(params, &p); err != nil {
@@ -399,6 +454,12 @@ func (e *Engine) cmdSetExitNode(params json.RawMessage) *protocol.Error {
 			return
 		}
 		e.mu.Lock()
+		if !e.saved.WasOn {
+			e.d.Log("\"was on\" was cleared during the reconnect: no enable")
+			e.finish(protocol.PhaseOff, nil)
+			e.mu.Unlock()
+			return
+		}
 		e.setPhase(protocol.PhaseStarting, nil)
 		e.mu.Unlock()
 		e.runEnable(ctx, false)

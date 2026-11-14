@@ -107,8 +107,7 @@ func (e *Engine) checkHealth(ctx context.Context) {
 		}
 		if e.adapterFails >= 3 {
 			e.d.Log("the path through the adapter fails while probe-vpn works: restarting the core")
-			e.setPhase(protocol.PhaseStarting, nil)
-			e.startOp("restart", func(ctx context.Context) { e.runRestart(ctx, protocol.ReasonCoreUnresponsive) })
+			e.beginRestartLocked(protocol.ReasonCoreUnresponsive)
 			e.mu.Unlock()
 			return
 		}

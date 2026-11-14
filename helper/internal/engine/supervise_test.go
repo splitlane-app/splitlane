@@ -501,3 +501,109 @@ func TestPollWhileOffNeedsAWindow(t *testing.T) {
 		t.Fatalf("system %+v", s)
 	}
 }
+
+// gateConns makes the next call of Connections (the reconciliation of 8.3) wait until release;
+// entered is closed when that call came. Every later call goes through at once.
+func gateConns(t *testing.T, h *harness) (entered chan struct{}, release func()) {
+	t.Helper()
+	entered, gate := make(chan struct{}), make(chan struct{})
+	var hit, open sync.Once
+	release = func() { open.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	h.clash.mu.Lock()
+	defer h.clash.mu.Unlock()
+	h.clash.onConns = func() {
+		first := false
+		hit.Do(func() { first = true })
+		if first {
+			close(entered)
+			<-gate
+		}
+	}
+	return entered, release
+}
+
+// crashInsideTheApply waits until the apply is held in its reconciliation, ends the core there and
+// waits for the watcher's immediate restore (5.5). It fails the test if the core is restarted while
+// the apply is still held. It returns the number of events before the crash.
+func crashInsideTheApply(t *testing.T, h *harness, entered chan struct{}) int {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the reconciliation never came: %v", h.rec.list())
+	}
+	mark := len(h.rec.list())
+	h.core.last().crash()
+	h.waitFor("the immediate restore", func() bool { return countSince(h, mark, "sys:set "+exitNode) == 1 })
+	if within(300*time.Millisecond, func() bool { return h.rec.count("core:start") == 2 }) {
+		t.Fatalf("the core was restarted while the apply still ran: %v", h.rec.list()[mark:])
+	}
+	return mark
+}
+
+// Final review of plan 1A, the finding "routing.allDirect and lanes.set are not operations": the core
+// fails in the middle of the reconciliation of an all-direct switch. Before, the watcher restarted the
+// core beside the switch, which then set allDirect over the new core running in the normal mode. The
+// switch is an operation now: the watcher gives the exit node back at once, waits for the switch to
+// end, then restarts; the restart resets "all direct" (5.2), the published starting state too.
+func TestCrashDuringAllDirectWaitsForTheOperation(t *testing.T) {
+	h := enabled(t)
+	entered, release := gateConns(t, h)
+	if err := call(h, protocol.MethodAllDirect, map[string]bool{"on": true}); err != nil {
+		t.Fatal(err)
+	}
+	crashInsideTheApply(t, h, entered)
+	states := publishedCount(h)
+	release()
+	h.waitFor("restarted core on", func() bool {
+		return h.rec.count("core:start") == 2 && h.e.State().Phase == protocol.PhaseOn && h.idle()
+	})
+	if s := h.e.State(); s.AllDirect || h.core.options().Mode != "vpn" {
+		t.Fatalf("the restarted core runs in the normal mode: allDirect %v, mode %s", s.AllDirect, h.core.options().Mode)
+	}
+	h.mu.Lock()
+	after := append([]protocol.State{}, h.states[states:]...)
+	h.mu.Unlock()
+	for _, s := range after {
+		if s.Phase == protocol.PhaseStarting && s.AllDirect {
+			t.Fatalf("the restart published all direct: %+v", s)
+		}
+	}
+	if got := strings.Join(h.phases(), ","); got != "starting,on,starting,on" {
+		t.Fatalf("phases %s", got)
+	}
+}
+
+// The same finding for lanes.set: the core fails in the middle of the reconciliation of a new layout.
+// Before, the watcher restarted at once and the new core read the old layout from state.json, while
+// lanes.set went on to save the new one: state.json and the running core disagreed. Now lanes.set is
+// an operation the watcher waits for: it answers, then the restarted core reads the stored layout.
+func TestCrashDuringLanesSetWaitsForTheOperation(t *testing.T) {
+	h := enabled(t)
+	entered, release := gateConns(t, h)
+	answer := make(chan *protocol.Error, 1)
+	go func() {
+		answer <- call(h, protocol.MethodLanesSet, protocol.LanesSetParams{DefaultLane: protocol.LaneVPN,
+			Apps: []protocol.AppRule{fileRule(idA, curlA, protocol.LaneDirect)}})
+	}()
+	mark := crashInsideTheApply(t, h, entered)
+	release()
+	select {
+	case err := <-answer:
+		if err != nil {
+			t.Fatalf("lanes.set: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("lanes.set never answered: %v", h.rec.list())
+	}
+	h.waitFor("restarted core on", func() bool {
+		return h.rec.count("core:start") == 2 && h.e.State().Phase == protocol.PhaseOn && h.idle()
+	})
+	if got := h.store.saved().Apps; len(got) != 1 || got[0].ID != idA {
+		t.Fatalf("the layout must be saved: %+v", got)
+	}
+	if !strings.Contains(string(h.store.direct), `curl-a\\.exe$`) || !inOrder(h, mark, "core:crash", "rules:write", "core:start") {
+		t.Fatalf("the restarted core must read the stored layout:\n%s\nevents %v", h.store.direct, h.rec.list()[mark:])
+	}
+}

@@ -361,6 +361,8 @@ func (e *Engine) checkSwitch(ctx context.Context, r *coreRun, directIP string) *
 // user's exit node off for this run, in the clear's journal. So when the watcher restored nothing
 // at first, it reads blocked again after the wait and gives the exit node back now, before the
 // restart. After its own restore it does not read blocked again: the exit node is on because of it.
+// routing.allDirect and lanes.set while the core runs are such operations too: the restart that
+// follows them resets "all direct" (5.2) and starts the core with the layout state.json holds then.
 func (e *Engine) watch(r *coreRun) {
 	<-r.proc.Done()
 	e.mu.Lock()
@@ -413,8 +415,16 @@ func (e *Engine) watch(r *coreRun) {
 		e.startOp("rollback", func(context.Context) { e.rollback(reason(protocol.ReasonCoreCrashed), false) })
 		return
 	}
+	e.beginRestartLocked(protocol.ReasonCoreCrashed)
+}
+
+// beginRestartLocked starts the restart of 5.5 in phase starting; e.mu must be held. "All direct"
+// ends here (5.2): the next core starts in the normal mode, and no state of the restart shows the
+// flag, also not one that an all-direct switch which ended just before set for the core that is gone.
+func (e *Engine) beginRestartLocked(why string) {
+	e.st.AllDirect = false
 	e.setPhase(protocol.PhaseStarting, nil)
-	e.startOp("restart", func(ctx context.Context) { e.runRestart(ctx, protocol.ReasonCoreCrashed) })
+	e.startOp("restart", func(ctx context.Context) { e.runRestart(ctx, why) })
 }
 
 // runRestart is the restart of 5.5: 5.4 (restore confirmed, core stopped), a pause, then 5.3;
