@@ -71,8 +71,8 @@ const sessionEndCall = 3 * time.Second
 // waiting for a confirmation. The journal stays and is handled at the next start (5.7).
 // In blocked the user has selected an exit node in the system client again: that choice is not
 // overwritten (5.7); the next start finds the exit node on and deletes the journal.
-// The core of the setup mode (spec 7) is ended the same way, without waiting.
-// It must finish within the few seconds Windows gives the process.
+// The core of the setup mode (spec 7) is ended the same way, without waiting, and so are the calls of
+// the main core's API service. It must finish within the few seconds Windows gives the process.
 func (e *Engine) SessionEnding() {
 	e.mu.Lock()
 	e.ending = true
@@ -82,6 +82,9 @@ func (e *Engine) SessionEnding() {
 	blocked := e.sysExitOn
 	if r != nil {
 		r.stopping = true
+		if r.endCalls != nil {
+			r.endCalls()
+		}
 	}
 	var setupProc CoreProc
 	if s != nil {

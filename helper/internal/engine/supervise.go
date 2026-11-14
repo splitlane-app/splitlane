@@ -9,9 +9,12 @@ import (
 	"splitlane/helper/internal/store"
 )
 
-// Run drives 5.5 and 5.6 until ctx ends: the system client every 3 s, the health checks every 10 s.
+// Run drives 5.5 and 5.6 until ctx ends: the system client every 3 s, the health checks every 10 s;
+// and the node of the main core (spec 7): its state every 10 s, its path and exit nodes every 60 s.
 func (e *Engine) Run(ctx context.Context) {
 	go e.every(ctx, systemEvery, e.pollSystem)
+	go e.every(ctx, healthEvery, e.checkNode)
+	go e.every(ctx, listEvery, e.refreshNode)
 	e.every(ctx, healthEvery, e.checkHealth)
 }
 
@@ -112,7 +115,7 @@ func (e *Engine) checkHealth(ctx context.Context) {
 			return
 		}
 	}
-	now := e.degraded
+	now := e.vpnDown()
 	mode, current := e.d.Core.Mode(e.saved.DefaultLane, e.st.AllDirect, now), r.mode
 	if dirty {
 		e.refreshLive()
@@ -135,10 +138,15 @@ func (e *Engine) checkHealth(ctx context.Context) {
 }
 
 // refreshLive sets on, degraded or blocked from the flags and publishes; e.mu must be held.
-// With both conditions the phase is blocked (5.2).
+// With both conditions the phase is blocked (5.2). An expired login (spec 7) is degraded with reason
+// login_expired, also while the VPN server does not answer: the window then offers "Выключить деление
+// и войти".
 func (e *Engine) refreshLive() {
 	phase, why := protocol.PhaseOn, (*protocol.Reason)(nil)
-	if e.degraded {
+	switch {
+	case e.loginExpired():
+		phase, why = protocol.PhaseDegraded, reason(protocol.ReasonLoginExpired)
+	case e.degraded:
 		phase, why = protocol.PhaseDegraded, reason(protocol.ReasonVPNUnreachable)
 	}
 	if e.sysExitOn {
@@ -146,6 +154,10 @@ func (e *Engine) refreshLive() {
 	}
 	e.setPhase(phase, why)
 }
+
+// vpnDown: the VPN lane has no link, because the VPN server does not answer (5.5) or the login expired
+// (spec 7); names then go through the provider's DNS, as in every degraded (6.3, 6.4). e.mu must be held.
+func (e *Engine) vpnDown() bool { return e.degraded || e.loginExpired() }
 
 // pollSystem is 5.6: while routing is on, and while a window is connected, the system client is
 // read every 3 s; an exit node selected there again gives phase blocked.

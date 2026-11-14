@@ -80,7 +80,9 @@ func (e *Engine) retryRestore(skip bool) {
 	}
 }
 
-// stopCore is step 2 of 5.4 for the current core.
+// stopCore is step 2 of 5.4 for the current core. The calls of its API service under way are cancelled
+// and waited for first: each is a sing-box.exe of this run, and none may outlive it (spec 7); none
+// begins once stopping is set.
 func (e *Engine) stopCore() {
 	e.mu.Lock()
 	r := e.run
@@ -91,6 +93,10 @@ func (e *Engine) stopCore() {
 	if r == nil {
 		return
 	}
+	if r.endCalls != nil {
+		r.endCalls()
+	}
+	r.calls.Wait()
 	e.stopProc(r.proc)
 	e.mu.Lock()
 	if e.run == r {
@@ -151,7 +157,11 @@ func (e *Engine) teardown() bool {
 // accepted: while another operation runs (also in the short window after an enable or restart
 // published "on" and before its startOp cleanup clears e.op) it returns false and changes nothing,
 // neither the phase, nor "was on", nor state.json, so no operation is left without a driver.
-func (e *Engine) beginDisableLocked() bool {
+func (e *Engine) beginDisableLocked() bool { return e.disableThenLocked(nil) }
+
+// disableThenLocked is beginDisableLocked with then, which runs with e.mu held right after the final
+// phase is set: tailscale.login with an expired login starts the setup mode there (spec 7).
+func (e *Engine) disableThenLocked(then func()) bool {
 	if e.op != nil {
 		return false
 	}
@@ -166,6 +176,9 @@ func (e *Engine) beginDisableLocked() bool {
 			e.finish(protocol.PhaseOff, nil)
 		} else {
 			e.finish(protocol.PhaseError, reason(protocol.ReasonAdapterLeft))
+		}
+		if then != nil {
+			then()
 		}
 	})
 }

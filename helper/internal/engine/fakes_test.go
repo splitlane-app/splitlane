@@ -250,22 +250,24 @@ func (p *fakeProc) crash() {
 // and rule files from coreconfig and rules); its processes are fakeProc and its config is the
 // options as JSON, so the tests see what the engine asked for.
 type fakeCore struct {
-	mu        sync.Mutex
-	rec       *recorder
-	checkErr  error
-	startErr  error
-	procs     []*fakeProc
-	log       string
-	silent    int  // so many next starts never write the start line
-	dieEarly  int  // so many next starts exit before the start line
-	needLogin bool // the node asks for a login after start
-	leftover  *fakeProc
-	clash     *fakeClash
-	onStart   func(p *fakeProc)
-	opts      CoreOptions  // of the last BuildConfig
-	setupOpts SetupOptions // of the last BuildSetupConfig
-	node      *fakeNode    // the API service of every run
-	setupNext bool         // the last config built was the setup mode's: the next start is a setup core
+	mu         sync.Mutex
+	rec        *recorder
+	checkErr   error
+	startErr   error
+	procs      []*fakeProc
+	log        string
+	silent     int  // so many next starts never write the start line
+	dieEarly   int  // so many next starts exit before the start line
+	needLogin  bool // the node asks for a login after start
+	leftover   *fakeProc
+	clash      *fakeClash
+	onStart    func(p *fakeProc)
+	opts       CoreOptions  // of the last BuildConfig
+	setupOpts  SetupOptions // of the last BuildSetupConfig
+	node       *fakeNode    // the API service of every run
+	setupNext  bool         // the last config built was the setup mode's: the next start is a setup core
+	nodePort   int          // the port of the last call of Node
+	nodeSecret string       // the secret of the last call of Node
 }
 
 func (c *fakeCore) BuildConfig(o CoreOptions) ([]byte, error) {
@@ -390,7 +392,12 @@ func (c *fakeCore) setupAlive() bool {
 	return false
 }
 
-func (c *fakeCore) Node(port int, secret string) NodeAPI { return c.node }
+func (c *fakeCore) Node(port int, secret string) NodeAPI {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nodePort, c.nodeSecret = port, secret
+	return c.node
+}
 
 // fakeNode is the API service of the core; all runs share it (h.core.node). By default the node
 // is logged in and running, with its address, the harness's exit node in the list and a direct
@@ -398,25 +405,39 @@ func (c *fakeCore) Node(port int, secret string) NodeAPI { return c.node }
 type fakeNode struct {
 	mu      sync.Mutex
 	rec     *recorder
+	clock   *fakeClock
 	state   NodeState
 	nodes   []protocol.ExitNode
 	path    string
-	err     error // every call fails with it
+	err     error         // every call fails with it
+	pathErr error         // Path fails with it
+	hold    chan struct{} // the next Path closes it and waits for the end of its context
 	logouts int
+	looks   int         // calls of State
+	lists   []time.Time // the clock at each call of ExitNodes
 }
 
-func newFakeNode(rec *recorder) *fakeNode {
+func newFakeNode(rec *recorder, clock *fakeClock) *fakeNode {
 	return &fakeNode{
 		rec:   rec,
+		clock: clock,
 		state: NodeState{Backend: protocol.BackendRunning, HasAddress: true},
 		nodes: []protocol.ExitNode{{ID: exitNode, Name: "exit-a", Online: true}},
 		path:  protocol.PathDirect,
 	}
 }
 
+// calls gives how often State was called and when ExitNodes was.
+func (n *fakeNode) calls() (looks int, lists []time.Time) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.looks, append([]time.Time{}, n.lists...)
+}
+
 func (n *fakeNode) State(ctx context.Context) (NodeState, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.looks++
 	if n.err != nil {
 		return NodeState{}, n.err
 	}
@@ -426,6 +447,7 @@ func (n *fakeNode) State(ctx context.Context) (NodeState, error) {
 func (n *fakeNode) ExitNodes(ctx context.Context) ([]protocol.ExitNode, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.lists = append(n.lists, n.clock.Now())
 	if n.err != nil {
 		return nil, n.err
 	}
@@ -434,9 +456,22 @@ func (n *fakeNode) ExitNodes(ctx context.Context) ([]protocol.ExitNode, error) {
 
 func (n *fakeNode) Path(ctx context.Context, exitNode string) (string, error) {
 	n.mu.Lock()
+	hold := n.hold
+	n.hold = nil
+	n.mu.Unlock()
+	if hold != nil {
+		close(hold)
+		<-ctx.Done()
+		n.rec.add("node:path cancelled")
+		return "", ctx.Err()
+	}
+	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.err != nil {
+	switch {
+	case n.err != nil:
 		return "", n.err
+	case n.pathErr != nil:
+		return "", n.pathErr
 	}
 	return n.path, nil
 }
@@ -758,7 +793,7 @@ func newHarness(t *testing.T) *harness {
 	h.store.state.LoggedIn = true
 	h.store.state.SelectedExitNode = exitNode
 	h.clash = &fakeClash{rec: h.rec, mode: "vpn", refuse: map[string]bool{}}
-	h.core = &fakeCore{rec: h.rec, clash: h.clash, node: newFakeNode(h.rec)}
+	h.core = &fakeCore{rec: h.rec, clash: h.clash, node: newFakeNode(h.rec, h.clock)}
 	h.sys = &fakeSys{rec: h.rec, store: h.store, installed: true, on: true, ip: exitNode, allowLAN: true}
 	h.probe = &fakeProbe{vpn: []ProbeResult{atVPN}, direct: []ProbeResult{atDirect}, self: []ProbeResult{atVPN}}
 	h.host = &fakeHost{rec: h.rec, core: h.core}
