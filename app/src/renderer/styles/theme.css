@@ -1,4 +1,6 @@
+/* The dark "instrument panel" theme (spec 9.7) and the base of the page. */
 :root {
+  /* the palette of 9.7 */
   --bg: #0e1014;
   --panel: #14171d;
   --card: #181c24;
@@ -11,7 +13,24 @@
   --error: #ff6b6b;
   --font-ui: 'Segoe UI Variable', 'Segoe UI', sans-serif;
   --font-num: 'Cascadia Mono', Consolas, monospace;
+
+  /* shades of the agreed mockups between those */
+  --lane-bg: #12151b;
+  --line2: #262b37;
+  --line3: #2f3544;
+  --knob-off: #3a4050;
+  --dim: #5b6377;
+  --num: #a7aec0;
+  --vpn-soft: #cfc8ff;
+  --direct-soft: #a6f0cd;
+
   color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 html,
@@ -22,7 +41,55 @@ body,
 
 body {
   margin: 0;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--vpn) 80%, white);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--vpn) 40%, transparent);
+}
+
+/* thin scrollbars that keep to the panel */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--line3) padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--knob-off) padding-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }

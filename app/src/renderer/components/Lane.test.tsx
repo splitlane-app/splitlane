@@ -1,0 +1,172 @@
+import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
+import { afterEach, expect, test } from 'vitest'
+import type { Snapshot } from '../../shared/ipc'
+import type { Activity } from '../../shared/protocol'
+import { boardView, type CardVM } from '../model/board'
+import { activity, entry, fakeBridge, renderWith, rule, servicesFor, snap } from '../testing'
+import { AppCard } from './AppCard'
+import { Lane } from './Lane'
+
+afterEach(cleanup)
+
+const MAIL = 'C:\\Apps\\Mail\\mail.exe'
+const BROWSER = 'C:\\Apps\\Browser\\browser.exe'
+const GAME_DIR = 'C:\\Games\\Game\\'
+const GAME = `${GAME_DIR}game.exe`
+const ID1 = '6f1c2a4e-0b7d-4c3a-9e21-5d8f7a1b2c01'
+const ID2 = '6f1c2a4e-0b7d-4c3a-9e21-5d8f7a1b2c02'
+
+const board = snap({
+  apps: [rule(ID1, 'Mail', MAIL, 'vpn'), rule(ID2, 'Browser', BROWSER, 'direct')]
+})
+
+const live: Activity = activity([
+  entry(ID1, { ruleId: ID1, name: 'Mail', exe: MAIL, down: 1024, up: 1024 }),
+  entry(GAME_DIR, { name: 'Game', exe: GAME, down: 4096 }),
+  entry('system', { kind: 'system', down: 3 }),
+  entry('unattributed', { kind: 'unattributed' })
+])
+
+/** The services with the snapshot and the activity set, and the lanes the board would show. */
+function setup(s: Snapshot, a: Activity | null) {
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, s)
+  if (a !== null) services.store.getState().setActivity(a)
+  const st = services.store.getState()
+  const state = s.state!
+  const view = boardView(state.apps, state.defaultLane, st.activity, state.addresses, '')
+  return { services, view }
+}
+
+const cardNames = (lane: HTMLElement): string[] =>
+  Array.from(lane.querySelectorAll<HTMLElement>('[data-card]')).map((c) => c.dataset.name ?? '')
+
+const follows = (a: Node, b: Node): boolean => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+
+test('Lane shows pinned cards, the line and unpinned cards in the default lane', () => {
+  const { services, view } = setup(board, live)
+  renderWith(<Lane vm={view.vpn} onMakeDefault={() => {}} />, services)
+
+  const lane = screen.getByRole('region', { name: 'Через VPN' })
+  expect(within(lane).getByText('основная')).toBeTruthy()
+  expect(within(lane).queryByText('сделать основной')).toBeNull()
+  expect(cardNames(lane)).toEqual(['Mail', 'Game', 'Службы Windows', 'WSL и виртуальные машины'])
+
+  const line = within(lane).getByText('остальные программы')
+  const card = (name: string): HTMLElement => lane.querySelector<HTMLElement>(`[data-name="${name}"]`)!
+  expect(follows(card('Mail'), line)).toBe(true)
+  for (const name of ['Game', 'Службы Windows', 'WSL и виртуальные машины']) {
+    expect(follows(line, card(name)), name).toBe(true)
+    expect(card(name).dataset.pinned, name).toBe('false')
+  }
+  expect(card('Mail').dataset.pinned).toBe('true')
+  // the pinned card has the pin; the unpinned ones are pinned by the same button, the fixed tile has none
+  expect(within(card('Mail')).getByRole('button', { name: 'Открепить' })).toBeTruthy()
+  expect(within(card('Game')).getByRole('button', { name: 'Закрепить' })).toBeTruthy()
+  expect(within(card('WSL и виртуальные машины')).queryByRole('button', { name: 'Закрепить' })).toBeNull()
+  expect(within(lane).queryByText('Перетащите сюда программу или ярлык')).toBeNull()
+})
+
+test('Lane explains the unpinned programs while routing is off', () => {
+  const { services, view } = setup(snap({ ...board.state!, phase: 'off' }), null)
+  renderWith(<Lane vm={view.vpn} onMakeDefault={() => {}} />, services)
+
+  const lane = screen.getByRole('region', { name: 'Через VPN' })
+  expect(cardNames(lane)).toEqual(['Mail'])
+  expect(within(lane).getByText('остальные программы')).toBeTruthy()
+  expect(within(lane).getByText('Незакреплённые программы появятся здесь после включения деления')).toBeTruthy()
+})
+
+test('Lane shows the drop hint in the other lane', () => {
+  const { services, view } = setup(board, live)
+  const made: string[] = []
+  renderWith(<Lane vm={view.direct} onMakeDefault={() => made.push('direct')} />, services)
+
+  const lane = screen.getByRole('region', { name: 'Напрямую' })
+  expect(cardNames(lane)).toEqual(['Browser'])
+  expect(within(lane).getByText('Перетащите сюда программу или ярлык')).toBeTruthy()
+  expect(within(lane).queryByText('остальные программы')).toBeNull()
+  expect(within(lane).queryByText('основная')).toBeNull()
+
+  fireEvent.click(within(lane).getByRole('button', { name: 'сделать основной' }))
+  expect(made).toEqual(['direct'])
+})
+
+test('AppCard shows «тихо» without traffic', () => {
+  const { services } = setup(board, live)
+  const quiet: CardVM = {
+    key: ID2,
+    ruleId: ID2,
+    kind: 'app',
+    name: 'Browser',
+    exe: BROWSER,
+    lane: 'direct',
+    pinned: true,
+    down: 0,
+    up: 0,
+    connections: 0,
+    movable: true
+  }
+  const opened: string[] = []
+  const { unmount } = renderWith(<AppCard card={quiet} onOpen={(key) => opened.push(key)} />, services)
+  expect(screen.getByText('тихо')).toBeTruthy()
+  fireEvent.click(screen.getByText('Browser'))
+  expect(opened).toEqual([ID2])
+  unmount()
+
+  renderWith(<AppCard card={{ ...quiet, down: 1536, up: 512 }} onOpen={() => {}} />, services)
+  expect(screen.queryByText('тихо')).toBeNull()
+  expect(screen.getByText('2,0 КБ/с')).toBeTruthy()
+})
+
+test('the direct address is masked until clicked', () => {
+  const { services, view } = setup(board, live)
+  renderWith(<Lane vm={view.direct} onMakeDefault={() => {}} />, services)
+
+  const lane = screen.getByRole('region', { name: 'Напрямую' })
+  expect(within(lane).getByText(/Сайты видят ваш настоящий адрес/)).toBeTruthy()
+  expect(within(lane).queryByText('203.0.113.9')).toBeNull()
+  const masked = within(lane).getByRole('button', { name: /203\.0\.•\.•/ })
+
+  fireEvent.click(masked)
+  expect(within(lane).getByText('203.0.113.9')).toBeTruthy()
+  expect(within(lane).queryByText('203.0.•.•')).toBeNull()
+})
+
+test('the VPN lane names the server and its address', () => {
+  const { services, view } = setup(board, live)
+  renderWith(<Lane vm={view.vpn} onMakeDefault={() => {}} />, services)
+  const lane = screen.getByRole('region', { name: 'Через VPN' })
+  const sees = within(lane).getByText(/^Сайты видят адрес сервера node-a/)
+  expect(sees.textContent).toBe('Сайты видят адрес сервера node-a · 198.51.100.7')
+})
+
+test('a click on the pin of an unpinned card pins it in the default lane', async () => {
+  const sent: unknown[] = []
+  const { bridge } = fakeBridge({
+    command: async (c) => {
+      sent.push(c)
+      return { ok: true }
+    }
+  })
+  const services = servicesFor(bridge, board)
+  act(() => services.store.getState().setActivity(live))
+  const state = board.state!
+  const view = boardView(state.apps, state.defaultLane, services.store.getState().activity, state.addresses, '')
+  renderWith(<Lane vm={view.vpn} onMakeDefault={() => {}} />, services)
+
+  const lane = screen.getByRole('region', { name: 'Через VPN' })
+  const game = lane.querySelector<HTMLElement>('[data-name="Game"]')!
+  await act(async () => {
+    fireEvent.click(within(game).getByRole('button', { name: 'Закрепить' }))
+  })
+  expect(sent).toHaveLength(1)
+  const c = sent[0] as { method: string; apps: { exe: string; lane: string }[] }
+  expect(c.method).toBe('lanes.set')
+  expect(c.apps.map((r) => [r.exe, r.lane])).toEqual([
+    [MAIL, 'vpn'],
+    [BROWSER, 'direct'],
+    [GAME, 'vpn']
+  ])
+})
+

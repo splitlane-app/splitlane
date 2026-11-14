@@ -1,15 +1,42 @@
 // Russian dictionary: every UI string lives here. Flat keys, sorted by area.
 export const ru = {
+  // the product and the separator of the parts of one line ("Tailscale · node · path")
+  'app.name': 'SplitLane',
+  sep: ' · ',
+
+  // header (spec 9.1)
+  'header.routing': 'Деление программ по дорожкам',
+  'header.on': 'Включено',
+  'header.off': 'Выключено',
+  'header.starting': 'Включается…',
+  'header.stopping': 'Выключается…',
+  'header.search': 'Найти программу',
+  'header.add': '+ Добавить',
+  'pill.tailscale': 'Tailscale',
+  'pill.direct': 'прямое соединение',
+  'pill.relay': 'через ретранслятор',
+  'pill.noExitNode': 'exit node не выбран',
+
   // lanes and actions on cards
   'lane.vpn': 'Через VPN',
   'lane.direct': 'Напрямую',
   'lane.main': 'основная',
   'lane.makeMain': 'сделать основной',
+  'lane.vpnSees': 'Сайты видят адрес сервера {name}',
+  'lane.directSees': 'Сайты видят ваш настоящий адрес',
+  'lane.showAddress': 'Показать адрес полностью',
+  'lane.others': 'остальные программы',
+  'lane.othersOff': 'Незакреплённые программы появятся здесь после включения деления',
+  'lane.dropHint': 'Перетащите сюда программу или ярлык',
   'move.vpn': 'Пустить через VPN',
   'move.direct': 'Пустить напрямую',
   unpin: 'Открепить',
   pin: 'Закрепить',
   'card.quiet': 'тихо',
+
+  // speeds: down and up of a lane
+  'speed.down': '↓ {speed}',
+  'speed.up': '↑ {speed}',
 
   // special tiles of the board (spec 8.4)
   'tile.system': 'Службы Windows',
@@ -89,7 +116,18 @@ export const ru = {
   'reject.duplicate': 'Эта программа уже закреплена в другой дорожке',
 
   // notices over the board: one rejected rule, joined with "; " when there are several
-  'notice.rejected': '{name}: {reason}'
+  'notice.rejected': '{name}: {reason}',
+  'notice.logSaved': 'Журнал сохранён',
+  'notice.close': 'Закрыть',
+
+  // screens until task 13 gives them their content
+  'screen.splash': 'Подключение к служебному процессу…',
+  'screen.setup': 'Настройка',
+  'screen.otherUser': 'Служебный процесс настроен для другого пользователя Windows',
+  'screen.updateHelper': 'Обновите служебный процесс',
+  'screen.updateApp': 'Обновите приложение',
+  'screen.connection': 'Подключение',
+  'screen.back': 'Назад к дорожкам'
 } as const
 
 export type Key = keyof typeof ru

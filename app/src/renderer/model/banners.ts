@@ -23,9 +23,14 @@ export interface Banner {
   actions: BannerAction[]
 }
 
-function exitNodeName(state: HelperState): string {
+/** The name of the selected exit node; null when none is selected or the list has no name for it. */
+export function selectedExitNodeName(state: HelperState): string | null {
   const { exitNodes, selectedExitNode } = state.tailscale
-  return exitNodes.find((n) => n.id === selectedExitNode)?.name || t('banner.serverFallback')
+  return exitNodes.find((n) => n.id === selectedExitNode)?.name || null
+}
+
+function exitNodeName(state: HelperState): string {
+  return selectedExitNodeName(state) ?? t('banner.serverFallback')
 }
 
 export function bannerFor(link: LinkStatus, state: HelperState | null): Banner | null {

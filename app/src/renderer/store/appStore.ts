@@ -13,6 +13,11 @@ export const HISTORY_POINTS = 30
 /** The phases with a running core: only in them the helper sends activity (spec 8.4). */
 const LIVE_PHASES: ReadonlySet<Phase> = new Set<Phase>(['on', 'degraded', 'blocked'])
 
+/** A running core: the board has unpinned programs and the special tiles only then (spec 8.4, 9.1). */
+export function isLivePhase(phase: Phase | null | undefined): boolean {
+  return phase != null && LIVE_PHASES.has(phase)
+}
+
 /**
  * A change of the layout as the page asks for it: newId gives the ids of the rules it adds, the same ones
  * each time the change runs again on a newer layout (see layout.ts).
@@ -59,6 +64,11 @@ function text(key: string, fallback: Key): string {
   return Object.hasOwn(ru, key) ? t(key as Key) : t(fallback)
 }
 
+/** The notice of a failed command: the text of its error code. */
+export function errorText(error: HelperError): string {
+  return text(`error.${error.code}`, 'error.internal')
+}
+
 /**
  * The notice of a failed lanes.set: for rule_rejected one "<name>: <reason>" per rejected rule of the sent
  * layout, joined with "; "; the text of the error code otherwise.
@@ -73,7 +83,7 @@ export function noticeFor(error: HelperError, sent: Layout, activity: Activity |
       })
       .join('; ')
   }
-  return text(`error.${error.code}`, 'error.internal')
+  return errorText(error)
 }
 
 const cache = new WeakMap<HelperState, { pending: readonly LayoutOp[]; layout: Layout }>()

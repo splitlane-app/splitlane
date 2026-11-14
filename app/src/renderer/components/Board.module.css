@@ -1,0 +1,24 @@
+.board {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.bannerSlot {
+  flex-shrink: 0;
+  padding: 12px 16px 0;
+}
+
+.bannerSlot:empty {
+  display: none;
+}
+
+.lanes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  padding: 12px 16px 16px;
+}

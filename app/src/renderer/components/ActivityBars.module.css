@@ -1,0 +1,27 @@
+.bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.bars[data-idle='true'] {
+  visibility: hidden;
+}
+
+.bar,
+.idle {
+  display: inline-block;
+  width: 2px;
+  border-radius: 1px;
+}
+
+.bar {
+  background: var(--lane, var(--vpn));
+}
+
+.idle {
+  height: 1px;
+  background: var(--line3);
+}
