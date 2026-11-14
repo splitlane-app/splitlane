@@ -88,27 +88,54 @@ func (c *fakeClock) After(d time.Duration) <-chan time.Time {
 }
 
 type fakeStore struct {
-	mu         sync.Mutex
-	rec        *recorder
-	state      store.State
-	journal    *store.Journal
-	direct     []byte
-	vpn        []byte
-	config     []byte
-	rulesErr   error
-	journalErr error
-	onRules    func() // runs after each write of the rule files
+	mu              sync.Mutex
+	rec             *recorder
+	state           store.State
+	journal         *store.Journal
+	direct          []byte
+	vpn             []byte
+	config          []byte
+	rulesErr        error
+	journalErr      error
+	onRules         func()  // runs after each write of the rule files
+	stateReadFails  int     // so many next LoadState calls fail with a read error (store.ErrIO)
+	journalReadErrs []error // the next LoadJournal calls fail with these, one by one
+	saveErr         error   // SaveState fails with it; state.json keeps what it had
+	stateReads      int     // calls of LoadState
+	stateSaves      int     // calls of SaveState
+	journalReads    int     // calls of LoadJournal
+}
+
+// readErr is how the store reports a file that is there but could not be read (store.ErrIO).
+func readErr(file string) error {
+	return fmt.Errorf("%w: open C:\\data\\%s: The process cannot access the file because it is being used by another process.", store.ErrIO, file)
+}
+
+// calls gives how often state.json was read and written and restore.json was read.
+func (s *fakeStore) calls() (stateReads, stateSaves, journalReads int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stateReads, s.stateSaves, s.journalReads
 }
 
 func (s *fakeStore) LoadState() (store.State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stateReads++
+	if s.stateReadFails > 0 {
+		s.stateReadFails--
+		return store.Defaults(), readErr("state.json")
+	}
 	return s.state, nil
 }
 
 func (s *fakeStore) SaveState(st store.State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stateSaves++
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	s.state = st
 	return nil
 }
@@ -116,6 +143,12 @@ func (s *fakeStore) SaveState(st store.State) error {
 func (s *fakeStore) LoadJournal() (*store.Journal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.journalReads++
+	if len(s.journalReadErrs) > 0 {
+		err := s.journalReadErrs[0]
+		s.journalReadErrs = s.journalReadErrs[1:]
+		return nil, err
+	}
 	if s.journal == nil {
 		return nil, nil
 	}

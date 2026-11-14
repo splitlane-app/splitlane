@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -287,6 +288,85 @@ func TestShutdownReplyIsNotLost(t *testing.T) {
 		}
 		c.conn.Close()
 		s.Close()
+	}
+}
+
+// flakyListener fails its first Accept calls with errs, then hands out the connections sent on conns
+// until it is closed, like go-winio's listener: an error other than net.ErrClosed leaves it usable.
+type flakyListener struct {
+	mu     sync.Mutex
+	errs   []error
+	conns  chan net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newFlakyListener(errs ...error) *flakyListener {
+	return &flakyListener{errs: errs, conns: make(chan net.Conn), closed: make(chan struct{})}
+}
+
+func (l *flakyListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if len(l.errs) > 0 {
+		err := l.errs[0]
+		l.errs = l.errs[1:]
+		l.mu.Unlock()
+		return nil, err
+	}
+	l.mu.Unlock()
+	select {
+	case c := <-l.conns:
+		return c, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *flakyListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *flakyListener) Addr() net.Addr { return &net.UnixAddr{Name: "flaky", Net: "unix"} }
+
+// An Accept error that is not the close of the listener (a failed CreateNamedPipe) does not end the
+// server: it is logged, Accept is tried again after a pause, the next client is served. Serve returns
+// only after Close.
+func TestAcceptErrorDoesNotStopServing(t *testing.T) {
+	l := newFlakyListener(errors.New("CreateNamedPipe: All pipe instances are busy."))
+	s := newServer(l, &fakeHandler{}, t.Logf)
+	served := make(chan error, 1)
+	began := time.Now()
+	go func() { served <- s.Serve() }()
+	conn, peer := net.Pipe()
+	t.Cleanup(func() { peer.Close() })
+	select {
+	case l.conns <- conn:
+	case err := <-served:
+		t.Fatalf("Serve returned after an accept error: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Accept was not tried again after the error")
+	}
+	if waited := time.Since(began); waited < acceptPause*9/10 {
+		t.Fatalf("Accept was tried again after %s, want a pause of %s", waited, acceptPause)
+	}
+	c := &testClient{conn: peer, r: bufio.NewReader(peer)}
+	if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`); m["result"] == nil {
+		t.Fatalf("the client after the error is not served: %v", m)
+	}
+	select {
+	case err := <-served:
+		t.Fatalf("Serve returned before Close: %v", err)
+	default:
+	}
+	s.Close()
+	select {
+	case err := <-served:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Serve ended with %v, want the close of the listener", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after Close")
 	}
 }
 

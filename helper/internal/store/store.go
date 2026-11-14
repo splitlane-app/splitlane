@@ -59,18 +59,29 @@ type Dir struct {
 func (d Dir) state() string   { return filepath.Join(d.Path, "state.json") }
 func (d Dir) journal() string { return filepath.Join(d.Path, "restore.json") }
 
-// LoadState reads state.json; a missing file gives Defaults.
+// ErrIO marks a file that is there but could not be read (access denied, a sharing violation): its
+// content is unknown, so it stays where it is and must not be taken for missing or written over.
+// Unreadable content is another error: that file is set aside.
+var ErrIO = errors.New("store: read failed")
+
+// readFile is os.ReadFile; the tests replace it to simulate a read that fails.
+var readFile = os.ReadFile
+
+// LoadState reads state.json; a missing file gives Defaults. A file that cannot be read gives Defaults
+// and an error that wraps ErrIO: the file stays, and the caller must not save over it. Unreadable
+// content is set aside as state.json.bad (or the first free state.json.bad.<n>) and gives Defaults
+// with an error that gives the cause; if it cannot be set aside, the error says so.
 func (d Dir) LoadState() (State, error) {
 	s := Defaults()
-	b, err := os.ReadFile(d.state())
+	b, err := readFile(d.state())
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}
 	if err != nil {
-		return s, err
+		return s, fmt.Errorf("%w: %w", ErrIO, err)
 	}
-	if err := json.Unmarshal(b, &s); err != nil {
-		return Defaults(), fmt.Errorf("state.json: %w", err)
+	if cause := json.Unmarshal(b, &s); cause != nil {
+		return Defaults(), setAside(d.state(), cause)
 	}
 	if s.Apps == nil {
 		s.Apps = []protocol.AppRule{}
@@ -95,20 +106,21 @@ func (d Dir) SaveState(s State) error {
 // renameFile is os.Rename; the tests replace it to simulate a rename that fails.
 var renameFile = os.Rename
 
-// maxBadJournals bounds how many set-aside journals are kept side by side.
-const maxBadJournals = 100
+// maxBadFiles bounds how many set-aside copies of one file are kept side by side.
+const maxBadFiles = 100
 
-// LoadJournal reads restore.json; nil without error when there is none.
-// An unreadable journal is renamed to restore.json.bad (or the first free restore.json.bad.<n>)
-// and reported as an error that gives the cause. If it cannot be renamed, the error says so
-// and the journal stays where it is.
+// LoadJournal reads restore.json; nil without error when there is none. A journal that is there
+// but cannot be read gives an error that wraps ErrIO: it stays where it is, and the caller must not
+// take it for "no journal". An unreadable journal is renamed to restore.json.bad (or the first free
+// restore.json.bad.<n>) and reported as an error that gives the cause. If it cannot be renamed, the
+// error says so and the journal stays where it is.
 func (d Dir) LoadJournal() (*Journal, error) {
-	b, err := os.ReadFile(d.journal())
+	b, err := readFile(d.journal())
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrIO, err)
 	}
 	var j Journal
 	cause := json.Unmarshal(b, &j)
@@ -116,20 +128,31 @@ func (d Dir) LoadJournal() (*Journal, error) {
 		cause = errors.New("empty exitNode")
 	}
 	if cause != nil {
-		bad, err := d.setAsideJournal()
-		if err != nil {
-			return nil, fmt.Errorf("restore.json is unreadable (%v) and could not be set aside: %w", cause, err)
-		}
-		return nil, fmt.Errorf("restore.json is unreadable (%v) and was set aside as %s", cause, filepath.Base(bad))
+		return nil, setAside(d.journal(), cause)
 	}
 	return &j, nil
 }
 
-// setAsideJournal renames restore.json to the first free name among restore.json.bad,
-// restore.json.bad.1, restore.json.bad.2 ... so that an earlier set-aside journal is never replaced.
-func (d Dir) setAsideJournal() (string, error) {
-	for n := 0; n < maxBadJournals; n++ {
-		bad := d.journal() + ".bad"
+// setAside renames a file with unreadable content to the first free name among <name>.bad,
+// <name>.bad.1, <name>.bad.2 ... so that an earlier set-aside copy is never replaced, and returns
+// the error that reports it with its cause. If it cannot be renamed, the error says so and the file
+// stays where it is.
+func setAside(path string, cause error) error {
+	name := filepath.Base(path)
+	bad, err := badName(path)
+	if err == nil {
+		err = renameFile(path, bad)
+	}
+	if err != nil {
+		return fmt.Errorf("%s is unreadable (%v) and could not be set aside: %w", name, cause, err)
+	}
+	return fmt.Errorf("%s is unreadable (%v) and was set aside as %s", name, cause, filepath.Base(bad))
+}
+
+// badName is the first name among <path>.bad, <path>.bad.1, <path>.bad.2 ... that is not taken.
+func badName(path string) (string, error) {
+	for n := 0; n < maxBadFiles; n++ {
+		bad := path + ".bad"
 		if n > 0 {
 			bad += "." + strconv.Itoa(n)
 		}
@@ -140,9 +163,9 @@ func (d Dir) setAsideJournal() (string, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
-		return bad, renameFile(d.journal(), bad)
+		return bad, nil
 	}
-	return "", fmt.Errorf("all %d names restore.json.bad ... are taken", maxBadJournals)
+	return "", fmt.Errorf("all %d names %s.bad ... are taken", maxBadFiles, filepath.Base(path))
 }
 
 // SaveJournal writes restore.json atomically and flushed to disk, before `tailscale set` runs (spec 5.7).

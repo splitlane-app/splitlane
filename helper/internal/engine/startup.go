@@ -7,8 +7,9 @@ import (
 	"splitlane/helper/internal/protocol"
 )
 
-// Start loads state.json and the journal and begins the start-up of 5.7. It returns at once;
-// the pipe already works while the start-up runs and shows its phase and reason.
+// Start loads state.json and the journal and begins the start-up of 5.7. It returns at once (after
+// at most 600 ms when state.json cannot be read); the pipe already works while the start-up runs
+// and shows its phase and reason.
 func (e *Engine) Start() {
 	e.load()
 	e.mu.Lock()
@@ -17,9 +18,11 @@ func (e *Engine) Start() {
 }
 
 // startup is 5.7: the journal first (phase stopping, step 1 of 5.4, whether a core is left or
-// not), then the helper's own core left from an earlier run is stopped; a foreign sing-box.exe
-// is never touched. If "was on" is still set, the previous helper ended abnormally: enable again.
+// not; a journal that could not be read is read again until it reads), then the helper's own core
+// left from an earlier run is stopped; a foreign sing-box.exe is never touched. If "was on" is
+// still set, the previous helper ended abnormally: enable again.
 func (e *Engine) startup(ctx context.Context) {
+	e.readJournal()
 	e.mu.Lock()
 	j, s := e.journal, e.saved
 	e.mu.Unlock()

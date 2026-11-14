@@ -4,6 +4,7 @@ package pipe
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"sync"
 	"time"
@@ -62,18 +63,34 @@ func Listen(name, userSID string, h Handler, log func(string, ...any)) (*Server,
 	if err != nil {
 		return nil, err
 	}
+	return newServer(l, h, log), nil
+}
+
+// newServer serves the connections of l; the tests give it a listener of their own.
+func newServer(l net.Listener, h Handler, log func(string, ...any)) *Server {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &Server{h: h, l: l, log: log, clients: map[*client]bool{}}, nil
+	return &Server{h: h, l: l, log: log, clients: map[*client]bool{}}
 }
 
-// Serve accepts clients until Close.
+// acceptPause is the wait before Accept is tried again after an error.
+const acceptPause = time.Second
+
+// Serve accepts clients until Close and then returns the listener's error (net.ErrClosed). Any
+// other Accept error (go-winio keeps its listener usable after it, for example after a failed
+// CreateNamedPipe) is logged and Accept is tried again after a pause: one rare failure must not
+// leave the helper holding the pipe name without taking new windows.
 func (s *Server) Serve() error {
 	for {
 		conn, err := s.l.Accept()
 		if err != nil {
-			return err
+			if errors.Is(err, net.ErrClosed) || s.isClosing() {
+				return err
+			}
+			s.log("pipe: accept failed: %v; trying again in %s", err, acceptPause)
+			time.Sleep(acceptPause)
+			continue
 		}
 		c := &client{conn: conn, out: make(chan []byte, 64)}
 		s.wg.Add(2)
@@ -104,6 +121,12 @@ func (s *Server) Close() {
 			conn.Close()
 		}
 	}
+}
+
+func (s *Server) isClosing() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closing
 }
 
 // waitFor waits for wg at most d; false when the time ran out.
