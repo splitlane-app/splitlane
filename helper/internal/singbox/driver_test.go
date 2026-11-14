@@ -19,7 +19,8 @@ import (
 
 // TestMain lets the test binary play the core: started with SPLITLANE_FAKE_CORE=1 it reads the
 // config, writes the start line into the log the config names, and waits for CTRL_BREAK; as
-// `api ...` it plays the CLI of the API service (fakeAPICommand).
+// `api ...` it plays the CLI of the API service (fakeAPICommand); as `helper` it plays the helper
+// that pings through the real runner (fakeHelper).
 func TestMain(m *testing.M) {
 	if os.Getenv("SPLITLANE_FAKE_CORE") == "1" {
 		fakeCore(os.Args[1:])
@@ -31,6 +32,10 @@ func TestMain(m *testing.M) {
 func fakeCore(args []string) {
 	if args[0] == "api" {
 		fakeAPICommand(args[1:])
+		return
+	}
+	if args[0] == "helper" {
+		fakeHelper()
 		return
 	}
 	config, _ := os.ReadFile(args[2])

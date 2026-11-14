@@ -4,10 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/windows"
 
 	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/engine"
@@ -63,9 +68,99 @@ func fakeAPICommand(args []string) {
 		os.Stdout.WriteString(statusRunning)
 	case "tailscale peer list":
 		os.Stdout.WriteString(peersWithAddress)
+	case "tailscale ping " + slowPeer:
+		// a ping without pongs lives long (up to 50 s); this one tells its pid and waits
+		if file := os.Getenv("SPLITLANE_FAKE_PID_FILE"); file != "" {
+			os.WriteFile(file+".tmp", []byte(strconv.Itoa(os.Getpid())), 0o644)
+			os.Rename(file+".tmp", file)
+		}
+		time.Sleep(60 * time.Second)
 	default:
 		os.Stderr.WriteString("FATAL[0000] unknown command\n")
 		os.Exit(1)
+	}
+}
+
+// slowPeer is the address whose fake ping waits a minute.
+const slowPeer = "100.101.102.199"
+
+// fakeHelper plays the helper when the test binary runs as it (TestMain): it pings slowPeer
+// through the real runner, with the test binary as the core, and stays there until it is killed.
+func fakeHelper() {
+	exe, _ := os.Executable()
+	NewNode(exe, 40004, testAPISecret).Path(context.Background(), slowPeer)
+}
+
+// waitPID reads the pid that the slow ping wrote into file.
+func waitPID(t *testing.T, file string) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		b, _ := os.ReadFile(file)
+		if pid, err := strconv.Atoi(string(b)); err == nil && pid > 0 {
+			return pid
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the api child never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Review F3-2: a `sing-box api` child must end with the helper, also when the helper crashes:
+// winhost.CoreRunning counts every sing-box.exe, so a ping left behind (up to 50 s) makes the
+// re-enable of the next helper (5.7) fail with other_core. The test binary plays the helper, which
+// pings through the real runner, and the core, whose ping waits; the helper is killed as a crash
+// ends it, which closes its handle of the job.
+func TestNodeChildEndsWithTheHelper(t *testing.T) {
+	t.Setenv("SPLITLANE_FAKE_CORE", "1")
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	t.Setenv("SPLITLANE_FAKE_PID_FILE", pidFile)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper := exec.Command(exe, "helper")
+	if err := helper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer helper.Wait()
+	defer helper.Process.Kill()
+	child, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_TERMINATE, false, uint32(waitPID(t, pidFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(child)
+	defer windows.TerminateProcess(child, 1)
+	if err := helper.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if ev, _ := windows.WaitForSingleObject(child, 5000); ev != windows.WAIT_OBJECT_0 {
+		t.Fatal("the api child outlived the helper: the next helper would count it as a running core (other_core)")
+	}
+}
+
+// The runner puts every child into the job before it waits for it; a child that cannot join is
+// killed at once (the slow ping would wait a minute) and the call fails.
+func TestRunnerPutsTheChildInTheJob(t *testing.T) {
+	d, _ := fakeDriver(t)
+	n := NewNode(d.Exe, 40004, testAPISecret)
+	var assigned []int
+	n.Run = runIn(func(p *os.Process) error {
+		assigned = append(assigned, p.Pid)
+		return nil
+	})
+	if st, err := n.State(context.Background()); err != nil || st.Backend != protocol.BackendRunning || len(assigned) != 2 {
+		t.Fatalf("state %+v %v, children put into the job: %v, want both", st, err, assigned)
+	}
+	n.Run = runIn(func(p *os.Process) error { return fmt.Errorf("no job here") })
+	start := time.Now()
+	_, err := n.Path(context.Background(), slowPeer)
+	if err == nil || !strings.Contains(err.Error(), "the child cannot join the helper's job: no job here") {
+		t.Fatalf("want the job's error, got %v", err)
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("the child that could not join was not killed: the call took %v", took)
 	}
 }
 

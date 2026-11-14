@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/netip"
@@ -33,29 +34,45 @@ type Node struct {
 
 var _ engine.NodeAPI = (*Node)(nil)
 
-// NewNode talks to the API service on 127.0.0.1:port with the run's secret, through exe without a window.
+// NewNode talks to the API service on 127.0.0.1:port with the run's secret, through exe without a
+// window; every CLI child runs in the helper's job and ends with the helper (job.go).
 func NewNode(exe string, port int, secret string) *Node {
-	return &Node{Exe: exe, URL: fmt.Sprintf("127.0.0.1:%d", port), Secret: secret, Run: runAPI}
+	return &Node{Exe: exe, URL: fmt.Sprintf("127.0.0.1:%d", port), Secret: secret, Run: runIn(inHelperJob)}
 }
 
 // colorCode is an ANSI color sequence: the core colors its FATAL line on stderr.
 var colorCode = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
-func runAPI(ctx context.Context, env []string, exe string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, exe, args...)
-	cmd.Env = append(os.Environ(), env...)
-	cmd.SysProcAttr = hidden(windows.CREATE_NO_WINDOW)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		text := strings.TrimSpace(colorCode.ReplaceAllString(stderr.String(), ""))
-		if len(text) > 400 {
-			text = text[:400]
+// runIn is the Runner that puts every child into a job by assign before it waits for it. A child
+// that cannot be put there is killed and the call fails: no CLI child runs outside the job.
+func runIn(assign func(*os.Process) error) Runner {
+	return func(ctx context.Context, env []string, exe string, args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, exe, args...)
+		cmd.Env = append(os.Environ(), env...)
+		cmd.SysProcAttr = hidden(windows.CREATE_NO_WINDOW)
+		var stdout bytes.Buffer
+		var stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		fail := func(err error) error {
+			text := strings.TrimSpace(colorCode.ReplaceAllString(stderr.String(), ""))
+			if len(text) > 400 {
+				text = text[:400]
+			}
+			return fmt.Errorf("%s %s: %v: %s", filepath.Base(exe), strings.Join(args, " "), err, text)
 		}
-		return out, fmt.Errorf("%s %s: %v: %s", filepath.Base(exe), strings.Join(args, " "), err, text)
+		if err := cmd.Start(); err != nil {
+			return nil, fail(err)
+		}
+		if err := assign(cmd.Process); err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return nil, fail(fmt.Errorf("the child cannot join the helper's job: %w", err))
+		}
+		if err := cmd.Wait(); err != nil {
+			return stdout.Bytes(), fail(err)
+		}
+		return stdout.Bytes(), nil
 	}
-	return out, nil
 }
 
 func (n *Node) tailscale(ctx context.Context, args ...string) ([]byte, error) {
