@@ -398,6 +398,50 @@ func TestSetExitNode(t *testing.T) {
 	}
 }
 
+// holdStatus makes every `tailscale status` wait until release, like a tailscale.exe that does not
+// answer yet: an operation in step 1 of 5.4 stays there, in phase stopping without restore_pending.
+func holdStatus(t *testing.T, h *harness) (release func()) {
+	t.Helper()
+	hold := make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	h.e.d.Sys = slowSys{h.sys, hold}
+	return release
+}
+
+// Final review of plan 1A: a routing.disable that came while tailscale.setExitNode disabled before
+// enabling again (phase stopping) did nothing, as the literal table of 5.1 said, and the enable
+// after it switched routing back on: the user's disable was lost. Now the enable is given up: the
+// disabling ends in off with "was on" cleared; the new exit node stays saved.
+func TestDisableDuringReconnectCancelsTheEnable(t *testing.T) {
+	h := enabled(t)
+	release := holdStatus(t, h)
+	if err := call(h, protocol.MethodSetExitNode, map[string]string{"id": "100.64.0.5"}); err != nil {
+		t.Fatal(err)
+	}
+	if p := h.e.State().Phase; p != protocol.PhaseStopping {
+		t.Fatalf("setup: phase %s", p)
+	}
+	if err := call(h, protocol.MethodDisable, nil); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	h.e.Wait()
+	if got := strings.Join(h.phases(), ","); got != "starting,on,stopping,off" || h.rec.count("core:start") != 1 {
+		t.Fatalf("the disable must cancel the enable: phases %s, events %v", got, h.rec.list())
+	}
+	if h.core.anyAlive() || h.store.hasJournal() || h.store.saved().WasOn || h.e.State().Reason != nil {
+		t.Fatalf("off: no core, no journal, was-on cleared: %+v %v", h.e.State(), h.rec.list())
+	}
+	if on, ip := systemExitNode(h); !on || ip != exitNode {
+		t.Fatalf("the system exit node must be given back: %v", h.rec.list())
+	}
+	if got := h.store.saved().SelectedExitNode; got != "100.64.0.5" {
+		t.Fatalf("the new exit node stays saved: %q", got)
+	}
+}
+
 func TestClearSystemExitNodeByPhase(t *testing.T) {
 	h := newHarness(t)
 	h.load()

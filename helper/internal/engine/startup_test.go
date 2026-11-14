@@ -69,6 +69,60 @@ func TestStartAfterCrashWhileOn(t *testing.T) {
 	}
 }
 
+// Final review of plan 1A: the start-up of 5.7 with "was on" set gives the exit node back and stops
+// the old core in phase stopping, then enables again. A routing.disable in that stopping half did
+// nothing, and the enable after it switched routing on against the user's disable. Now it clears
+// "was on": after the restore and the stop of the old core the start-up ends in off.
+func TestDisableDuringStartupCancelsTheReenable(t *testing.T) {
+	h := newHarness(t)
+	old := leftover(h)
+	h.store.journal = &store.Journal{ExitNode: exitNode, AllowLAN: true}
+	h.store.state.WasOn = true
+	h.sys.set(func(s *fakeSys) { s.on = false })
+	release := holdStatus(t, h)
+	h.e.Start()
+	h.waitFor("phase stopping", func() bool { return h.e.State().Phase == protocol.PhaseStopping })
+	if err := call(h, protocol.MethodDisable, nil); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	h.e.Wait()
+	if got := strings.Join(h.phases(), ","); got != "stopping,off" || h.rec.count("core:start") != 0 {
+		t.Fatalf("the disable must cancel the enable of the start-up: phases %s, events %v", got, h.rec.list())
+	}
+	set, stop := h.rec.index("sys:set 100.64.0.1 true"), h.rec.index("core:interrupt 777")
+	if set < 0 || stop < set || old.alive() || h.store.hasJournal() || h.store.saved().WasOn {
+		t.Fatalf("restore, then the old core stopped; journal gone, was-on cleared: %v", h.rec.list())
+	}
+}
+
+// In stopping with restore_pending a plain routing.disable is «Повторить» (5.1, 5.4): one more
+// restore attempt now and nothing else. The start-up with "was on" set keeps its enable: once the
+// restore confirms, the old core is stopped and routing comes back on.
+func TestRetryInRestorePendingKeepsTheReenable(t *testing.T) {
+	h := newHarness(t)
+	old := leftover(h)
+	h.store.journal = &store.Journal{ExitNode: exitNode, AllowLAN: true}
+	h.store.state.WasOn = true
+	h.sys.set(func(s *fakeSys) { s.on, s.ignoreSet = false, true })
+	h.e.Start()
+	h.waitFor("restore_pending", func() bool { return h.sawReason(protocol.ReasonRestorePending) })
+	if err := call(h, protocol.MethodDisable, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !h.store.hasJournal() || !h.store.saved().WasOn || !old.alive() {
+		t.Fatalf("a retry keeps the journal, \"was on\" and the old core: was-on %v, events %v", h.store.saved().WasOn, h.rec.list())
+	}
+	h.sys.set(func(s *fakeSys) { s.ignoreSet = false })
+	h.e.Wait()
+	if got := strings.Join(h.phases(), ","); got != "stopping,starting,on" || h.rec.count("core:start") != 1 {
+		t.Fatalf("the retry must keep the enable of the start-up: phases %s, events %v", got, h.rec.list())
+	}
+	if old.alive() || !h.store.saved().WasOn {
+		t.Fatalf("the old core stopped, \"was on\" set again: %v", h.rec.list())
+	}
+}
+
 // A core left without a journal is stopped in phase stopping; Tailscale is not called.
 func TestLeftoverCoreWithoutJournal(t *testing.T) {
 	h := newHarness(t)
