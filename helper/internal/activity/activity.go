@@ -37,10 +37,12 @@ type Tracker struct {
 	env     rules.Env
 	svchost string
 
-	mu     sync.Mutex
-	prev   map[string]counters // the counters of the previous sample, by connection id
-	groups map[string]*group   // by class.id
-	lanes  protocol.ActivityLanes
+	mu        sync.Mutex
+	prev      map[string]counters // the counters of the previous sample, by connection id
+	last      time.Time           // the time of the previous sample; zero before the first
+	groups    map[string]*group   // by class.id
+	lanes     protocol.ActivityLanes
+	sysPinned bool // the layout of the last sample pins "Windows services": the tile system is left out
 }
 
 type counters struct{ up, down int64 }
@@ -83,7 +85,7 @@ func New(env rules.Env) *Tracker {
 	return t
 }
 
-// Reset forgets everything (the core stopped): counters, groups and the files seen.
+// Reset forgets everything (the core stopped): counters, groups, the files seen, the last sample's time.
 func (t *Tracker) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -92,6 +94,8 @@ func (t *Tracker) Reset() {
 
 func (t *Tracker) reset() {
 	t.prev = map[string]counters{}
+	t.last = time.Time{}
+	t.sysPinned = false
 	t.lanes = protocol.ActivityLanes{}
 	t.groups = map[string]*group{}
 	for _, key := range []string{protocol.KeySystem, protocol.KeyUnattributed} {
@@ -110,7 +114,9 @@ func (t *Tracker) special(key, mainLane string) class {
 }
 
 // Sample takes the connections of one second. mainLane is the lane of unpinned programs now (the default lane,
-// or direct in "all direct").
+// or direct in "all direct"). The rates are the bytes since the previous sample per second of the time
+// between the two samples (a tick may come late), and at least one second: the first sample, and a tick
+// right after a late one, count as one second.
 func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -118,6 +124,12 @@ func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane st
 		g.down, g.up, g.conns = 0, 0, nil
 	}
 	t.lanes = protocol.ActivityLanes{}
+	t.sysPinned = pinsSystem(layout)
+	elapsed := time.Second
+	if !t.last.IsZero() && now.Sub(t.last) > elapsed {
+		elapsed = now.Sub(t.last)
+	}
+	t.last = now
 	// A program has many connections: the rules are matched once per path and sample.
 	classes := map[string]class{}
 	classOf := func(path string) class {
@@ -136,7 +148,8 @@ func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane st
 			was = counters{} // a new connection, or a new one under a reused id
 		}
 		next[c.ID] = cur
-		up, down := cur.up-was.up, cur.down-was.down
+		bytes := cur.up - was.up + cur.down - was.down
+		up, down := perSecond(cur.up-was.up, elapsed), perSecond(cur.down-was.down, elapsed)
 		switch c.Lane {
 		case protocol.LaneVPN:
 			t.lanes.VPN.Up += up
@@ -163,7 +176,7 @@ func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane st
 				e = &exeBytes{path: c.ProcessPath}
 				g.exes[low] = e
 			}
-			e.bytes += up + down
+			e.bytes += bytes
 		}
 	}
 	t.prev = next
@@ -189,6 +202,25 @@ func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane st
 		}
 		t.settle(g)
 	}
+}
+
+// perSecond is n bytes over elapsed (at least a second) as bytes per second; float64, so that the
+// whole counters of a long connection seen for the first time cannot overflow.
+func perSecond(n int64, elapsed time.Duration) int64 {
+	if elapsed <= time.Second {
+		return n
+	}
+	return int64(float64(n) * float64(time.Second) / float64(elapsed))
+}
+
+// pinsSystem: the layout has a rule of kind system ("Windows services" pinned, spec 8.1). Only the
+// expressions of such a rule match the pseudo-path :System.
+func pinsSystem(layout Layout) bool {
+	if layout == nil {
+		return false
+	}
+	r, ok := layout.RuleOf(":System")
+	return ok && r.Matcher.Kind == protocol.KindSystem
 }
 
 // classify finds the group of a process path (spec 8.4): no owner, a pinned rule, the system
@@ -255,12 +287,16 @@ func (t *Tracker) describe(exe string) string {
 }
 
 // Summary is the event of the last sample; detailFor "" gives no detail. Apps are ordered by
-// down+up, the busiest first, then by key.
+// down+up, the busiest first, then by key. While the layout pins "Windows services", the special
+// tile system is left out (its traffic is the rule's); the tile unattributed is always there.
 func (t *Tracker) Summary(detailFor string) protocol.Activity {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	out := protocol.Activity{Lanes: t.lanes, Apps: make([]protocol.ActivityApp, 0, len(t.groups))}
-	for _, g := range t.groups {
+	for id, g := range t.groups {
+		if id == protocol.KeySystem && t.sysPinned {
+			continue
+		}
 		a := protocol.ActivityApp{Key: g.key, Kind: g.kind, Name: g.name, Exe: g.exe, Lane: g.lane,
 			Down: g.down, Up: g.up, Connections: len(g.conns)}
 		if g.ruleID != "" {

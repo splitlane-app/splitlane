@@ -40,17 +40,20 @@ type Server struct {
 	wg        sync.WaitGroup // the reader and writer of every client
 	answering sync.WaitGroup // requests between their arrival and their queued answer
 	closing   bool
+	done      chan struct{} // closed by the first Close: RunActivity returns
 }
 
 // closeWait bounds each wait of Close: answers in flight, then the queues written out.
 const closeWait = time.Second
 
 type client struct {
-	conn     net.Conn
-	out      chan []byte
-	ended    bool // out is closed: nothing more is queued (s.mu)
-	hello    bool // a hello with the right protocol came
-	mismatch bool // a hello with another protocol came: only helper.shutdown is accepted
+	conn       net.Conn
+	out        chan []byte
+	ended      bool   // out is closed: nothing more is queued (s.mu)
+	hello      bool   // a hello with the right protocol came
+	mismatch   bool   // a hello with another protocol came: only helper.shutdown is accepted
+	subscribed bool   // activity.subscribe came: the activity events go to this client (s.mu)
+	detailFor  string // the detailFor of the subscription, "" for none (s.mu)
 }
 
 // Listen creates the pipe. It fails when the pipe already exists: another helper runs.
@@ -71,7 +74,7 @@ func newServer(l net.Listener, h Handler, log func(string, ...any)) *Server {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &Server{h: h, l: l, log: log, clients: map[*client]bool{}}
+	return &Server{h: h, l: l, log: log, clients: map[*client]bool{}, done: make(chan struct{})}
 }
 
 // acceptPause is the wait before Accept is tried again after an error.
@@ -99,12 +102,15 @@ func (s *Server) Serve() error {
 	}
 }
 
-// Close stops accepting, lets the answers in flight reach their queues (the answer to
-// helper.shutdown among them: the helper exits right after Close), writes every queue out and
-// closes the clients. Each wait is bounded; a client that does not read is closed anyway.
+// Close stops accepting and the activity events, lets the answers in flight reach their queues (the
+// answer to helper.shutdown among them: the helper exits right after Close), writes every queue out
+// and closes the clients. Each wait is bounded; a client that does not read is closed anyway.
 func (s *Server) Close() {
 	s.l.Close()
 	s.mu.Lock()
+	if !s.closing {
+		close(s.done)
+	}
 	s.closing = true
 	s.mu.Unlock()
 	waitFor(&s.answering, closeWait)
@@ -249,7 +255,8 @@ func (s *Server) read(c *client) {
 	}
 }
 
-// answer applies the hello rules of 5.1 and passes everything else to the handler.
+// answer applies the hello rules of 5.1, answers activity.subscribe itself (activity.go) and passes
+// everything else to the handler.
 func (s *Server) answer(c *client, req protocol.Request) []byte {
 	s.mu.Lock()
 	hello, mismatch := c.hello, c.mismatch
@@ -277,6 +284,8 @@ func (s *Server) answer(c *client, req protocol.Request) []byte {
 			Message: "only helper.shutdown is accepted after a protocol mismatch", Protocol: protocol.Version})
 	case !hello && !mismatch:
 		return protocol.EncodeError(req.ID, protocol.Errorf(protocol.CodeBadRequest, "the first message must be hello"))
+	case req.Method == protocol.MethodActivitySubscribe:
+		return s.subscribe(c, req)
 	}
 	res, err := s.h.Handle(context.Background(), req.Method, req.Params)
 	if err != nil {

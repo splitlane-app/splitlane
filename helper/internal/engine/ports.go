@@ -99,12 +99,16 @@ type CoreDriver interface {
 }
 
 // Conn is one connection of the core. Lane is the lane it runs on (the driver names its outbounds
-// after the lanes); ByLanes tells that rules 8–11 of 6.2 (the mode or a lane file) chose it.
+// after the lanes); ByLanes tells that rules 8–11 of 6.2 (the mode or a lane file) chose it. Host,
+// Upload and Download are for the live activity (8.4).
 type Conn struct {
 	ID          string
 	ProcessPath string
 	Lane        string
 	ByLanes     bool
+	Host        string // the name from the reverse mapping of DNS answers (6.4), else the destination address
+	Upload      int64  // bytes sent so far
+	Download    int64  // bytes received so far
 }
 
 // ClashAPI is the core's local API (spec 3).

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"splitlane/helper/internal/activity"
 	"splitlane/helper/internal/protocol"
 	"splitlane/helper/internal/store"
 )
@@ -77,6 +78,8 @@ type Engine struct {
 	nodeBackend string     // tailscale.backend as the setup core's node says; stopped when it does not run
 	nodeAuthURL string     // the login link of the setup core's node, "" when there is none
 	connector   sync.Mutex // logouts one at a time; stopSetup waits for the one under way
+
+	act liveActivity // the live activity (spec 8.4, activity.go)
 }
 
 // coreRun is one running core with its ports, the rule files it reads now and its API service.
@@ -122,7 +125,8 @@ func New(d Deps) *Engine {
 	if d.OnExit == nil {
 		d.OnExit = func() {}
 	}
-	e := &Engine{d: d, wake: make(chan struct{}, 1), saved: store.Defaults(), nodeBackend: protocol.BackendStopped}
+	e := &Engine{d: d, wake: make(chan struct{}, 1), saved: store.Defaults(), nodeBackend: protocol.BackendStopped,
+		act: liveActivity{tracker: activity.New(d.Rules)}}
 	e.st = protocol.State{
 		Phase:       protocol.PhaseOff,
 		DefaultLane: protocol.LaneVPN,

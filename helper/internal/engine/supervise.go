@@ -10,11 +10,13 @@ import (
 )
 
 // Run drives 5.5 and 5.6 until ctx ends: the system client every 3 s, the health checks every 10 s;
-// and the node of the main core (spec 7): its state every 10 s, its path and exit nodes every 60 s.
+// the node of the main core (spec 7): its state every 10 s, its path and exit nodes every 60 s; and
+// the connections of the core for the live activity every second (8.4).
 func (e *Engine) Run(ctx context.Context) {
 	go e.every(ctx, systemEvery, e.pollSystem)
 	go e.every(ctx, healthEvery, e.checkNode)
 	go e.every(ctx, listEvery, e.refreshNode)
+	go e.every(ctx, activityEvery, e.sampleActivity)
 	e.every(ctx, healthEvery, e.checkHealth)
 }
 

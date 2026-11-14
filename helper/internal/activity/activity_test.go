@@ -2,6 +2,7 @@ package activity
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -209,7 +210,8 @@ func TestSystemAndUnattributedTiles(t *testing.T) {
 	if g := find(t, s, `C:\Tools\`); g.Kind != protocol.KindApp || g.Name != "svchost" {
 		t.Errorf("svchost.exe elsewhere %+v", g)
 	}
-	// a pinned "Windows services" tile takes svchost.exe and :System; the special tile stays, idle
+	// a pinned "Windows services" tile takes svchost.exe and :System; the special tile leaves the
+	// summary while the rule is there (TestNoSystemTileWhenSystemIsPinned)
 	tr.Sample(start.Add(2*time.Second), []Conn{
 		conn("1", `:System`, protocol.LaneVPN, 2, 4),
 		conn("2", `C:\WINDOWS\system32\svchost.exe`, protocol.LaneVPN, 6, 8),
@@ -219,10 +221,68 @@ func TestSystemAndUnattributedTiles(t *testing.T) {
 		g.Lane != protocol.LaneDirect || g.Down != 6 || g.Up != 4 || g.Connections != 2 {
 		t.Errorf("pinned system %+v", g)
 	}
-	if g := find(t, s, protocol.KeySystem); g.Down != 0 || g.Up != 0 || g.Connections != 0 {
-		t.Errorf("the special tile without traffic %+v", g)
+	if got := keys(s); slices.Contains(got, protocol.KeySystem) || !slices.Contains(got, protocol.KeyUnattributed) {
+		t.Errorf("the pinned rule instead of the special tile: %v", got)
 	}
-	find(t, s, protocol.KeyUnattributed)
+}
+
+// Ruling of plan 1B: while the layout pins "Windows services" (a rule of kind system), its traffic is
+// the rule's, and the unpinned tile system is left out of the summary, its detail too: two tiles of
+// the same name would show one of them always idle. The tile unattributed stays in every summary.
+// Once the rule goes, the special tile is back and the rule's group leaves at once.
+func TestNoSystemTileWhenSystemIsPinned(t *testing.T) {
+	tr := New(testEnv)
+	sys := layout(t, pinned(sysID, protocol.LaneDirect, protocol.KindSystem, ""))
+	tr.Sample(start, []Conn{conn("1", `:System`, protocol.LaneDirect, 1, 2), conn("2", "", protocol.LaneVPN, 3, 4)}, sys, protocol.LaneVPN)
+	s := tr.Summary(protocol.KeySystem)
+	if got, want := keys(s), []string{protocol.KeyUnattributed, sysID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pinned: %v, want %v", got, want)
+	}
+	if s.Detail != nil {
+		t.Fatalf("no detail for a tile that is not in the summary: %+v", s.Detail)
+	}
+	tr.Sample(start.Add(time.Second), nil, sys, protocol.LaneVPN)
+	if got, want := keys(tr.Summary("")), []string{sysID, protocol.KeyUnattributed}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pinned, idle: %v, want %v", got, want)
+	}
+	tr.Sample(start.Add(2*time.Second), nil, layout(t), protocol.LaneVPN)
+	if got := tr.Summary("").Apps; !reflect.DeepEqual(got, idle(protocol.LaneVPN)) {
+		t.Fatalf("the rule is gone: %+v", got)
+	}
+}
+
+// Ruling of plan 1B: a rate is the bytes since the previous sample per second of the real time between
+// the two samples, so a tick that came late does not show a burst; a gap shorter than a second (the tick
+// after a late one) counts as one second. The first sample counts as one second too. The executable of
+// a group is still chosen by its bytes.
+func TestRatesScaleWithElapsedTime(t *testing.T) {
+	tr := New(testEnv)
+	none := layout(t)
+	a, b := `C:\Apps\A\a.exe`, `C:\Apps\A\b.exe`
+	tr.Sample(start, []Conn{conn("1", a, protocol.LaneVPN, 100, 1000)}, none, protocol.LaneVPN)
+	if s := tr.Summary(""); s.Lanes.VPN != (protocol.Traffic{Down: 1000, Up: 100}) {
+		t.Fatalf("first sample: %+v", s.Lanes)
+	}
+	// 2 s later: 2000 and 200 more bytes are 1000 and 100 a second; a new connection counts its
+	// whole counters over the same 2 s
+	tr.Sample(start.Add(2*time.Second), []Conn{conn("1", a, protocol.LaneVPN, 300, 3000), conn("2", b, protocol.LaneDirect, 40, 401)}, none, protocol.LaneVPN)
+	s := tr.Summary(`C:\Apps\A\`)
+	if want := (protocol.ActivityLanes{VPN: protocol.Traffic{Down: 1000, Up: 100}, Direct: protocol.Traffic{Down: 200, Up: 20}}); s.Lanes != want {
+		t.Fatalf("2 s: %+v", s.Lanes)
+	}
+	if g := find(t, s, `C:\Apps\A\`); g.Down != 1200 || g.Up != 120 || g.Exe != a {
+		t.Fatalf("2 s: group %+v", g)
+	}
+	want := []protocol.ActivityConn{{Host: "host.example", Lane: protocol.LaneVPN, Down: 1000, Up: 100},
+		{Host: "host.example", Lane: protocol.LaneDirect, Down: 200, Up: 20}}
+	if s.Detail == nil || !reflect.DeepEqual(s.Detail.Connections, want) {
+		t.Fatalf("2 s: detail %+v", s.Detail)
+	}
+	// 500 ms later counts as a second
+	tr.Sample(start.Add(2500*time.Millisecond), []Conn{conn("1", a, protocol.LaneVPN, 350, 3500), conn("2", b, protocol.LaneDirect, 40, 401)}, none, protocol.LaneVPN)
+	if s := tr.Summary(""); s.Lanes != (protocol.ActivityLanes{VPN: protocol.Traffic{Down: 500, Up: 50}}) {
+		t.Fatalf("500 ms: %+v", s.Lanes)
+	}
 }
 
 func TestUnpinnedKeptFiveMinutes(t *testing.T) {
