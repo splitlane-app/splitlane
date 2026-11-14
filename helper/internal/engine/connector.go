@@ -265,11 +265,19 @@ func (e *Engine) runSetup(ctx context.Context, s *setupRun) {
 				close(s.ready)
 			}
 		}
-		switch {
-		case exited(proc):
+		if exited(proc) {
 			e.d.Log("setup mode: the core exited")
 			return
-		case e.windowless(since):
+		}
+		// The 5 minutes and the mark that the run is ending are one hold of e.mu: a window that connects
+		// after the decision finds the run ending and asks for the next one (startSetupLocked).
+		e.mu.Lock()
+		idle := e.windowless(since)
+		if idle {
+			s.ending = true
+		}
+		e.mu.Unlock()
+		if idle {
 			e.d.Log("setup mode: no window for %s; stopping it", setupIdle)
 			return
 		}
@@ -280,7 +288,8 @@ func (e *Engine) runSetup(ctx context.Context, s *setupRun) {
 }
 
 // windowless: no window is connected, and the last one went (or, when none went during this run, the
-// run started) 5 minutes ago or more (spec 7).
+// run started) 5 minutes ago or more (spec 7). It reads the counters of SetClients only; runSetup holds
+// e.mu around it, so that the run is marked ending before windowCame can look.
 func (e *Engine) windowless(since time.Time) bool {
 	if e.clients.Load() > 0 {
 		return false

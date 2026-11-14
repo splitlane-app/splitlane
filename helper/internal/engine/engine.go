@@ -280,16 +280,16 @@ func (e *Engine) Hello() protocol.HelloResult {
 // the first window that comes starts the setup mode when "logged in" is saved, and the setup mode
 // stops 5 minutes after the last one went; spec 4.3: a helper that a window has reached does not end
 // on its own). The pipe calls it under its own lock, which a published state takes after e.mu, so it
-// takes no lock of the engine: the start runs on its own goroutine.
+// takes no lock of the engine: the start runs on its own goroutine. The time the last window went is
+// stored before the count shows no window, so windowless never pairs no window with the time an
+// earlier one went; the pipe's lock keeps other calls out between the two.
 func (e *Engine) SetClients(n int) {
 	if n > 0 {
 		e.windowSeen.Store(true)
-	}
-	old := e.clients.Swap(int32(n))
-	switch {
-	case n == 0 && old > 0:
+	} else if e.clients.Load() > 0 {
 		e.lastGone.Store(e.d.Clock.Now().UnixNano())
-	case n > 0 && old == 0:
+	}
+	if old := e.clients.Swap(int32(n)); n > 0 && old == 0 {
 		go e.windowCame()
 	}
 }

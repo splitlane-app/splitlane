@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -198,6 +199,70 @@ func TestSetupStopsFiveMinutesAfterLastWindow(t *testing.T) {
 	}
 	if s := h.store.saved(); !s.LoggedIn || len(s.ExitNodes) != 1 || h.e.State().Phase != protocol.PhaseOff {
 		t.Fatalf("state.json %+v, phase %s", s, h.e.State().Phase)
+	}
+}
+
+// Review of task 8: the setup run decided "no window for 5 minutes" without e.mu and marked itself
+// ending only later; a window that connected in between found the run not ending, asked for no next
+// one, and the setup core stopped while the window stayed (backend stopped, no data of the node). The
+// decision and the mark are one hold of e.mu now: such a window gets the next run.
+func TestWindowAtTheIdleStopGetsTheSetupModeAgain(t *testing.T) {
+	h := newHarness(t)
+	var once sync.Once
+	h.e.d.Log = func(format string, args ...any) {
+		t.Logf(format, args...)
+		if strings.HasPrefix(format, "setup mode: no window for") {
+			once.Do(func() {
+				h.e.SetClients(1)
+				time.Sleep(20 * time.Millisecond) // the window's start of the setup mode has run by now
+			})
+		}
+	}
+	h.load()
+	t.Cleanup(func() { shutdown(t, h) })
+	h.e.SetClients(1)
+	h.waitFor("the setup core's node read", func() bool { return backendIs(h, protocol.BackendRunning) })
+	setup := h.core.last()
+	h.e.SetClients(0)
+	h.waitFor("the first setup core stopped", func() bool { return !setup.alive() })
+	h.waitFor("the setup core again for the window", func() bool {
+		return h.core.setupAlive() && backendIs(h, protocol.BackendRunning)
+	})
+}
+
+// hookClock runs now at the next reading of the time once armed, then reads the clock.
+type hookClock struct {
+	*fakeClock
+	armed atomic.Bool
+	now   func()
+}
+
+func (c *hookClock) Now() time.Time {
+	if c.armed.CompareAndSwap(true, false) {
+		c.now()
+	}
+	return c.fakeClock.Now()
+}
+
+// Review of task 8: SetClients(0) showed no window before it stored the time the last one went, so a
+// look in between paired no window with the time an earlier one went, or with none: a setup run that
+// had a window for more than 5 minutes counted as idle at once. The time is stored first now.
+func TestWindowGoingIsTimedBeforeItCounts(t *testing.T) {
+	h := newHarness(t)
+	clock := &hookClock{fakeClock: h.clock}
+	h.e.d.Clock = clock
+	windows(h, 1)
+	since := h.clock.Now() // a setup run that started with the window there
+	h.clock.After(6 * time.Minute)
+	idle := false
+	clock.now = func() { idle = h.e.windowless(since) }
+	clock.armed.Store(true)
+	h.e.SetClients(0)
+	if idle {
+		t.Fatal("while the window went, a look found no window and the time of an earlier one")
+	}
+	if h.e.windowless(since) {
+		t.Fatal("the 5 minutes count from the window that went")
 	}
 }
 
