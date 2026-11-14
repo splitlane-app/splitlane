@@ -275,7 +275,7 @@ func (e *Engine) setLanes(ctx context.Context, apps []protocol.AppRule, defaultL
 // After a success it returns undo, which brings the previous files and mode back the same way.
 func (e *Engine) applyLanes(ctx context.Context, apps []protocol.AppRule, defaultLane string) (func(), *protocol.Error) {
 	e.mu.Lock()
-	r, allDirect, degraded := e.run, e.st.AllDirect, e.degraded
+	r, allDirect, degraded := e.run, e.st.AllDirect, e.vpnDown()
 	var oldDirect, oldVPN []byte
 	var oldMode string
 	if r != nil {
@@ -385,7 +385,7 @@ func expectedLane(set *rules.Set, mainLane string, allDirect bool, path string) 
 // already; each such switch, the one back after a failure too, flushes the Windows DNS cache.
 func (e *Engine) applyAllDirect(ctx context.Context, on bool) {
 	e.mu.Lock()
-	r, lane, degraded, apps, was := e.run, e.saved.DefaultLane, e.degraded, e.saved.Apps, e.st.AllDirect
+	r, lane, degraded, apps, was := e.run, e.saved.DefaultLane, e.vpnDown(), e.saved.Apps, e.st.AllDirect
 	old := ""
 	if r != nil {
 		old = r.mode

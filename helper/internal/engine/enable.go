@@ -35,7 +35,8 @@ func (e *Engine) runEnable(ctx context.Context, unattended bool) {
 // finishOnChecked is step 9 of 5.3 with the last look at the core: the look and finishOn are one
 // hold of e.mu. A core that exited after the last check of the steps before (for instance during
 // the very probe that completed step 8) is a crash, not an "on": the reason core_crashed is
-// returned and the phase stays as it is.
+// returned and the phase stays as it is. Right after phase on the path to the exit node is read
+// (spec 7, tailscale.path), in the background: the operation does not wait for the ping.
 func (e *Engine) finishOnChecked() *protocol.Reason {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -43,6 +44,7 @@ func (e *Engine) finishOnChecked() *protocol.Reason {
 		return reason(protocol.ReasonCoreCrashed)
 	}
 	e.finishOn()
+	go e.readPath(context.Background())
 	return nil
 }
 
@@ -212,15 +214,16 @@ func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, boo
 		return invalid(err)
 	}
 	r := &coreRun{
-		ports:  Ports{ProbeVPN: p[0], ProbeDirect: p[1], Clash: p[2], API: p[3]},
-		mode:   e.d.Core.Mode(s.DefaultLane, false, false),
-		direct: direct,
-		vpn:    vpn,
+		ports:   Ports{ProbeVPN: p[0], ProbeDirect: p[1], Clash: p[2], API: p[3]},
+		mode:    e.d.Core.Mode(s.DefaultLane, false, false),
+		direct:  direct,
+		vpn:     vpn,
+		backend: protocol.BackendRunning,
 	}
-	clashSecret := e.d.Host.Secret()
+	clashSecret, apiSecret := e.d.Host.Secret(), e.d.Host.Secret()
 	config, err := e.d.Core.BuildConfig(CoreOptions{
 		Mode: r.mode, HelperPath: e.d.Settings.HelperPath, TailscaleDir: e.d.Sys.Dir(), Hostname: e.hostname(),
-		ExitNode: s.SelectedExitNode, Ports: r.ports, ClashSecret: clashSecret, APISecret: e.d.Host.Secret(),
+		ExitNode: s.SelectedExitNode, Ports: r.ports, ClashSecret: clashSecret, APISecret: apiSecret,
 		DevPin: e.d.Settings.DevPin, LogLevel: e.d.Settings.CoreLogLevel,
 	})
 	if err != nil {
@@ -245,7 +248,8 @@ func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, boo
 	if err != nil {
 		return nil, reason(protocol.ReasonCoreStartTimeout, protocol.ParamError, err.Error()), false
 	}
-	r.proc, r.clash = proc, e.d.Core.Clash(r.ports.Clash, clashSecret)
+	r.proc, r.clash, r.node = proc, e.d.Core.Clash(r.ports.Clash, clashSecret), e.d.Core.Node(r.ports.API, apiSecret)
+	r.callsEnd, r.endCalls = context.WithCancel(context.Background())
 	e.attach(r)
 	deadline := e.d.Clock.Now().Add(startWait)
 	for {

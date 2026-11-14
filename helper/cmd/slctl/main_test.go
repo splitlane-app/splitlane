@@ -332,6 +332,32 @@ func TestStateIsMasked(t *testing.T) {
 	}
 }
 
+// The summary line of state, enable, wait and disable ends with the connector, which tasks 15-17 read:
+// the backend, the path to the exit node or null, the number of exit nodes. The login link never goes
+// there: slctl login prints it once, to the user's console.
+func TestSummaryShowsTheConnector(t *testing.T) {
+	link, path := "https://login.example/a/1f2e3d", protocol.PathRelay
+	name := testPipeName()
+	srv, err := serveState(name, protocol.State{Phase: protocol.PhaseOn, Apps: []protocol.AppRule{},
+		Tailscale: protocol.Tailscale{Backend: protocol.BackendRunning, AuthURL: &link, Path: &path,
+			ExitNodes: []protocol.ExitNode{{ID: "100.64.0.1", Name: "exit-a", Online: true}, {ID: "100.64.0.2", Name: "exit-b"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	var out strings.Builder
+	if code := run([]string{"-pipe", name, "state"}, &out); code != exitOK {
+		t.Fatalf("%d\n%s", code, out.String())
+	}
+	_, line, _ := strings.Cut(out.String(), "SLCTL: ")
+	if !strings.HasSuffix(line, " restoreOnDisable=false backend=running path=relay exitNodes=2\n") || strings.Contains(line, link) {
+		t.Fatalf("output:\n%s", out.String())
+	}
+	if got := summary(protocol.State{Tailscale: protocol.Tailscale{Backend: protocol.BackendExpired}}); !strings.HasSuffix(got, " backend=expired path=null exitNodes=0") {
+		t.Fatalf("summary %q", got)
+	}
+}
+
 func TestEnableWaitsForOn(t *testing.T) {
 	name := fakePipe(t)
 	var out strings.Builder

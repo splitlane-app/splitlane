@@ -192,6 +192,8 @@ func rulesText(rules []protocol.RuleRejection) string {
 	return " rules: " + strings.Join(parts, ",")
 }
 
+// summary is the state in one line, the connector at its end (spec 7: the backend, the path to the exit
+// node, the number of exit nodes). The login link is never part of it: slctl login prints it once.
 func summary(s protocol.State) string {
 	reason := "-"
 	if s.Reason != nil {
@@ -200,9 +202,9 @@ func summary(s protocol.State) string {
 			reason += fmt.Sprintf(" %s=%q", k, v)
 		}
 	}
-	return fmt.Sprintf("phase=%s reason=%s allDirect=%v defaultLane=%s apps=%d vpn=%s direct=%s systemExitNode=%v restoreOnDisable=%v",
+	return fmt.Sprintf("phase=%s reason=%s allDirect=%v defaultLane=%s apps=%d vpn=%s direct=%s systemExitNode=%v restoreOnDisable=%v backend=%s path=%s exitNodes=%d",
 		s.Phase, reason, s.AllDirect, s.DefaultLane, len(s.Apps), str(s.Addresses.VPN), str(s.Addresses.Direct),
-		s.SystemTailscale.ExitNodeOn, s.SystemTailscale.RestoreOnDisable)
+		s.SystemTailscale.ExitNodeOn, s.SystemTailscale.RestoreOnDisable, s.Tailscale.Backend, str(s.Tailscale.Path), len(s.Tailscale.ExitNodes))
 }
 
 func str(p *string) string {

@@ -18,12 +18,15 @@ func startEnable(h *harness) {
 	h.e.mu.Unlock()
 }
 
+// enabled is a helper in phase on after 5.3, with the look at the path to the exit node that follows
+// phase on done (spec 7): nothing of the enable runs on behind the test.
 func enabled(t *testing.T) *harness {
 	t.Helper()
 	h := newHarness(t)
 	h.load()
 	startEnable(h)
 	h.waitPhase(protocol.PhaseOn)
+	h.waitFor("the path read after phase on", func() bool { return h.e.State().Tailscale.Path != nil })
 	return h
 }
 

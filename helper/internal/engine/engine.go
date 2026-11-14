@@ -78,16 +78,28 @@ type Engine struct {
 	connector   sync.Mutex // logouts one at a time; stopSetup waits for the one under way
 }
 
-// coreRun is one running core with its ports and the rule files it reads now.
+// coreRun is one running core with its ports, the rule files it reads now and its API service.
 type coreRun struct {
 	proc     CoreProc
 	clash    ClashAPI
+	node     NodeAPI // the API service of this run (spec 7): the port and the secret of its config
 	ports    Ports
 	mode     string // the driver's name of the core's mode now
 	direct   []byte
 	vpn      []byte
 	stopping bool // guarded by Engine.mu: the helper stops this core on purpose
 	cleared  bool // guarded by Engine.mu: this run has switched the system exit node off (step 6 of 5.3)
+
+	// The node of the core while it runs (spec 7, connector.go).
+	calls    sync.WaitGroup     // the calls of node under way; none begins once stopping is set
+	callsEnd context.Context    // ends with the run (stopCore, the end of the session), and the calls with it
+	endCalls context.CancelFunc // ends callsEnd
+	backend  string             // guarded by Engine.mu: tailscale.backend as the node said last (running: the tunnel was proven)
+	expired  bool               // guarded by Engine.mu: the node asked for a login again while the core ran
+	path     string             // guarded by Engine.mu: the path to the exit node read last, "" while unknown
+	pathAt   time.Time          // guarded by Engine.mu: when the path was read
+	logMark  int64              // guarded by Engine.mu: the core's log is read for a login request from here
+	errs     map[string]string  // guarded by Engine.mu: the last error of each kind of call, masked
 }
 
 // op is the one background operation: enabling, disabling, a restart, the start-up,
@@ -312,15 +324,26 @@ func (e *Engine) save() error {
 	return err
 }
 
-// publish sends the state to the clients; e.mu must be held. tailscale.backend and authUrl come from
-// the connector (spec 7): the node of the setup core, stopped when no core runs (5.2); while the main
-// core runs in a live phase, running.
+// publish sends the state to the clients; e.mu must be held. tailscale.backend, authUrl and path come
+// from the connector (spec 7, 5.2). While the main core runs in a live phase: its node (expired once it
+// asked for a login again), no login link (the setup mode gives it), the path read last. Otherwise the
+// node of the setup core with its link, stopped when no core runs, and path null.
 func (e *Engine) publish() {
 	e.syncSaved()
 	ts := &e.st.Tailscale
-	ts.Backend, ts.AuthURL = e.nodeBackend, nil
-	if e.run != nil && live(e.st.Phase) {
+	ts.Backend, ts.AuthURL, ts.Path = e.nodeBackend, nil, nil
+	if r := e.run; r != nil && live(e.st.Phase) {
 		ts.Backend = protocol.BackendRunning
+		switch {
+		case r.expired:
+			ts.Backend = protocol.BackendExpired
+		case r.backend != "":
+			ts.Backend = r.backend
+		}
+		if r.path != "" {
+			p := r.path
+			ts.Path = &p
+		}
 	} else if e.nodeAuthURL != "" {
 		u := e.nodeAuthURL
 		ts.AuthURL = &u

@@ -296,6 +296,23 @@ func TestNeedsLoginClearsLoggedIn(t *testing.T) {
 	}
 }
 
+// Spec 7: every call of the API service is one more sing-box.exe, and the check for another core (5.3 step
+// 1) counts each. So the setup mode reads the exit nodes when the node is first seen logged in, then at most
+// once a minute, not at each look at the node every 2 s.
+func TestSetupReadsExitNodesOncePerMinute(t *testing.T) {
+	h, _ := setupRunning(t)
+	h.waitFor("three reads of the list", func() bool { _, lists := h.core.node.calls(); return len(lists) >= 3 })
+	looks, lists := h.core.node.calls()
+	for i := 1; i < len(lists); i++ {
+		if gap := lists[i].Sub(lists[i-1]); gap < time.Minute || gap > time.Minute+nodeEvery {
+			t.Fatalf("read %d came %s after the one before", i+1, gap)
+		}
+	}
+	if looks < 60 {
+		t.Fatalf("the node itself is still read every 2 s: %d looks", looks)
+	}
+}
+
 // tailscale.logout in off (spec 7): the answer comes at once; the setup mode starts because it does not
 // run, its API service is waited for, the node logs out through the core and "logged in" goes; the list
 // of exit nodes stays and the setup core keeps running (the new login link comes from it).
@@ -419,45 +436,76 @@ func TestLeftoverSetupCoreIsStopped(t *testing.T) {
 	h.waitFor("the first helper sees its setup core gone", func() bool { return backendIs(h, protocol.BackendStopped) })
 }
 
+// colExpired is the column of TestLoginPhaseTable for phase degraded with backend expired (5.1).
+const colExpired = "degraded-expired"
+
+// expiredOn is a helper in phase on whose look at the node of the main core every 10 s has found it
+// needing a login again (spec 7): phase degraded, backend expired, the node offers a login link.
+func expiredOn(t *testing.T) *harness {
+	t.Helper()
+	h := enabled(t)
+	h.core.node.set(func(n *fakeNode) { n.state = NodeState{Backend: protocol.BackendNeedsLogin, AuthURL: loginURL} })
+	h.e.checkNode(context.Background())
+	if s := h.e.State(); s.Phase != protocol.PhaseDegraded || s.Tailscale.Backend != protocol.BackendExpired {
+		t.Fatalf("setup: %+v", s)
+	}
+	return h
+}
+
 // TestLoginPhaseTable walks the cells of 5.1 for tailscale.login and tailscale.logout in off, error,
-// starting, on, blocked and stopping: in off and error the setup mode starts (login) or the node logs
-// out (logout) and the phase stays; starting and stopping are busy; on and blocked are wrong_phase.
+// starting, on, degraded, degraded with backend expired, blocked and stopping: in off and error the setup
+// mode starts (login) or the node logs out (logout) and the phase stays; in degraded with backend expired
+// login disables first (5.4), then the setup mode starts with the node's login link; starting and
+// stopping are busy; every other live cell is wrong_phase.
 func TestLoginPhaseTable(t *testing.T) {
 	busy, wrong := protocol.CodeBusy, protocol.CodeWrongPhase
-	phases := []string{protocol.PhaseOff, protocol.PhaseError, protocol.PhaseStarting, protocol.PhaseOn,
-		protocol.PhaseBlocked, protocol.PhaseStopping}
+	cols := []string{protocol.PhaseOff, protocol.PhaseError, protocol.PhaseStarting, protocol.PhaseOn,
+		protocol.PhaseDegraded, colExpired, protocol.PhaseBlocked, protocol.PhaseStopping}
 	rows := []struct {
 		name   string
 		method string
-		want   []string // off, error, starting, on, blocked, stopping
-		act    func(t *testing.T, h *harness)
+		want   []string // off, error, starting, on, degraded, degraded with backend expired, blocked, stopping
+		act    func(t *testing.T, h *harness, col string)
 	}{
-		{"login", protocol.MethodLogin, []string{cellAct, cellAct, busy, wrong, wrong, busy},
-			func(t *testing.T, h *harness) {
+		{"login", protocol.MethodLogin, []string{cellAct, cellAct, busy, wrong, wrong, cellAct, wrong, busy},
+			func(t *testing.T, h *harness, col string) {
+				if col == colExpired {
+					h.waitFor("off, the setup core and its login link", func() bool {
+						s := h.e.State()
+						return s.Phase == protocol.PhaseOff && h.core.setupAlive() && s.Tailscale.AuthURL != nil && *s.Tailscale.AuthURL == loginURL
+					})
+					return
+				}
 				h.waitFor("the setup core's node read", func() bool {
 					return h.rec.index("core:start 1000 setup") >= 0 && backendIs(h, protocol.BackendRunning)
 				})
 			}},
-		{"logout", protocol.MethodLogout, []string{cellAct, cellAct, busy, wrong, wrong, busy},
-			func(t *testing.T, h *harness) {
+		{"logout", protocol.MethodLogout, []string{cellAct, cellAct, busy, wrong, wrong, wrong, wrong, busy},
+			func(t *testing.T, h *harness, col string) {
 				h.waitFor("logged out", func() bool { return h.rec.count("node:logout") == 1 && !h.store.saved().LoggedIn })
 			}},
 	}
 	for _, row := range rows {
-		for i, phase := range phases {
-			t.Run(row.name+"/"+phase, func(t *testing.T) {
-				h, release := inPhase(t, phase)
+		for i, col := range cols {
+			t.Run(row.name+"/"+col, func(t *testing.T) {
+				var h *harness
+				release := func() {}
+				if col == colExpired {
+					h = expiredOn(t)
+				} else {
+					h, release = inPhase(t, col)
+				}
 				defer release()
 				t.Cleanup(func() { shutdown(t, h) })
-				before := h.rec.list()
+				before, phase := h.rec.list(), h.e.State().Phase
 				err := call(h, row.method, nil)
 				switch want := row.want[i]; want {
 				case cellAct:
 					if err != nil {
 						t.Fatalf("answer %v", err)
 					}
-					row.act(t, h)
-					if got := h.e.State().Phase; got != phase {
+					row.act(t, h, col)
+					if got := h.e.State().Phase; got != phase && col != colExpired {
 						t.Fatalf("the phase stays %s, got %s", phase, got)
 					}
 				default:
@@ -469,5 +517,204 @@ func TestLoginPhaseTable(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Spec 7, 5.5 and section 10, the row "Сервер VPN недоступен, истечение входа": while the main core
+// runs, the look at its node every 10 s finds that it needs a login again: phase degraded with reason
+// login_expired, backend expired, no login link (the setup mode gives it), "logged in" cleared in
+// state.json. The core keeps running and the system is not touched; the next round of 5.5 sends names
+// through the provider's DNS as in every degraded, and the VPN lane stays on the VPN: its programs have
+// no link, they never go direct. The login line in the core's log leads to the same state. The node is
+// the run's own API service: the port and the secret of its config.
+func TestExpiredLoginWhileOn(t *testing.T) {
+	h := enabled(t)
+	o := h.core.options()
+	h.core.mu.Lock()
+	port, secret := h.core.nodePort, h.core.nodeSecret
+	h.core.mu.Unlock()
+	if port != o.Ports.API || secret != o.APISecret || secret == "" {
+		t.Fatalf("the API service of the run: port %d, secret %q; config %d, %q", port, secret, o.Ports.API, o.APISecret)
+	}
+	core := h.core.last()
+	mark := len(h.rec.list())
+	h.e.checkNode(context.Background())
+	if s := h.e.State(); s.Phase != protocol.PhaseOn || s.Tailscale.Backend != protocol.BackendRunning {
+		t.Fatalf("a logged-in node changes nothing: %+v", s)
+	}
+	h.core.node.set(func(n *fakeNode) { n.state = NodeState{Backend: protocol.BackendNeedsLogin, AuthURL: loginURL} })
+	h.e.checkNode(context.Background())
+	s := h.e.State()
+	if s.Phase != protocol.PhaseDegraded || s.Reason == nil || s.Reason.Code != protocol.ReasonLoginExpired ||
+		s.Tailscale.Backend != protocol.BackendExpired || s.Tailscale.AuthURL != nil {
+		t.Fatalf("degraded, login_expired, backend expired, no link: %+v", s)
+	}
+	if saved := h.store.saved(); saved.LoggedIn || !saved.WasOn || !core.alive() || countSince(h, mark, "core:") != 0 || countSince(h, mark, "sys:") != 0 {
+		t.Fatalf("logged in cleared, the core runs on, the system untouched: %+v, events %v", saved, h.rec.list()[mark:])
+	}
+	rounds(h, 1)
+	if s := h.e.State(); h.clash.currentMode() != "vpn-localdns" || s.Phase != protocol.PhaseDegraded || s.Reason.Code != protocol.ReasonLoginExpired {
+		t.Fatalf("names through the provider's DNS, the VPN lane on the VPN: mode %s, %+v", h.clash.currentMode(), s)
+	}
+
+	h = enabled(t)
+	h.core.appendLog("INFO endpoint/tailscale[vpn]: Waiting for authentication: https://login.example/x")
+	h.e.checkNode(context.Background())
+	if s := h.e.State(); s.Phase != protocol.PhaseDegraded || s.Reason.Code != protocol.ReasonLoginExpired ||
+		s.Tailscale.Backend != protocol.BackendExpired || h.store.saved().LoggedIn || !h.core.last().alive() {
+		t.Fatalf("the login line of the core's log: %+v", s)
+	}
+}
+
+// Spec 7 and 5.1: tailscale.login in degraded with backend expired disables first (5.4: the system exit
+// node given back and confirmed, then the core stopped; "was on" cleared at the start) and only then
+// starts the setup mode, whose node offers the login link: in degraded a browser on the VPN lane could
+// not open it. The phase ends in off; after the login the user enables again.
+func TestLoginWhileExpiredDisablesFirst(t *testing.T) {
+	h := expiredOn(t)
+	t.Cleanup(func() { shutdown(t, h) })
+	main := h.core.last()
+	mark := len(h.rec.list())
+	if err := call(h, protocol.MethodLogin, nil); err != nil {
+		t.Fatal(err)
+	}
+	if h.store.saved().WasOn {
+		t.Fatal("\"was on\" is cleared at the start of the disabling")
+	}
+	h.waitFor("the login link of the setup core", func() bool {
+		u := h.e.State().Tailscale.AuthURL
+		return u != nil && *u == loginURL
+	})
+	order := []string{"sys:set " + exitNode + " true", "journal:delete", fmt.Sprintf("core:interrupt %d", main.id.PID),
+		"core:setupconfig", fmt.Sprintf("core:start %d setup", main.id.PID+1)}
+	if !inOrder(h, mark, order...) || main.alive() {
+		t.Fatalf("restore confirmed, core stopped, then the setup core: %v", h.rec.list()[mark:])
+	}
+	if got := strings.Join(h.phases(), ","); got != "starting,on,degraded,stopping,off" {
+		t.Fatalf("phases %s", got)
+	}
+	if s := h.e.State(); s.Phase != protocol.PhaseOff || s.Tailscale.Backend != protocol.BackendNeedsLogin || h.store.hasJournal() || h.store.saved().LoggedIn {
+		t.Fatalf("off, the setup core's node needs a login, no journal: %+v", s)
+	}
+}
+
+// tailscale.path (5.2, spec 7): read through the run's API service right after phase on, then every
+// 60 s while the core runs live; lastPath keeps it with the time it was read (the network watch of
+// task 10), readPath reads it now. No pong is an unknown path: null. Null when the main core does not
+// run: after a disable.
+func TestPathIsReported(t *testing.T) {
+	h := enabled(t)
+	if p := h.e.State().Tailscale.Path; p == nil || *p != protocol.PathDirect {
+		t.Fatalf("direct right after phase on: %v", p)
+	}
+	path, at := h.e.lastPath()
+	if path != protocol.PathDirect || at.IsZero() {
+		t.Fatalf("lastPath %q at %s", path, at)
+	}
+	h.core.node.set(func(n *fakeNode) { n.path = protocol.PathRelay })
+	h.clock.After(listEvery)
+	h.e.refreshNode(context.Background())
+	if p := h.e.State().Tailscale.Path; p == nil || *p != protocol.PathRelay {
+		t.Fatalf("relay a minute later: %v", p)
+	}
+	if path, later := h.e.lastPath(); path != protocol.PathRelay || !later.After(at) {
+		t.Fatalf("lastPath %q at %s", path, later)
+	}
+	h.core.node.set(func(n *fakeNode) { n.path = "" })
+	if got := h.e.readPath(context.Background()); got != "" || h.e.State().Tailscale.Path != nil {
+		t.Fatalf("no pong: unknown, null: %q %v", got, h.e.State().Tailscale.Path)
+	}
+	h.core.node.set(func(n *fakeNode) { n.path = protocol.PathDirect })
+	if got := h.e.readPath(context.Background()); got != protocol.PathDirect {
+		t.Fatalf("readPath %q", got)
+	}
+	if err := call(h, protocol.MethodDisable, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.waitPhase(protocol.PhaseOff)
+	if path, _ := h.e.lastPath(); h.e.State().Tailscale.Path != nil || path != "" || h.e.readPath(context.Background()) != "" {
+		t.Fatalf("null after the disable: %v %q", h.e.State().Tailscale.Path, path)
+	}
+}
+
+// Spec 7, 5.2: while the core runs live, the exit nodes with their online flags are read every 60 s
+// with the path, saved in state.json and published; the selection stays. The look every 10 s does not
+// read them.
+func TestExitNodesRefreshWhileOn(t *testing.T) {
+	h := enabled(t)
+	_, before := h.core.node.calls()
+	h.e.checkNode(context.Background())
+	if _, lists := h.core.node.calls(); len(lists) != len(before) {
+		t.Fatalf("the look every 10 s reads no list: %d reads", len(lists)-len(before))
+	}
+	nodes := []protocol.ExitNode{{ID: exitNode, Name: "exit-a", Online: false}, {ID: "100.64.0.2", Name: "exit-b", Online: true}}
+	h.core.node.set(func(n *fakeNode) { n.nodes = nodes })
+	states := publishedCount(h)
+	h.e.refreshNode(context.Background())
+	if !slices.Equal(h.store.saved().ExitNodes, nodes) || !slices.Equal(h.e.State().Tailscale.ExitNodes, nodes) || publishedCount(h) == states {
+		t.Fatalf("saved and published: %+v", h.store.saved().ExitNodes)
+	}
+	if s := h.e.State(); s.Phase != protocol.PhaseOn || s.Tailscale.SelectedExitNode == nil || *s.Tailscale.SelectedExitNode != exitNode {
+		t.Fatalf("on, the selection stays: %+v", s)
+	}
+}
+
+// Spec 7: the errors of the API service carry the core's command line and its standard error, which may
+// name peers and addresses in the tailnet: while the main core runs they reach the log masked (<ip>),
+// once while they repeat. A failed ping is an unknown path: tailscale.path null, lastPath "".
+func TestNodeErrorsWhileOnAreMasked(t *testing.T) {
+	h := newHarness(t)
+	logEvents(h)
+	h.load()
+	startEnable(h)
+	h.waitPhase(protocol.PhaseOn)
+	h.waitFor("the path read after phase on", func() bool { return h.e.State().Tailscale.Path != nil })
+	h.core.node.set(func(n *fakeNode) {
+		n.pathErr = errors.New("sing-box.exe api tailscale ping 100.64.0.1: exit status 1: no reply from 100.64.0.1 via 192.0.2.7:41641")
+	})
+	h.e.refreshNode(context.Background())
+	h.e.refreshNode(context.Background())
+	var logged []string
+	for _, ev := range h.rec.list() {
+		if strings.HasPrefix(ev, "log:node of the core: ") {
+			logged = append(logged, ev)
+		}
+		if strings.Contains(ev, "192.0.2.7") {
+			t.Fatalf("an address in the log: %q", ev)
+		}
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "ping <ip>: exit status 1: no reply from <ip> via <ip>:41641") {
+		t.Fatalf("logged masked, once: %q", logged)
+	}
+	if path, _ := h.e.lastPath(); h.e.State().Tailscale.Path != nil || path != "" {
+		t.Fatalf("a failed ping is an unknown path: %v %q", h.e.State().Tailscale.Path, path)
+	}
+}
+
+// Every call of the API service is a sing-box.exe of that run (task 3): none is in flight when its core
+// ends. The stop of 5.4 (step 2) cancels the call and waits for its end before the core gets its signal,
+// and the 60-second look reads nothing more.
+func TestStopWaitsForNodeCalls(t *testing.T) {
+	h := enabled(t)
+	entered := make(chan struct{})
+	h.core.node.set(func(n *fakeNode) { n.hold = entered })
+	_, lists := h.core.node.calls()
+	done := make(chan struct{})
+	go func() {
+		h.e.refreshNode(context.Background())
+		close(done)
+	}()
+	waitClosed(t, entered, "the ping of the exit node")
+	mark := len(h.rec.list())
+	if err := call(h, protocol.MethodDisable, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.waitPhase(protocol.PhaseOff)
+	waitClosed(t, done, "the end of the 60-second look")
+	if !inOrder(h, mark, "sys:set", "node:path cancelled", fmt.Sprintf("core:interrupt %d", h.core.last().id.PID)) {
+		t.Fatalf("the call ends before the core is stopped: %v", h.rec.list()[mark:])
+	}
+	if _, after := h.core.node.calls(); len(after) != len(lists) {
+		t.Fatalf("no list read after the cancel: %d", len(after)-len(lists))
 	}
 }
