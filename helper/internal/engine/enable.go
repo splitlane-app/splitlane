@@ -457,13 +457,18 @@ func (e *Engine) beginRestartLocked(why string) {
 }
 
 // runRestart is the restart of 5.5: 5.4 (restore confirmed, core stopped), a pause, then 5.3;
-// at most three times with a growing pause, in phase starting; "was on" stays set.
+// at most three times with a growing pause, in phase starting; "was on" stays set. A restart
+// cancelled during its 5.4 (routing.disable, 5.1) goes from there to the rollback, not to starting.
 func (e *Engine) runRestart(ctx context.Context, why string) {
 	for _, pause := range restartPauses {
 		if !e.teardown() {
 			e.mu.Lock()
 			e.finish(protocol.PhaseError, reason(protocol.ReasonAdapterLeft))
 			e.mu.Unlock()
+			return
+		}
+		if ctx.Err() != nil {
+			e.rollback(errCancelled, true)
 			return
 		}
 		e.mu.Lock()

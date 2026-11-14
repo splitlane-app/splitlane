@@ -441,6 +441,58 @@ func TestDisableDuringReconnectCancelsTheEnable(t *testing.T) {
 	}
 }
 
+// holdAdapterHost is a host whose first look for the adapter (step 3 of 5.4) waits until hold is
+// closed; entered is closed when it came.
+type holdAdapterHost struct {
+	*fakeHost
+	entered chan struct{}
+	hold    chan struct{}
+	once    sync.Once
+}
+
+func (h *holdAdapterHost) AdapterPresent() bool {
+	h.once.Do(func() {
+		close(h.entered)
+		<-h.hold
+	})
+	return h.fakeHost.AdapterPresent()
+}
+
+// Review of task 6: a restart of 5.5 whose restore took longer than 30 s (restore_pending) stays in
+// stopping without a reason once the restore is confirmed, while the core is stopped and the adapter
+// goes. A plain routing.disable there did nothing, and the restart switched routing back on against
+// the user's disable. Now it gives the restart up like a disable in starting: "was on" cleared, the
+// restart cancelled, the rollback of 5.4 ends in off.
+func TestDisableDuringRestartTailCancelsTheRestart(t *testing.T) {
+	h := enabled(t)
+	host := &holdAdapterHost{fakeHost: h.host, entered: make(chan struct{}), hold: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(host.hold) })
+	t.Cleanup(release)
+	h.e.d.Host = host
+	h.sys.set(func(s *fakeSys) { s.ignoreSet = true }) // the restore is not confirmed for now
+	h.core.last().crash()
+	h.waitFor("restore_pending", func() bool { return h.sawReason(protocol.ReasonRestorePending) })
+	h.sys.set(func(s *fakeSys) { s.ignoreSet = false })
+	waitClosed(t, host.entered, "step 3 of 5.4 in the restart")
+	if s := h.e.State(); s.Phase != protocol.PhaseStopping || s.Reason != nil {
+		t.Fatalf("setup: stopping without a reason, got %s %+v", s.Phase, s.Reason)
+	}
+	if err := call(h, protocol.MethodDisable, nil); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	h.e.Wait()
+	if got := strings.Join(h.phases(), ","); got != "starting,on,starting,stopping,off" || h.rec.count("core:start") != 1 {
+		t.Fatalf("the disable must cancel the restart: phases %s, events %v", got, h.rec.list())
+	}
+	if h.core.anyAlive() || h.store.hasJournal() || h.store.saved().WasOn || h.e.State().Reason != nil {
+		t.Fatalf("off: no core, no journal, was-on cleared: %+v %v", h.e.State(), h.rec.list())
+	}
+	if on, ip := systemExitNode(h); !on || ip != exitNode {
+		t.Fatalf("the system exit node must be given back: %v", h.rec.list())
+	}
+}
+
 func TestClearSystemExitNodeByPhase(t *testing.T) {
 	h := newHarness(t)
 	h.load()

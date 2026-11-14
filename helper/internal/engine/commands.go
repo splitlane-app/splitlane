@@ -107,8 +107,10 @@ func (e *Engine) cmdEnable(params json.RawMessage) *protocol.Error {
 // skipRestore the journal goes without a restore in every phase that disables (5.1, 5.4).
 // In stopping without restore_pending a plain disable gives up the enable that the operation would
 // start after its stopping half (reenablesLocked): "was on" is cleared, and the operation, which
-// reads it before it enables, ends in off. With restore_pending a plain disable is "Повторить":
-// one more restore attempt now, and the enable that follows stays.
+// reads it before it enables, ends in off. A restart of 5.5 is there after a restore that took
+// restore_pending: it is cancelled as in starting ("was on" cleared), and its rollback ends in off.
+// With restore_pending a plain disable is "Повторить": one more restore attempt now, and the enable
+// that follows stays.
 func (e *Engine) cmdDisable(params json.RawMessage) *protocol.Error {
 	var p protocol.DisableParams
 	if err := protocol.DecodeParams(params, &p); err != nil {
@@ -143,6 +145,10 @@ func (e *Engine) cmdDisable(params json.RawMessage) *protocol.Error {
 		case !pending && e.reenablesLocked():
 			e.saved.WasOn = false
 			e.save()
+		case !pending && e.op != nil && e.op.kind == "restart":
+			e.saved.WasOn = false
+			e.save()
+			e.op.cancel()
 		}
 		if p.SkipRestore || pending {
 			select {
