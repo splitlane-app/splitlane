@@ -36,8 +36,20 @@ var (
 		v, _, err := k.GetStringValue("ProgramFilesDir")
 		return v, err
 	}
-	// programData is the known folder ProgramData.
-	programData = func() (string, error) { return windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0) }
+	// programDataValue reads ProgramData of HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList,
+	// 64-bit view, as it is written there: %SystemDrive%\ProgramData, not expanded.
+	programDataValue = func() (string, error) {
+		k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList`,
+			registry.QUERY_VALUE|registry.WOW64_64KEY)
+		if err != nil {
+			return "", err
+		}
+		defer k.Close()
+		v, _, err := k.GetStringValue("ProgramData")
+		return v, err
+	}
+	// windowsDir is the Windows directory as the system knows it, C:\Windows; no environment variable.
+	windowsDir = windows.GetSystemWindowsDirectory
 )
 
 // ProgramDir is %ProgramFiles%\SplitLane (spec 4.2): the helper, the core and the licence texts,
@@ -51,11 +63,27 @@ func ProgramDir() (string, error) {
 	return inside(dir, "the Program Files folder")
 }
 
-// DataDir is %ProgramData%\SplitLane (spec 4.2), from the known folder ProgramData.
+// DataDir is %ProgramData%\SplitLane (spec 4.2). ProgramData is the value the registry names, never the
+// known folder or the environment variable: both expand %SystemDrive% from the environment of the
+// process, and the helper started at logon has the user's (HKCU\Environment), so a program of the user
+// could point the elevated helper at a folder it owns. Only a leading %SystemDrive% is put in, from the
+// volume of the Windows directory.
 func DataDir() (string, error) {
-	dir, err := programData()
+	dir, err := programDataValue()
 	if err != nil {
 		return "", fmt.Errorf("the ProgramData folder: %w", err)
+	}
+	const systemDrive = "%SystemDrive%"
+	if len(dir) >= len(systemDrive) && strings.EqualFold(dir[:len(systemDrive)], systemDrive) {
+		win, err := windowsDir()
+		if err != nil {
+			return "", fmt.Errorf("the Windows directory: %w", err)
+		}
+		vol := filepath.VolumeName(win)
+		if len(vol) != 2 || vol[1] != ':' || !filepath.IsAbs(win) {
+			return "", fmt.Errorf("the Windows directory is not on a drive: %q", win)
+		}
+		dir = vol + dir[len(systemDrive):]
 	}
 	return inside(dir, "the ProgramData folder")
 }

@@ -9,6 +9,31 @@ import (
 	"testing"
 )
 
+// TestLiveDataDirIgnoresSystemDrive: the scheduled task starts the helper as the user, with
+// HKCU\Environment loaded, so a program of that user can set SystemDrive to a folder it owns (here with
+// a ProgramData in it). The data folder of the elevated helper must not follow it. It is the first test
+// of the file: a lookup that went through the environment would keep its first answer for the process.
+// Reads the registry and the Windows directory only; runs with SPLITLANE_LIVE_READONLY=1.
+func TestLiveDataDirIgnoresSystemDrive(t *testing.T) {
+	if os.Getenv("SPLITLANE_LIVE_READONLY") != "1" {
+		t.Skip("SPLITLANE_LIVE_READONLY is not set")
+	}
+	planted := filepath.Join(t.TempDir(), "sd")
+	if err := os.MkdirAll(filepath.Join(planted, "ProgramData"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SystemDrive", planted)
+	got, err := DataDir()
+	if err != nil || strings.HasPrefix(strings.ToLower(got), strings.ToLower(planted)) {
+		t.Fatalf("with SystemDrive planted: data folder %q %v", got, err)
+	}
+	os.Unsetenv("SystemDrive") // the cleanup of t.Setenv puts the real one back
+	if want, err := DataDir(); err != nil || got != want {
+		t.Fatalf("with SystemDrive planted %q, without it %q %v", got, want, err)
+	}
+	t.Logf("LIVE data folder %s with SystemDrive planted and without it", got)
+}
+
 // fake makes the lookup *f answer value and err for the test.
 func fake(t *testing.T, f *func() (string, error), value string, err error) {
 	t.Helper()
@@ -38,22 +63,46 @@ func TestProgramDirFromRegistryValue(t *testing.T) {
 	}
 }
 
-// The data folder is the known folder ProgramData (spec 4.2), with the same checks.
-func TestDataDirFromKnownFolder(t *testing.T) {
+// The data folder is ProgramData of HKLM ProfileList as it is written there (spec 4.2, 11), with only a
+// leading %SystemDrive% put in from the volume of the Windows directory, never from the environment of
+// the elevated process (the user can set SystemDrive and ProgramData in HKCU\Environment). Any other
+// variable, a relative path or a failed read gives an error.
+func TestDataDirFromRegistryValue(t *testing.T) {
+	t.Setenv("SystemDrive", t.TempDir())
 	t.Setenv("ProgramData", `C:\Users\u\AppData\Local\Fake`)
-	fake(t, &programData, `C:\ProgramData`, nil)
-	if dir, err := DataDir(); err != nil || dir != `C:\ProgramData\SplitLane` {
-		t.Fatalf("%q %v", dir, err)
+	fake(t, &windowsDir, `D:\Windows`, nil)
+	for raw, want := range map[string]string{
+		`%SystemDrive%\ProgramData`: `D:\ProgramData\SplitLane`,
+		`%systemdrive%\ProgramData`: `D:\ProgramData\SplitLane`,
+		`E:\ProgramData`:            `E:\ProgramData\SplitLane`,
+	} {
+		fake(t, &programDataValue, raw, nil)
+		if dir, err := DataDir(); err != nil || dir != want {
+			t.Errorf("%q: %q %v", raw, dir, err)
+		}
 	}
-	for _, bad := range []string{`%ProgramData%`, `ProgramData`, ``} {
-		fake(t, &programData, bad, nil)
+	for _, bad := range []string{`%ProgramData%`, `%SystemRoot%\..\ProgramData`, `%SystemDrive%\%USERNAME%`,
+		`%SystemDrive%`, `%SystemDrive%ProgramData`, `X%SystemDrive%\ProgramData`, `ProgramData`, `\ProgramData`, ``} {
+		fake(t, &programDataValue, bad, nil)
 		if dir, err := DataDir(); err == nil {
 			t.Errorf("%q gave %q", bad, dir)
 		}
 	}
-	fake(t, &programData, "", errors.New("Element not found."))
-	if _, err := DataDir(); err == nil {
-		t.Fatal("a failed lookup must be an error")
+	fake(t, &programDataValue, `%SystemDrive%\ProgramData`, nil)
+	for _, bad := range []string{``, `Windows`, `\Windows`, `\\server\share\Windows`, `%SystemDrive%\Windows`} {
+		fake(t, &windowsDir, bad, nil)
+		if dir, err := DataDir(); err == nil {
+			t.Errorf("Windows directory %q gave %q", bad, dir)
+		}
+	}
+	fake(t, &windowsDir, "", errors.New("The parameter is incorrect."))
+	if _, err := DataDir(); err == nil || !strings.Contains(err.Error(), "parameter is incorrect") {
+		t.Fatalf("a failed Windows directory: %v", err)
+	}
+	fake(t, &windowsDir, `D:\Windows`, nil)
+	fake(t, &programDataValue, "", errors.New("The system cannot find the file specified."))
+	if _, err := DataDir(); err == nil || !strings.Contains(err.Error(), "cannot find") {
+		t.Fatalf("a failed read: %v", err)
 	}
 }
 
@@ -107,7 +156,7 @@ func TestSetupRejectsBadSID(t *testing.T) {
 	}
 }
 
-// TestLivePlacesReadOnly reads the real registry value and known folder and changes nothing. It runs
+// TestLivePlacesReadOnly reads the real registry values and Windows directory and changes nothing. It runs
 // with SPLITLANE_LIVE_READONLY=1.
 func TestLivePlacesReadOnly(t *testing.T) {
 	if os.Getenv("SPLITLANE_LIVE_READONLY") != "1" {
