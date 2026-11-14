@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -406,6 +407,39 @@ func TestDetailForAGroup(t *testing.T) {
 	}
 	if d := tr.Summary(protocol.KeyUnattributed).Detail; d == nil || d.Exes == nil || len(d.Exes) != 0 || d.Connections == nil {
 		t.Fatalf("a special tile has a detail too: %+v", d)
+	}
+}
+
+// Review F4-3: a torrent client or WSL can hold ~10k connections in one group. The detail lists the 500 busiest
+// of them, the busiest first, so the activity event stays far below the pipe's line limit (protocol.MaxLine:
+// past it the window drops the connection, and one that subscribes again loops); the group's entry still
+// counts all of them.
+func TestDetailListsTheBusiestConnections(t *testing.T) {
+	tr := New(testEnv)
+	none := layout(t)
+	const n = 20000
+	torrent := `C:\Apps\Torrent\torrent.exe`
+	conns := make([]Conn, 0, n)
+	for i := range n {
+		conns = append(conns, Conn{ID: fmt.Sprint(i), ProcessPath: torrent, Lane: protocol.LaneVPN,
+			Host: fmt.Sprintf("peer-%05d.swarm.example", i), Upload: int64(i), Download: int64(i)})
+	}
+	tr.Sample(start, nil, none, protocol.LaneVPN)
+	tr.Sample(start.Add(time.Second), conns, none, protocol.LaneVPN)
+	s := tr.Summary(`C:\Apps\Torrent\`)
+	if line := protocol.EncodeEvent(protocol.EventActivity, s); len(line) >= protocol.MaxLine/8 {
+		t.Fatalf("the activity event is %d bytes, the pipe's line limit %d", len(line), protocol.MaxLine)
+	}
+	if g := find(t, s, `C:\Apps\Torrent\`); g.Connections != n || g.Down != int64(n*(n-1)/2) {
+		t.Fatalf("the group counts every connection: %+v", g)
+	}
+	if s.Detail == nil || len(s.Detail.Connections) != 500 {
+		t.Fatalf("detail: %d connections", len(s.Detail.Connections))
+	}
+	for k, c := range s.Detail.Connections {
+		if i := n - 1 - k; c.Down != int64(i) || c.Host != fmt.Sprintf("peer-%05d.swarm.example", i) {
+			t.Fatalf("connection %d of the detail: %+v, want the busiest first", k, c)
+		}
 	}
 }
 

@@ -17,6 +17,11 @@ import (
 // keep is how long a group stays in the summary after its last connection (spec 8.4).
 const keep = 5 * time.Minute
 
+// maxDetailConns bounds the connections of a detail (review F4-3): a torrent client or WSL can hold ~10k of
+// them in one group, and the activity event must stay far below the pipe's line limit (protocol.MaxLine).
+// The group's entry in the summary still counts them all.
+const maxDetailConns = 500
+
 // gap: a sample that comes more than this after the one before is a baseline, as the first one is (review
 // F4-2): the counters moved for longer than its rates could tell.
 const gap = 2 * time.Second
@@ -375,7 +380,8 @@ func (t *Tracker) Summary(detailFor string) protocol.Activity {
 	return out
 }
 
-// detail lists the files seen in the group, sorted, and its connections now, the busiest first.
+// detail lists the files seen in the group, sorted, and its connections now, the busiest first: at most
+// maxDetailConns of them.
 func (g *group) detail() *protocol.ActivityDetail {
 	d := &protocol.ActivityDetail{Key: g.key, Exes: make([]string, 0, len(g.exes)),
 		Connections: append([]protocol.ActivityConn{}, g.conns...)}
@@ -393,5 +399,6 @@ func (g *group) detail() *protocol.ActivityDetail {
 		}
 		return a.Lane < b.Lane
 	})
+	d.Connections = d.Connections[:min(len(d.Connections), maxDetailConns)]
 	return d
 }
