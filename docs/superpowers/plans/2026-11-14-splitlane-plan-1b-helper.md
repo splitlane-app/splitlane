@@ -94,7 +94,8 @@
 |---|---|
 | Ядро не запустилось | `TestStaleAdapterIsRemovedBeforeStart` (2), `TestTunnelNotProvenIsRetriedOnce` (7) |
 | Сервер VPN недоступен, истечение входа | `TestExpiredLoginWhileOn`, `TestLoginWhileExpiredDisablesFirst` (9) |
-| Служебный процесс упал | `TestJournalReadErrorIsNotNoJournal` (1), `TestCrashDuringAllDirectWaitsForTheOperation` (6) |
+| Ядро упало во время работы | `TestCrashDuringAllDirectWaitsForTheOperation`, `TestCrashDuringLanesSetWaitsForTheOperation` (6) |
+| Служебный процесс упал | `TestJournalReadErrorIsNotNoJournal` (1), `TestDisableDuringStartupCancelsTheReenable` (6) |
 | Сон и пробуждение, смена сети | `TestNoRouteHoldsTheCore`, `TestChecksFailAfterNetworkChangeRestart`, `TestFlappingNetworkWaitsAgain`, `TestRelayAfterNetworkChangeRestarts` (10) |
 | Перезагрузка, отключение питания или сбой Windows | `TestIdleExitWithoutWindow`, `TestNoIdleExitWhenWasOn` (13); на ПК — задача 17 |
 
