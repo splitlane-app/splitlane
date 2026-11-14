@@ -1,17 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 
 	"splitlane/helper/internal/pipe"
@@ -89,6 +94,10 @@ type fakeHelper struct {
 	mu  sync.Mutex
 	srv *pipe.Server
 	st  protocol.State
+
+	silent   map[string]bool // methods that get no answer until release is closed
+	release  chan struct{}   // lets the silent methods return
+	stateErr *protocol.Error // state.get is rejected with it
 }
 
 func (f *fakeHelper) set(phase string) {
@@ -100,10 +109,17 @@ func (f *fakeHelper) set(phase string) {
 }
 
 func (f *fakeHelper) Handle(ctx context.Context, method string, params json.RawMessage) (any, *protocol.Error) {
+	if f.silent[method] {
+		<-f.release
+		return nil, protocol.Errorf(protocol.CodeInternal, "too late")
+	}
 	switch method {
 	case protocol.MethodStateGet:
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if f.stateErr != nil {
+			return nil, f.stateErr
+		}
 		return f.st, nil
 	case protocol.MethodEnable:
 		f.set(protocol.PhaseStarting)
@@ -133,11 +149,15 @@ func serveFake(name string) (*pipe.Server, error) {
 
 // serveState opens the pipe name with a fake helper in state st.
 func serveState(name string, st protocol.State) (*pipe.Server, error) {
+	return serveHelper(name, &fakeHelper{st: st})
+}
+
+// serveHelper opens the pipe name with the fake helper f behind it.
+func serveHelper(name string, f *fakeHelper) (*pipe.Server, error) {
 	u, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return nil, err
 	}
-	f := &fakeHelper{st: st}
 	srv, err := pipe.Listen(name, u.User.Sid.String(), f, nil)
 	if err != nil {
 		return nil, err
@@ -322,5 +342,284 @@ func TestErrorsAndRejections(t *testing.T) {
 	start = time.Now()
 	if code := run([]string{"frobnicate"}, &out); code != exitUsage || time.Since(start) > time.Second {
 		t.Fatalf("an unknown command is a usage error at once, without a pipe: %d", code)
+	}
+}
+
+// slashes writes a path with forward slashes.
+func slashes(p string) string { return strings.ReplaceAll(p, `\`, `/`) }
+
+// shortPath is the 8.3 name of an existing path; the path itself when the volume has no short names.
+func shortPath(p string) string {
+	u, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		return p
+	}
+	buf := make([]uint16, 1024)
+	n, err := windows.GetShortPathName(u, &buf[0], uint32(len(buf)))
+	if err != nil || int(n) > len(buf) {
+		return p
+	}
+	return windows.UTF16ToString(buf[:n])
+}
+
+// The guard of seed and reset-dev (Task 20 review): every spelling of a path below the product root is
+// refused, however it is written; a sibling folder that only shares a prefix is not the product root.
+// devFolder only reads: nothing is created.
+func TestDevFolder(t *testing.T) {
+	product := fakeProgramData(t)
+	root := programData()
+	drive := filepath.VolumeName(root)
+	refused := map[string]string{
+		"the root":                   root,
+		"the product folder":         product,
+		"below the product folder":   filepath.Join(product, "sub", "dir"),
+		"forward slashes":            slashes(product),
+		"dot dot segments":           root + `\other\..\SplitLane`,
+		"dot dot out and back in":    root + `\..\` + filepath.Base(root) + `\SplitLane`,
+		"another case":               strings.ToUpper(product),
+		"a name that starts with ..": root + `\..dev`,
+		"extended-length path":       `\\?\` + product,
+		"extended-length, slashes":   `//?/` + slashes(product),
+		"device path":                `\\.\` + product,
+		"administrative share":       `\\localhost\` + drive[:1] + `$` + product[2:],
+		"relative":                   `dev`,
+		"rooted, no drive":           `\dev`,
+		"relative to the drive":      drive + `dev`,
+		"empty":                      ``,
+	}
+	for what, dir := range refused {
+		if devFolder(dir) {
+			t.Errorf("%s: %q must be refused", what, dir)
+		}
+	}
+	for l := 'Z'; l >= 'D'; l-- { // nothing can be shown about a folder on a drive that is not there
+		d := string(l) + `:\`
+		if _, err := os.Stat(d); err == nil {
+			continue
+		}
+		if devFolder(d + `nothing\here`) {
+			t.Errorf("a folder on the missing drive %s must be refused", d)
+		}
+		break
+	}
+	other := t.TempDir()
+	allowed := map[string]string{
+		"a sibling that shares the prefix": root + `2\dev`,
+		"the sibling itself":               root + `2`,
+		"another temporary folder":         other,
+		"the same, forward slashes":        slashes(other),
+		"the same, dot dot segments":       other + `\x\..`,
+		"a folder that does not exist":     filepath.Join(other, "not", "yet"),
+	}
+	for what, dir := range allowed {
+		if !devFolder(dir) {
+			t.Errorf("%s: %q must be accepted", what, dir)
+		}
+	}
+	if _, err := os.Stat(product); err == nil {
+		t.Error("devFolder must not create the product folder")
+	}
+}
+
+// An 8.3 short name reaches the same folder (C:\PROGRA~3 is C:\ProgramData).
+func TestDevFolderShortNames(t *testing.T) {
+	product := fakeProgramData(t)
+	root := programData()
+	short := shortPath(root)
+	if strings.EqualFold(short, root) {
+		t.Skip("this volume has no 8.3 names")
+	}
+	for _, dir := range []string{short, filepath.Join(short, "SplitLane"), filepath.Join(short, "SplitLane", "x")} {
+		if devFolder(dir) {
+			t.Errorf("%q is the product root and must be refused (%s)", dir, product)
+		}
+	}
+}
+
+// A directory junction (or a symbolic link) to the product root is the product root.
+func TestDevFolderFollowsJunctions(t *testing.T) {
+	product := fakeProgramData(t)
+	if err := os.MkdirAll(product, 0o755); err != nil { // below the temporary root
+		t.Fatal(err)
+	}
+	links := t.TempDir()
+	junction := func(name, target string) string {
+		link := filepath.Join(links, name)
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+			t.Skipf("no junction in this environment: %v %s", err, out)
+		}
+		t.Cleanup(func() { os.Remove(link) })
+		return link
+	}
+	toProduct := junction("to-product", product)
+	for _, dir := range []string{toProduct, filepath.Join(toProduct, "sub"), slashes(filepath.Join(toProduct, "sub"))} {
+		if devFolder(dir) {
+			t.Errorf("%q leads to the product folder and must be refused", dir)
+		}
+	}
+	elsewhere := t.TempDir()
+	if away := junction("to-elsewhere", elsewhere); !devFolder(away) || !devFolder(filepath.Join(away, "sub")) {
+		t.Errorf("a junction to a folder outside the product root is fine: %q", away)
+	}
+	gone := filepath.Join(links, "gone")
+	if err := os.Mkdir(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dangling := junction("dangling", gone)
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	if devFolder(dangling) || devFolder(filepath.Join(dangling, "sub")) {
+		t.Errorf("a junction that cannot be resolved cannot be shown to lead elsewhere: %q", dangling)
+	}
+}
+
+// The same guard on the real known folder, as in production. Nothing is written: devFolder only reads.
+func TestDevFolderRealProgramData(t *testing.T) {
+	real := programData()
+	if !filepath.IsAbs(real) {
+		t.Fatalf("the known folder ProgramData: %q", real)
+	}
+	product := filepath.Join(real, "SplitLane")
+	refused := map[string]string{
+		"the root":             real,
+		"the product folder":   product,
+		"forward slashes":      slashes(product),
+		"dot dot segments":     filepath.VolumeName(real) + `\Windows\..\` + filepath.Base(real) + `\SplitLane`,
+		"extended-length path": `\\?\` + product,
+		"another case":         strings.ToLower(product),
+		"short name":           filepath.Join(shortPath(real), "SplitLane"),
+	}
+	for what, dir := range refused {
+		if devFolder(dir) {
+			t.Errorf("%s: %q must be refused", what, dir)
+		}
+	}
+	if !devFolder(real + `2\dev`) {
+		t.Errorf("%s2 is a sibling of ProgramData, not the product root", real)
+	}
+	if !devFolder(t.TempDir()) {
+		t.Error("a temporary folder is a development folder")
+	}
+}
+
+// The product folder is refused however it is spelled, by both commands that write there.
+func TestSeedAndResetDevRefuseEverySpelling(t *testing.T) {
+	product := fakeProgramData(t)
+	for _, dir := range []string{slashes(product), filepath.Dir(product) + `\x\..\SplitLane`, `\\?\` + product} {
+		var out strings.Builder
+		if code := run([]string{"seed", dir, "100.64.0.1"}, &out); code != exitUsage {
+			t.Errorf("seed %q: %d %s", dir, code, out.String())
+		}
+		if code := run([]string{"reset-dev", dir}, &out); code != exitUsage {
+			t.Errorf("reset-dev %q: %d %s", dir, code, out.String())
+		}
+		if _, err := os.Stat(product); err == nil {
+			t.Fatalf("%q: something was written into the product folder", dir)
+		}
+	}
+}
+
+// A helper that does not answer a method within -timeout is exit code 3 for every command that
+// sends one, and the output says so; it used to be a silent exit code 1.
+func TestSilentHelperIsATimeout(t *testing.T) {
+	name := testPipeName()
+	f := &fakeHelper{st: protocol.State{Phase: protocol.PhaseOff, Apps: []protocol.AppRule{}}, release: make(chan struct{}),
+		silent: map[string]bool{protocol.MethodSetExitNode: true, protocol.MethodClearSystemExitNode: true,
+			protocol.MethodDisable: true, protocol.MethodAllDirect: true, protocol.MethodLanesSet: true, "test.silent": true}}
+	srv, err := serveHelper(name, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(f.release) }) // first: the answers in flight can finish, Close does not wait
+	file := filepath.Join(t.TempDir(), "lanes.json")
+	os.WriteFile(file, []byte(`{"apps":[],"defaultLane":"vpn"}`), 0o644)
+	for _, args := range [][]string{{"exitnode", "100.64.0.1"}, {"clear-system-exit-node"}, {"disable"},
+		{"alldirect", "on"}, {"lanes", file}, {"call", "test.silent"}} {
+		var out strings.Builder
+		start := time.Now()
+		code := run(append([]string{"-pipe", name, "-timeout", "500ms"}, args...), &out)
+		if code != exitTimeout || !strings.Contains(out.String(), "SLCTL: TIMEOUT") {
+			t.Errorf("%v: no answer is a timeout, got %d\n%s", args, code, out.String())
+		}
+		if waited := time.Since(start); waited < 400*time.Millisecond || waited > 5*time.Second {
+			t.Errorf("%v: waited %s", args, waited)
+		}
+	}
+}
+
+// An error response to state.get is a failed command with its ERROR line, not a timeout.
+func TestRejectedStateIsAFailure(t *testing.T) {
+	name := testPipeName()
+	srv, err := serveHelper(name, &fakeHelper{st: protocol.State{Phase: protocol.PhaseOff, Apps: []protocol.AppRule{}},
+		stateErr: protocol.Errorf(protocol.CodeBadRequest, "state refused")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	for _, args := range [][]string{{"state"}, {"wait", "on"}, {"enable"}, {"alldirect", "on"}} {
+		var out strings.Builder
+		code := run(append([]string{"-pipe", name, "-timeout", "5s"}, args...), &out)
+		if code != exitFailed || !strings.Contains(out.String(), "ERROR bad_request state refused") ||
+			strings.Contains(out.String(), "TIMEOUT") {
+			t.Errorf("%v: %d\n%s", args, code, out.String())
+		}
+	}
+}
+
+// rawFake listens on a new pipe name and hands every client to serve: the helper is played by hand.
+func rawFake(t *testing.T, serve func(r *bufio.Reader, c net.Conn)) string {
+	t.Helper()
+	name := testPipeName()
+	l, err := winio.ListenPipe(name, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				serve(bufio.NewReader(c), c)
+			}()
+		}
+	}()
+	return name
+}
+
+// A helper that is silent from the first message (hello) is a timeout; one that closes the pipe is a
+// broken pipe with its own exit code, before or after hello and while a phase is awaited.
+func TestSilentOrDyingHelper(t *testing.T) {
+	hello := func(r *bufio.Reader, c net.Conn) {
+		r.ReadString('\n')
+		io.WriteString(c, `{"id":1,"result":{"protocol":1}}`+"\n")
+	}
+	cases := []struct {
+		what    string
+		serve   func(r *bufio.Reader, c net.Conn)
+		args    []string
+		timeout string
+		want    int
+		text    string
+	}{
+		{"silent at hello", func(r *bufio.Reader, c net.Conn) { io.Copy(io.Discard, c) }, []string{"state"}, "500ms", exitTimeout, "SLCTL: TIMEOUT"},
+		{"closes at hello", func(r *bufio.Reader, c net.Conn) { r.ReadString('\n') }, []string{"state"}, "5s", exitBroken, "SLCTL: the pipe is broken or closed"},
+		{"closes after hello", func(r *bufio.Reader, c net.Conn) { hello(r, c); r.ReadString('\n') }, []string{"state"}, "5s", exitBroken, "SLCTL: the pipe is broken or closed"},
+		{"closes after hello, wait", func(r *bufio.Reader, c net.Conn) { hello(r, c); r.ReadString('\n') }, []string{"wait", "on"}, "5s", exitBroken, "SLCTL: the pipe is broken or closed"},
+		{"closes before the answer", func(r *bufio.Reader, c net.Conn) { hello(r, c); r.ReadString('\n') }, []string{"exitnode", "100.64.0.1"}, "5s", exitBroken, "SLCTL: the pipe is broken or closed"},
+		{"silent after hello", func(r *bufio.Reader, c net.Conn) { hello(r, c); io.Copy(io.Discard, c) }, []string{"clear-system-exit-node"}, "500ms", exitTimeout, "SLCTL: TIMEOUT"},
+	}
+	for _, c := range cases {
+		name := rawFake(t, c.serve)
+		var out strings.Builder
+		code := run(append([]string{"-pipe", name, "-timeout", c.timeout}, c.args...), &out)
+		if code != c.want || !strings.Contains(out.String(), c.text) {
+			t.Errorf("%s: want %d with %q, got %d\n%s", c.what, c.want, c.text, code, out.String())
+		}
 	}
 }

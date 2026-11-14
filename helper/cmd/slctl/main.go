@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -42,15 +43,31 @@ const usage = `usage: slctl [-pipe NAME] [-timeout 150s] [-show-addresses] [-url
   expect-lanes EXE=LANE ...      run copies of curl.exe, compare their address with state.addresses
   seed DATA-DIR EXIT-NODE [HOSTNAME]   development only: state.json of a logged-in node
   reset-dev DATA-DIR             development only: clear "was on", the core identity and restore.json
-A pipe that does not exist yet is waited for, up to -timeout and at most 30 s.`
+A pipe that does not exist yet is waited for, up to -timeout and at most 30 s.
+exit codes: 0 ok, 1 error response or wrong final phase, 2 usage or no pipe, 3 timeout, 4 pipe broken or closed`
 
 // Exit codes.
 const (
 	exitOK      = 0
 	exitFailed  = 1 // an error response, a final phase error, a lane on the wrong address
-	exitUsage   = 2
-	exitTimeout = 3
+	exitUsage   = 2 // wrong arguments, no pipe
+	exitTimeout = 3 // no answer, or the awaited phase did not come, within -timeout
+	exitBroken  = 4 // the pipe broke or the helper closed it while a command was running
 )
+
+// exitCodeFor is the exit code of the error that ended a command, and the one place that decides on
+// 3: only a deadline is a timeout. An error response (a *protocol.Error, already printed by call)
+// is a failure; anything else is a pipe that broke or was closed.
+func exitCodeFor(err error) int {
+	var perr *protocol.Error
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return exitTimeout
+	case errors.As(err, &perr):
+		return exitFailed
+	}
+	return exitBroken
+}
 
 // pipeCommands are the commands that talk to the helper.
 var pipeCommands = []string{"state", "enable", "disable", "alldirect", "lanes", "exitnode", "clear-system-exit-node",
@@ -259,23 +276,43 @@ func run(args []string, out io.Writer) int {
 	}
 	defer conn.Close()
 	c := &client{conn: conn, r: bufio.NewReader(conn), out: out, show: *show, timeout: time.Now().Add(*timeout)}
-	if _, perr, err := c.call(protocol.MethodHello, protocol.HelloParams{Protocol: protocol.Version}); err != nil || perr != nil {
-		fmt.Fprintf(out, "SLCTL: hello failed: %v %v\n", err, perr)
-		return exitFailed
+	var code int
+	if _, perr, err := c.call(protocol.MethodHello, protocol.HelloParams{Protocol: protocol.Version}); err != nil {
+		code = c.fail(err)
+	} else if perr != nil {
+		c.print("SLCTL: hello failed: %v", perr) // call printed its ERROR line
+		code = exitFailed
+	} else {
+		code = command(c, cmd, rest, *url)
 	}
-	code := command(c, cmd, rest, *url)
-	if errors.Is(c.lastErr, os.ErrDeadlineExceeded) {
-		code = exitTimeout
+	if c.lastErr != nil { // whatever the command returned, the error that ended it decides on 3 and 4
+		code = exitCodeFor(c.lastErr)
 	}
 	return code
 }
 
-// finish prints the final line; a read error (a timeout) gives exit code 3.
+// fail records the error that ended the command, says what happened and returns its exit code.
+// An error response was printed by call already (its ERROR line).
+func (c *client) fail(err error) int {
+	c.lastErr = err
+	code := exitCodeFor(err)
+	last := ""
+	if c.state != nil {
+		last = ", last state " + summary(*c.state)
+	}
+	switch code {
+	case exitTimeout:
+		c.print("SLCTL: TIMEOUT, no answer or phase within -timeout (%v)%s", err, last)
+	case exitBroken:
+		c.print("SLCTL: the pipe is broken or closed (%v)%s", err, last)
+	}
+	return code
+}
+
+// finish prints the final line; an error ends the command through fail.
 func (c *client) finish(s protocol.State, err error, ok func(protocol.State) bool) int {
 	if err != nil {
-		c.lastErr = err
-		c.print("SLCTL: TIMEOUT or broken pipe (%v), last state %s", err, summary(s))
-		return exitTimeout
+		return c.fail(err)
 	}
 	c.print("SLCTL: %s", summary(s))
 	if !ok(s) {
@@ -286,8 +323,12 @@ func (c *client) finish(s protocol.State, err error, ok func(protocol.State) boo
 
 func command(c *client, cmd string, args []string, url string) int {
 	simple := func(method string, params any) int {
-		if _, perr, err := c.call(method, params); err != nil || perr != nil {
-			return exitFailed
+		_, perr, err := c.call(method, params)
+		switch {
+		case err != nil:
+			return c.fail(err)
+		case perr != nil:
+			return exitFailed // call printed its ERROR line
 		}
 		return exitOK
 	}
@@ -506,9 +547,83 @@ var programData = func() string {
 	return `C:\ProgramData`
 }
 
-// devFolder: an absolute folder outside %ProgramData% (the product's data folder is never touched).
+// isDrive says whether a volume name is a plain drive letter, "C:".
+func isDrive(vol string) bool { return len(vol) == 2 && vol[1] == ':' }
+
+// finalPath asks the system for the real name of an existing path: links and junctions followed, the
+// 8.3 short names and the case of every name as stored, the \\?\ prefix removed.
+func finalPath(p string) (string, error) {
+	name, err := windows.UTF16PtrFromString(p)
+	if err != nil {
+		return "", err
+	}
+	h, err := windows.CreateFile(name, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(h)
+	buf := make([]uint16, 512)
+	for {
+		n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
+		if err != nil {
+			return "", err
+		}
+		if int(n) < len(buf) {
+			return strings.TrimPrefix(windows.UTF16ToString(buf[:n]), `\\?\`), nil
+		}
+		buf = make([]uint16, n+1) // n is the size needed, with the terminating zero
+	}
+}
+
+// realPath is dir with "." and ".." folded and every part that exists resolved by the system (see
+// finalPath); the part that does not exist yet is appended as written. ok is false when nothing can be
+// said: an existing part cannot be resolved (a junction to nothing, no access), no part exists, or the
+// result is not on a drive letter. The caller then refuses the folder.
+func realPath(dir string) (path string, ok bool) {
+	p := filepath.Clean(dir)
+	var tail []string
+	for {
+		if real, err := finalPath(p); err == nil {
+			real = filepath.Join(append([]string{real}, tail...)...)
+			return real, isDrive(filepath.VolumeName(real))
+		}
+		if _, err := os.Lstat(p); !errors.Is(err, fs.ErrNotExist) {
+			return "", false // there, but not resolvable
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return "", false // not even the drive is there
+		}
+		tail = append([]string{filepath.Base(p)}, tail...)
+		p = parent
+	}
+}
+
+// devFolder: an absolute folder on a drive letter that is not the root of the product data
+// (%ProgramData%, the known folder) or below it. Whatever the spelling (forward slashes, ".." segments,
+// short 8.3 names, other case, links and junctions), the real folder is compared with the real root by
+// path elements; \\?\, \\.\ and UNC spellings are refused outright. It only reads.
 func devFolder(dir string) bool {
-	return filepath.IsAbs(dir) && !strings.HasPrefix(strings.ToLower(dir), strings.ToLower(programData()))
+	if !filepath.IsAbs(dir) || !isDrive(filepath.VolumeName(filepath.Clean(dir))) {
+		return false
+	}
+	real, ok := realPath(dir)
+	if !ok {
+		return false
+	}
+	root, ok := realPath(programData())
+	if !ok {
+		return false
+	}
+	if !strings.EqualFold(filepath.VolumeName(real), filepath.VolumeName(root)) {
+		return true // another drive
+	}
+	rel, err := filepath.Rel(root, real)
+	if err != nil {
+		return false
+	}
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) // outside, or an ancestor
 }
 
 // seed writes state.json for a node that is already logged in (development only, Plan 1A has no
@@ -520,7 +635,7 @@ func seed(args []string, out io.Writer) int {
 	}
 	dir := args[0]
 	if !devFolder(dir) {
-		fmt.Fprintln(out, "SLCTL: seed takes an absolute development folder, never %ProgramData%")
+		fmt.Fprintln(out, "SLCTL: seed takes an absolute development folder on a drive letter, never %ProgramData% or below it")
 		return exitUsage
 	}
 	if err := protocol.ValidateExitNodeID(args[1], nil); err != nil {
@@ -555,7 +670,7 @@ func resetDev(args []string, out io.Writer) int {
 	}
 	dir := args[0]
 	if !devFolder(dir) {
-		fmt.Fprintln(out, "SLCTL: reset-dev takes an absolute development folder, never %ProgramData%")
+		fmt.Fprintln(out, "SLCTL: reset-dev takes an absolute development folder on a drive letter, never %ProgramData% or below it")
 		return exitUsage
 	}
 	if _, err := os.Stat(filepath.Join(dir, "state.json")); err != nil {
