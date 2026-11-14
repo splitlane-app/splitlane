@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -164,7 +165,9 @@ func setAside(log string) error {
 	return fmt.Errorf("the previous core log cannot be set aside: %w", err)
 }
 
-// Find opens the core of an earlier run by pid, creation time and image path (5.7).
+// Find opens the core of an earlier run by pid, creation time and image path (5.7): the image must be
+// the one state.json names and the driver's own sing-box.exe, in the product the one in
+// %ProgramFiles%\SplitLane\.
 func (d *Driver) Find(id store.CoreIdentity) (engine.CoreProc, bool) {
 	if id.PID <= 0 {
 		return nil, false
@@ -174,7 +177,7 @@ func (d *Driver) Find(id store.CoreIdentity) (engine.CoreProc, bool) {
 		return nil, false
 	}
 	created, path, err := processInfo(h)
-	if err != nil || created != id.Created || !strings.EqualFold(path, id.Path) {
+	if err != nil || created != id.Created || !strings.EqualFold(path, id.Path) || !strings.EqualFold(path, filepath.Clean(d.Exe)) {
 		windows.CloseHandle(h)
 		return nil, false
 	}

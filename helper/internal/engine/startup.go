@@ -58,9 +58,40 @@ func (e *Engine) startup(ctx context.Context) {
 		e.mu.Unlock()
 		return
 	}
+	e.reenabled = true
 	e.setPhase(protocol.PhaseStarting, nil)
 	e.mu.Unlock()
 	e.runEnable(ctx, true)
+}
+
+// ExitIfIdle ends a helper that nothing needs (spec 4.3): the scheduled task starts it at logon, and
+// once the start-up of 5.7 is over (Start must have been called) it waits after on the engine's clock;
+// if no window has connected since the start and the phase is off, it takes the path of
+// helper.shutdown. It does nothing when "was on" made the start-up enable again, when a window has
+// connected (even one that went again), or in another phase: an error stays for the window to show.
+// It returns once it has decided.
+func (e *Engine) ExitIfIdle(after time.Duration) {
+	e.Wait()
+	<-e.d.Clock.After(after)
+	e.queue.Lock()
+	defer e.queue.Unlock()
+	e.mu.Lock()
+	why := ""
+	switch {
+	case e.windowSeen.Load():
+		why = "a window has connected"
+	case e.reenabled:
+		why = "the start-up enabled routing again"
+	case e.st.Phase != protocol.PhaseOff:
+		why = "phase " + e.st.Phase
+	}
+	e.mu.Unlock()
+	if why != "" {
+		e.d.Log("the helper stays: %s", why)
+		return
+	}
+	e.d.Log("no window within %s after the start-up and routing is off: exiting (spec 4.3)", after)
+	e.cmdShutdown(nil)
 }
 
 // sessionEndCall bounds the one restore command at the end of the session: Windows gives about 5 s.
