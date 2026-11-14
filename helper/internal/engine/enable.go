@@ -349,6 +349,10 @@ func (e *Engine) checkSwitch(ctx context.Context, r *coreRun, directIP string) *
 // operation is followed by a short stretch (the last probe, finishOn, the cleanup of the
 // operation) in which nobody looks, so the watcher waits for the operation and then acts on
 // the core if it is still the current one in a live phase: a crash is never dropped.
+// systemTailscale.clearExitNode is such an operation: when it ends, blocked may be over and the
+// user's exit node off for this run, in the clear's journal. So when the watcher restored nothing
+// at first, it reads blocked again after the wait and gives the exit node back now, before the
+// restart. After its own restore it does not read blocked again: the exit node is on because of it.
 func (e *Engine) watch(r *coreRun) {
 	<-r.proc.Done()
 	e.mu.Lock()
@@ -365,24 +369,35 @@ func (e *Engine) watch(r *coreRun) {
 	}
 	e.mu.Unlock()
 	if restore != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
-		if err := e.d.Sys.SetExitNode(ctx, restore.ExitNode, restore.AllowLAN); err != nil {
-			e.d.Log("immediate restore failed: %v", err)
-		}
-		cancel()
+		e.restoreAtOnce(*restore)
 	}
+	restored := restore != nil
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	waited := false
-	for e.op != nil && e.run == r && !r.stopping && !e.exiting && !e.ending {
-		o := e.op
+	for {
+		for e.op != nil && e.run == r && !r.stopping && !e.exiting && !e.ending {
+			o := e.op
+			e.mu.Unlock()
+			<-o.done
+			e.mu.Lock()
+			waited = true
+		}
+		if e.run != r || r.stopping || e.exiting || e.ending || (waited && !live(e.st.Phase)) {
+			return
+		}
+		if restored {
+			break
+		}
+		blocked = e.sysExitOn
+		if blocked || !r.cleared || e.journal == nil {
+			break
+		}
+		j := *e.journal
 		e.mu.Unlock()
-		<-o.done
+		e.restoreAtOnce(j)
 		e.mu.Lock()
-		waited = true
-	}
-	if e.run != r || r.stopping || e.exiting || e.ending || (waited && !live(e.st.Phase)) {
-		return
+		restored, waited = true, true // the lock was free: look again before acting
 	}
 	if blocked {
 		e.d.Log("core exited in phase blocked: no restart, the exit node the user selected stays")

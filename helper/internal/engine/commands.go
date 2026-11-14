@@ -382,25 +382,33 @@ func (e *Engine) cmdSetExitNode(params json.RawMessage) *protocol.Error {
 	return nil
 }
 
-// cmdClearSystemExitNode: in blocked the system exit node is switched off (5.6, 5.7).
+// cmdClearSystemExitNode: in blocked the system exit node is switched off (5.6, 5.7). The clear is
+// an operation: a crash of the core during it is handled by the watcher after it, never beside it
+// (the rollback of blocked would otherwise delete the journal the clear has just written while the
+// clear goes on to switch the exit node off). Another operation still in place is busy. The queue
+// stays taken until the operation is gone, so the next command never meets it.
 func (e *Engine) cmdClearSystemExitNode(params json.RawMessage) (bool, *protocol.Error) {
 	if err := noParams(params); err != nil {
 		return false, err
 	}
 	e.mu.Lock()
-	phase, exiting := e.st.Phase, e.exiting
-	e.mu.Unlock()
+	defer e.mu.Unlock()
+	phase := e.st.Phase
 	switch {
-	case exiting || phase == protocol.PhaseStarting || phase == protocol.PhaseStopping:
+	case e.exiting || phase == protocol.PhaseStarting || phase == protocol.PhaseStopping:
 		return false, busy()
 	case phase == protocol.PhaseOff || phase == protocol.PhaseError:
 		return false, wrongPhase(phase)
 	case phase != protocol.PhaseBlocked:
 		return false, nil
 	}
+	if !e.startOp("clear", e.clearSystemExitNode) {
+		return false, busy()
+	}
+	o := e.op
 	go func() {
-		defer e.queue.Unlock()
-		e.clearSystemExitNode(context.Background())
+		<-o.done
+		e.queue.Unlock()
 	}()
 	return true, nil
 }

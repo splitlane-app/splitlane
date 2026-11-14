@@ -2,7 +2,10 @@ package engine
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"splitlane/helper/internal/protocol"
 	"splitlane/helper/internal/store"
@@ -235,6 +238,236 @@ func TestClearSystemExitNodeJournalsUsersChoice(t *testing.T) {
 	}
 	if h.e.State().Phase != protocol.PhaseOn {
 		t.Fatalf("phase %s", h.e.State().Phase)
+	}
+}
+
+// gateSys is a tailscale.exe whose next call of one kind ("status", "allowLAN" or "clear") after
+// arm waits until the returned release is closed; every other call goes through at once.
+type gateSys struct {
+	*fakeSys
+	gmu     sync.Mutex
+	armed   string
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gateSys) arm(kind string) (entered, release chan struct{}) {
+	g.gmu.Lock()
+	defer g.gmu.Unlock()
+	g.armed, g.entered, g.release = kind, make(chan struct{}), make(chan struct{})
+	return g.entered, g.release
+}
+
+func (g *gateSys) hold(kind string) {
+	g.gmu.Lock()
+	hit := g.armed == kind
+	if hit {
+		g.armed = ""
+	}
+	entered, release := g.entered, g.release
+	g.gmu.Unlock()
+	if hit {
+		close(entered)
+		<-release
+	}
+}
+
+func (g *gateSys) Status(ctx context.Context) (SysStatus, error) {
+	g.hold("status")
+	return g.fakeSys.Status(ctx)
+}
+
+func (g *gateSys) AllowLAN(ctx context.Context) (bool, error) {
+	g.hold("allowLAN")
+	return g.fakeSys.AllowLAN(ctx)
+}
+
+func (g *gateSys) ClearExitNode(ctx context.Context) error {
+	g.hold("clear")
+	return g.fakeSys.ClearExitNode(ctx)
+}
+
+// blockedWithGate is phase blocked after a real enable, with a gate in front of tailscale.exe.
+func blockedWithGate(t *testing.T) (*harness, *gateSys) {
+	t.Helper()
+	h := newHarness(t)
+	g := &gateSys{fakeSys: h.sys}
+	h.e.d.Sys = g
+	h.load()
+	startEnable(h)
+	h.waitPhase(protocol.PhaseOn)
+	h.sys.set(func(s *fakeSys) { s.on, s.ip = true, "100.64.0.99" })
+	h.e.pollSystem(context.Background())
+	if h.e.State().Phase != protocol.PhaseBlocked {
+		t.Fatalf("setup: phase %s", h.e.State().Phase)
+	}
+	return h, g
+}
+
+// within polls cond for up to d of real time; false when it never held.
+func within(d time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(d)
+	for !cond() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return true
+}
+
+// clearAndWait sends systemTailscale.clearExitNode, waits until the gated call is entered, runs
+// inside, then lets the call go on and waits until the command gave the queue back.
+func clearAndWait(t *testing.T, h *harness, entered, release chan struct{}, inside func()) {
+	t.Helper()
+	var once sync.Once
+	open := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(open)
+	if err := call(h, protocol.MethodClearSystemExitNode, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the gated call never came: %v", h.rec.list())
+	}
+	inside()
+	open()
+	h.e.queue.Lock() // the clear is over
+	h.e.queue.Unlock()
+}
+
+// Final review, finding 1: systemTailscale.clearExitNode raced a crash of the core. The clear ran
+// beside the watcher, which took the rollback of phase blocked at once: its restore saw the user's
+// exit node still on, took it for the user's choice and deleted the journal the clear had just
+// written (or the clear wrote its journal after the rollback), and then the clear switched the exit
+// node off: error core_crashed, no core, the exit node off and nobody to give it back. The clear is
+// an operation now: the watcher waits for it, gives the exit node back from the clear's journal at
+// once and restarts the core. The crash comes inside each call of the clear: before its journal
+// (status, LAN flag) and while `tailscale set --exit-node=` is in flight.
+func TestClearExitNodeRacingACrash(t *testing.T) {
+	for _, kind := range []string{"status", "allowLAN", "clear"} {
+		t.Run(kind, func(t *testing.T) {
+			h, g := blockedWithGate(t)
+			entered, release := g.arm(kind)
+			mark := 0
+			clearAndWait(t, h, entered, release, func() {
+				mark = len(h.rec.list())
+				h.core.last().crash()
+				// Before the fix the rollback of blocked ran to its end right here, beside the clear.
+				within(300*time.Millisecond, func() bool { return h.e.State().Phase == protocol.PhaseError && h.idle() })
+			})
+			within(5*time.Second, func() bool {
+				p := h.e.State().Phase
+				return h.idle() && (p == protocol.PhaseError || (p == protocol.PhaseOn && h.rec.count("core:start") == 2))
+			})
+			s := h.e.State()
+			on, ip := systemExitNode(h)
+			h.e.mu.Lock()
+			inMemory := h.e.journal != nil
+			h.e.mu.Unlock()
+			alive := h.core.last().alive() && live(s.Phase)
+			if !on && !(h.store.hasJournal() && inMemory && alive) {
+				t.Fatalf("the exit node is off with nothing to give it back: phase %s, journal on disk %v, in memory %v, core runs %v; events %v",
+					s.Phase, h.store.hasJournal(), inMemory, alive, h.rec.list())
+			}
+			// The course of 5.5: the user's exit node back at once from the clear's journal, then the restart.
+			events := h.rec.list()[mark:]
+			set, restart := -1, -1
+			for i, ev := range events {
+				if ev == "sys:set 100.64.0.99 true" && set < 0 {
+					set = i
+				}
+				if strings.HasPrefix(ev, "core:start") && restart < 0 {
+					restart = i
+				}
+			}
+			if s.Phase != protocol.PhaseOn || h.rec.count("core:start") != 2 || set < 0 || restart < set {
+				t.Fatalf("restore at once, then the restart to on: phase %s, events after the crash %v", s.Phase, events)
+			}
+			if j, _ := h.store.LoadJournal(); j == nil || j.ExitNode != "100.64.0.99" || on || ip != "100.64.0.99" {
+				t.Fatalf("the restarted core keeps the user's exit node in the journal: %+v, on=%v ip=%s", j, on, ip)
+			}
+		})
+	}
+}
+
+// Finding 1, the other side: the run the clear started with is gone before the exit node is off
+// (here the Windows session ends, which leaves the user's exit node as it is in blocked, 5.4, 5.7).
+// No watcher and no teardown will give it back, so the clear sets it again at once.
+func TestClearExitNodeForAGoneCoreSetsItAgain(t *testing.T) {
+	h, g := blockedWithGate(t)
+	entered, release := g.arm("clear")
+	clearAndWait(t, h, entered, release, h.e.SessionEnding)
+	h.e.Wait()
+	on, ip := systemExitNode(h)
+	if !on || ip != "100.64.0.99" || h.rec.count("sys:set 100.64.0.99 true") != 1 {
+		t.Fatalf("the user's exit node must be on again: on=%v ip=%s, events %v", on, ip, h.rec.list())
+	}
+}
+
+// deadlineSys records the deadline of each call of tailscale.exe; status and the LAN flag take a moment.
+type deadlineSys struct {
+	*fakeSys
+	dmu       sync.Mutex
+	deadlines map[string]time.Time
+}
+
+func (d *deadlineSys) note(kind string, ctx context.Context) {
+	dl, _ := ctx.Deadline()
+	d.dmu.Lock()
+	defer d.dmu.Unlock()
+	d.deadlines[kind] = dl
+}
+
+func (d *deadlineSys) Status(ctx context.Context) (SysStatus, error) {
+	d.note("status", ctx)
+	time.Sleep(5 * time.Millisecond)
+	return d.fakeSys.Status(ctx)
+}
+
+func (d *deadlineSys) AllowLAN(ctx context.Context) (bool, error) {
+	d.note("allowLAN", ctx)
+	time.Sleep(5 * time.Millisecond)
+	return d.fakeSys.AllowLAN(ctx)
+}
+
+func (d *deadlineSys) ClearExitNode(ctx context.Context) error {
+	d.note("clear", ctx)
+	return d.fakeSys.ClearExitNode(ctx)
+}
+
+// Finding 1: each call of tailscale.exe in the clear has its own callTimeout; a slow status does
+// not eat the time of `tailscale set --exit-node=`.
+func TestClearExitNodeCallsHaveTheirOwnTimeout(t *testing.T) {
+	h := newHarness(t)
+	h.running()
+	h.sys.set(func(s *fakeSys) { s.on, s.ip = true, "100.64.0.99" })
+	h.e.pollSystem(context.Background())
+	d := &deadlineSys{fakeSys: h.sys, deadlines: map[string]time.Time{}}
+	h.e.d.Sys = d
+	h.e.queue.Lock()
+	h.e.clearSystemExitNode(context.Background())
+	h.e.queue.Unlock()
+	s, a, c := d.deadlines["status"], d.deadlines["allowLAN"], d.deadlines["clear"]
+	if s.IsZero() || !a.After(s) || !c.After(a) {
+		t.Fatalf("one deadline per call: status %v, allowLAN %v, clear %v", s, a, c)
+	}
+}
+
+// Finding 1: the clear keeps the queue until its operation is gone, so the next command in the
+// queue never meets it (routing.disable would answer busy).
+func TestClearExitNodeThenDisable(t *testing.T) {
+	h, _ := blockedWithGate(t)
+	if err := call(h, protocol.MethodClearSystemExitNode, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := call(h, protocol.MethodDisable, nil); err != nil {
+		t.Fatalf("disable after the clear: %v", err)
+	}
+	h.waitPhase(protocol.PhaseOff)
+	if on, ip := systemExitNode(h); !on || ip != "100.64.0.99" || h.store.hasJournal() {
+		t.Fatalf("the user's exit node back, the journal gone: on=%v ip=%s %v", on, ip, h.rec.list())
 	}
 }
 

@@ -178,17 +178,27 @@ func (e *Engine) pollSystem(ctx context.Context) {
 	}
 }
 
-// clearSystemExitNode is systemTailscale.clearExitNode in phase blocked: the exit node the user
-// selected now goes into the journal (5.7), then it is switched off; the queue must be held.
+// clearSystemExitNode is systemTailscale.clearExitNode in phase blocked, run as an operation with
+// the queue held: the exit node the user selected now goes into the journal (5.7), then it is
+// switched off. Each call of tailscale.exe has its own time limit. The core of that moment is taken
+// first: once the exit node is off, that run counts as having switched it off (r.cleared), so its
+// watcher gives it back if the core fails (5.5). A run that is no longer the current one or no
+// longer live (the session ends, the core was stopped) has nobody left to give it back: the exit
+// node is set again from the journal at once.
 func (e *Engine) clearSystemExitNode(ctx context.Context) {
+	e.mu.Lock()
+	r := e.run
+	e.mu.Unlock()
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
-	defer cancel()
 	st, err := e.d.Sys.Status(cctx)
+	cancel()
 	if err != nil || !st.ExitNodeOn || st.ExitNodeIP == "" {
 		e.d.Log("clear system exit node: nothing selected (%v)", err)
 		return
 	}
+	cctx, cancel = context.WithTimeout(ctx, callTimeout)
 	allowLAN, err := e.d.Sys.AllowLAN(cctx)
+	cancel()
 	if err != nil {
 		e.d.Log("clear system exit node: LAN flag unknown: %v", err)
 		return
@@ -201,16 +211,37 @@ func (e *Engine) clearSystemExitNode(ctx context.Context) {
 	e.mu.Lock()
 	e.journal = &j
 	e.mu.Unlock()
-	if err := e.d.Sys.ClearExitNode(cctx); err != nil {
+	cctx, cancel = context.WithTimeout(ctx, callTimeout)
+	err = e.d.Sys.ClearExitNode(cctx)
+	cancel()
+	if err != nil {
 		e.d.Log("clear system exit node: %v", err)
 		return
 	}
 	e.flushDNS()
 	e.mu.Lock()
+	current := r != nil && e.run == r
+	if current {
+		r.cleared = true
+	}
+	if !current || r.stopping || !live(e.st.Phase) {
+		e.mu.Unlock()
+		e.d.Log("clear system exit node: the core is gone; the exit node is set again at once")
+		e.restoreAtOnce(j)
+		return
+	}
 	defer e.mu.Unlock()
 	e.st.SystemTailscale.ExitNodeOn = false
-	if live(e.st.Phase) && e.run != nil {
-		e.sysExitOn = false
-		e.refreshLive()
+	e.sysExitOn = false
+	e.refreshLive()
+}
+
+// restoreAtOnce gives the system exit node back from the journal with one call, without waiting
+// for a confirmation (5.5: the watcher does not wait for anything); 5.4 confirms it later.
+func (e *Engine) restoreAtOnce(j store.Journal) {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	if err := e.d.Sys.SetExitNode(ctx, j.ExitNode, j.AllowLAN); err != nil {
+		e.d.Log("immediate restore failed: %v", err)
 	}
 }

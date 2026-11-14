@@ -70,7 +70,8 @@ type coreRun struct {
 	cleared  bool // guarded by Engine.mu: this run has switched the system exit node off (step 6 of 5.3)
 }
 
-// op is the one background operation: enabling, disabling, a restart or the start-up.
+// op is the one background operation: enabling, disabling, a restart, the start-up or
+// systemTailscale.clearExitNode.
 type op struct {
 	kind   string
 	cancel context.CancelFunc
