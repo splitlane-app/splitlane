@@ -19503,10 +19503,10 @@ cd C:\code\router\helper; $env:Path = "$env:LOCALAPPDATA\Programs\go\bin;$env:Pa
 - [ ] **Step 7: Тесты, читающие систему, и тесты сценария**
 
 ```powershell
-cd C:\code\router\helper; $env:Path = "$env:LOCALAPPDATA\Programs\go\bin;$env:Path"; $env:CGO_ENABLED='0'; $env:SPLITLANE_CONSOLE_TEST='1'; go test -count=1 -v -run TestInterruptStopsTheCore ./internal/singbox/ | Select-String -Pattern '^(--- |ok|FAIL)'; $env:SPLITLANE_CONSOLE_TEST=''; $env:SPLITLANE_LIVE_READONLY='1'; go test -count=1 -v -run 'TestLive' ./internal/winhost/ | Select-String -CaseSensitive -Pattern 'LIVE |^(--- |ok|FAIL)'; $env:SPLITLANE_LIVE_READONLY=''; Set-Location C:\code\router; node --test scripts/scenario.test.mjs 2>&1 | Select-String -Pattern '^. (pass|fail) '
+cd C:\code\router\helper; $env:Path = "$env:LOCALAPPDATA\Programs\go\bin;$env:Path"; $env:CGO_ENABLED='0'; $env:SPLITLANE_CONSOLE_TEST='1'; go test -count=1 -v -run TestInterruptStopsTheCore ./internal/singbox/ | Select-String -Pattern '^(--- |ok|FAIL)'; $env:SPLITLANE_CONSOLE_TEST=''; $env:SPLITLANE_LIVE_READONLY='1'; go test -count=1 -v -run 'TestLive' ./internal/winhost/ ./internal/place/ | Select-String -CaseSensitive -Pattern 'LIVE |^(--- |ok|FAIL)'; $env:SPLITLANE_LIVE_READONLY=''; Set-Location C:\code\router; node --test scripts/scenario.test.mjs 2>&1 | Select-String -Pattern '^. (pass|fail) '
 ```
 
-Ожидается: `--- PASS: TestInterruptStopsTheCore`; строка `LIVE default route true, physical forwarding false, NRPT catch-all false, sing-box running false, adapter false`, строки `LIVE wintun ...` (устройство системного Tailscale `present=true`; устройство `SplitLane` — только если оно осталось, тогда `present=false`), `--- PASS` у `TestLiveReadOnly`, `TestLiveWintunListReadOnly`, `TestLiveRouteWatchReadOnly`, `TestLiveRouteIfaceReadOnly`; `pass 15`, `fail 0`. `physical forwarding true` или `NRPT catch-all true` — задачу 16 не начинать (как в плане 1A, задача 22, шаг 2).
+Ожидается: `--- PASS: TestInterruptStopsTheCore`; строка `LIVE default route true, physical forwarding false, NRPT catch-all false, sing-box running false, adapter false`, строки `LIVE wintun ...` (устройство системного Tailscale `present=true`; устройство `SplitLane` — только если оно осталось, тогда `present=false`), `--- PASS` у `TestLiveReadOnly`, `TestLiveWintunListReadOnly`, `TestLiveRouteWatchReadOnly`, `TestLiveRouteIfaceReadOnly`, `TestLiveDataDirIgnoresSystemDrive` (папка данных из реестра, а не из подложенного `SystemDrive`) и `TestLivePlacesReadOnly`; `pass 15`, `fail 0`. `physical forwarding true` или `NRPT catch-all true` — задачу 16 не начинать (как в плане 1A, задача 22, шаг 2).
 
 - [ ] **Step 8: Служебный процесс без прав администратора: фаза `off`, архив, активность**
 
@@ -19654,10 +19654,10 @@ $t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::Pa
 Ожидается `P1-READY`, `P1-RESULT: state=armed ...` и перед ним строка `SLCTL: phase=off ... backend=stopped ...`: подключение `slctl` запустило режим настройки, но его ядро ещё поднимается. `UAC-CANCELLED` — без согласия пользователя не повторять. Затем — ожидание узла режима настройки:
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $s = ''; for ($i = 0; $i -lt 15 -and $s -notmatch ' backend=(starting|running) '; $i++) { Start-Sleep -Seconds 2; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; $s
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $s = ''; for ($i = 0; $i -lt 30 -and $s -notmatch ' backend=(starting|running) '; $i++) { Start-Sleep -Seconds 2; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; $s
 ```
 
-Ожидается не позже чем через 30 секунд строка `SLCTL: phase=off ... backend=starting` или `running` `... exitNodes=<n>` с `n` больше нуля.
+Ожидается не позже чем через 60 секунд строка `SLCTL: phase=off ... backend=starting` или `running` `... exitNodes=<n>` с `n` больше нуля. Обычно узел поднимается за 2–3 секунды; запас — на окна, когда DNS сети не отвечает ядру до ~45 секунд (приложение A спецификации, проверки плана 1B): узел повторяет запрос каждые 10 секунд.
 
 - [ ] **Step 4: Включение, вид соединения и список exit node**
 
@@ -19683,7 +19683,7 @@ $t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::Pa
 . C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $e = & "$P1Bin\slctl.exe" export | Select-Object -Last 1; $e; $zip = ($e -replace '^SLCTL: export written: ', ''); Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [IO.Compression.ZipFile]::OpenRead($zip); "entries: $(($z.Entries | ForEach-Object { $_.FullName }) -join ',')"; $text = ($z.Entries | ForEach-Object { $r = New-Object IO.StreamReader($_.Open()); $r.ReadToEnd(); $r.Dispose() }) -join "`n"; $z.Dispose(); "login link inside: $($text -match 'login\.tailscale\.com/a/')"; "secret-looking keys inside: $($text -match '\"secret\"')"
 ```
 
-Ожидается `SLCTL: export written: C:\code\router\.dev\data\export\splitlane-diagnostics-...zip`, в `entries` — `logs/helper.log`, `logs/helper.log.prev` (журнал прошлого запуска: он откладывается при каждом старте), `logs/core.log` (и `logs/core.log.prev`, если есть), `state.json`, `meta.txt` и ничего больше; `login link inside: False`, `secret-looking keys inside: False`.
+Ожидается `SLCTL: export written: C:\code\router\.dev\data\export\splitlane-diagnostics-...zip`, в `entries` — `logs/helper.log`, `logs/helper.log.prev` (журнал прошлого запуска: он откладывается при каждом старте), `logs/core.log` (и `logs/core.log.prev`, если есть), `logs/core-setup.log` (журнал ядра режима настройки, шаг 3; и `logs/core-setup.log.prev`, если есть), `state.json`, `meta.txt` и ничего больше; `login link inside: False`, `secret-looking keys inside: False`.
 
 - [ ] **Step 7: Падение ядра: возврат системного exit node и удаление оставшегося устройства**
 
@@ -19850,10 +19850,10 @@ if (Get-Process -Name splitlane-helper, sing-box -ErrorAction SilentlyContinue) 
 - [ ] **Step 6: Сторож без служебного процесса и запуск задачи (нужен пользователь: UAC)**
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; Start-P1Guard -NoHelper; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; schtasks /run /tn "SplitLane Helper" | Out-Null; "schtasks exit=$LASTEXITCODE"; & "$P1Bin\slctl.exe" -timeout 60s state | Select-Object -Last 1; $s = ''; for ($i = 0; $i -lt 15 -and $s -notmatch ' backend=(starting|running) '; $i++) { Start-Sleep -Seconds 2; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; $s
+. C:\code\router\spike\plan1\p1lib.ps1; Start-P1Guard -NoHelper; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; schtasks /run /tn "SplitLane Helper" | Out-Null; "schtasks exit=$LASTEXITCODE"; & "$P1Bin\slctl.exe" -timeout 60s state | Select-Object -Last 1; $s = ''; for ($i = 0; $i -lt 30 -and $s -notmatch ' backend=(starting|running) '; $i++) { Start-Sleep -Seconds 2; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; $s
 ```
 
-Ожидается `P1-RESULT: state=armed ...`, `schtasks exit=0`, `SLCTL: phase=off ... backend=stopped ...` и не позже чем через 30 секунд `SLCTL: phase=off ... backend=starting` или `running` `... exitNodes=<n>` (окно — здесь `slctl` — подключилось, вход сохранён, служебный процесс запустил режим настройки). Путь служебного процесса не читается из обычной оболочки (процесс с повышенными правами), но режим продукта сам отказывается работать не из `C:\Program Files\SplitLane\splitlane-helper.exe` (задача 13): ответ канала это и подтверждает. Задача запущена из процесса без прав администратора без UAC (проверка (е)).
+Ожидается `P1-RESULT: state=armed ...`, `schtasks exit=0`, `SLCTL: phase=off ... backend=stopped ...` и не позже чем через 60 секунд `SLCTL: phase=off ... backend=starting` или `running` `... exitNodes=<n>` (окно — здесь `slctl` — подключилось, вход сохранён, служебный процесс запустил режим настройки; запас по времени — как в шаге 3 задачи 16). Путь служебного процесса не читается из обычной оболочки (процесс с повышенными правами), но режим продукта сам отказывается работать не из `C:\Program Files\SplitLane\splitlane-helper.exe` (задача 13): ответ канала это и подтверждает. Задача запущена из процесса без прав администратора без UAC (проверка (е)).
 
 - [ ] **Step 7: Включение и выключение установленным продуктом**
 
