@@ -117,6 +117,12 @@
     "rules": [
       {
         "action": "reject",
+        "inbound": [
+          "vpn"
+        ]
+      },
+      {
+        "action": "reject",
         "ip_version": 6
       },
       {

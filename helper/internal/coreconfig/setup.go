@@ -20,7 +20,9 @@ type SetupOptions struct {
 // route.default_domain_resolver and the API service. There is no adapter and no
 // route.auto_detect_interface: without an adapter with strict_route the block of the system
 // Tailscale would not let the core out through the physical adapter, so the node reaches the
-// control server by the ordinary route of the system. No probes and no Clash API either.
+// control server by the ordinary route of the system. No probes and no Clash API either. The one
+// route rule is rule 0 of spec 6.2: without it the default outbound direct would carry a tailnet
+// peer's flow to 127.0.0.1 of the PC.
 func BuildSetup(o SetupOptions) ([]byte, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
@@ -40,7 +42,7 @@ func BuildSetup(o SetupOptions) ([]byte, error) {
 			"hostname":        o.Hostname,
 		}},
 		"outbounds": []any{obj{"type": "direct", "tag": TagDirect}},
-		"route":     obj{"default_domain_resolver": "dns-local"},
+		"route":     obj{"rules": []any{rejectNodeInbound()}, "default_domain_resolver": "dns-local"},
 		"services": []any{obj{
 			"type": "api", "tag": "api", "listen": "127.0.0.1", "listen_port": o.APIPort, "secret": o.APISecret,
 		}},

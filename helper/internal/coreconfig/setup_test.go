@@ -58,6 +58,11 @@ func TestSetupConfigHasNoAdapter(t *testing.T) {
 	if route["default_domain_resolver"] != "dns-local" {
 		t.Fatalf("route %v", route)
 	}
+	// rule 0 of spec 6.2 is the only rule: without it the default outbound direct would carry a
+	// tailnet peer's flow to 127.0.0.1 of the PC
+	if rules, _ := route["rules"].([]any); len(rules) != 1 || firstRule(t, b) != wantNodeInboundRule {
+		t.Fatalf("route.rules %v, want only %s", route["rules"], wantNodeInboundRule)
+	}
 	node := c["endpoints"].([]any)[0].(map[string]any)
 	if _, ok := node["exit_node"]; ok || node["type"] != "tailscale" || node["tag"] != TagVPN {
 		t.Fatalf("node %v", node)

@@ -27,7 +27,15 @@
     }
   ],
   "route": {
-    "default_domain_resolver": "dns-local"
+    "default_domain_resolver": "dns-local",
+    "rules": [
+      {
+        "action": "reject",
+        "inbound": [
+          "vpn"
+        ]
+      }
+    ]
   },
   "services": [
     {

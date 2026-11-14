@@ -108,6 +108,7 @@ func anyString(v any) string {
 func TestRuleOrderOfSpec62(t *testing.T) {
 	b, _ := Build(testOptions(`C:\ProgramData\SplitLane`))
 	want := []string{
+		"inbound=vpn>reject",
 		"ip_version>reject",
 		"inbound=probe-vpn>vpnroute", "inbound=probe-direct>directroute",
 		"port>hijack-dns",
@@ -121,6 +122,49 @@ func TestRuleOrderOfSpec62(t *testing.T) {
 	}
 	if got := summary(t, b); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("rule order:\n%v\nwant\n%v", got, want)
+	}
+}
+
+// wantNodeInboundRule is rule 0 of spec 6.2 as compact JSON: the flows a tailnet peer opens to the
+// node's own address come with the inbound "vpn" and the destination 127.0.0.1 (rejectNodeInbound).
+const wantNodeInboundRule = `{"action":"reject","inbound":["vpn"]}`
+
+// firstRule is route.rules[0] of a config as compact JSON, "" when there are no rules.
+func firstRule(t *testing.T, config []byte) string {
+	t.Helper()
+	var c struct {
+		Route struct {
+			Rules []json.RawMessage `json:"rules"`
+		} `json:"route"`
+	}
+	if err := json.Unmarshal(config, &c); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Route.Rules) == 0 {
+		return ""
+	}
+	var b bytes.Buffer
+	if err := json.Compact(&b, c.Route.Rules[0]); err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
+}
+
+// Spec 6.2 rule 0: in every mode, with or without the development pin, the flows from tailnet
+// peers are rejected before any rule could route them (rule 7 would send 127.0.0.1 direct).
+func TestNodeInboundRejectedFirst(t *testing.T) {
+	for _, mode := range Modes {
+		for _, pin := range []bool{false, true} {
+			o := testOptions(`C:\ProgramData\SplitLane`)
+			o.Mode, o.DevPin = mode, pin
+			b, err := Build(o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := firstRule(t, b); got != wantNodeInboundRule {
+				t.Errorf("mode %s pin %v: the first rule is %s, want %s", mode, pin, got, wantNodeInboundRule)
+			}
+		}
 	}
 }
 

@@ -149,6 +149,17 @@ func route(outbound string, match obj) obj {
 	return match
 }
 
+// rejectNodeInbound is rule 0 of spec 6.2, first in both configs. The embedded node hands the
+// router every flow that a tailnet peer opens to the node's own address, with the inbound TagVPN
+// and the destination rewritten to 127.0.0.1 (sing-box 1.14.4, protocol/tailscale/endpoint.go,
+// NewConnectionEx and NewPacketConnectionEx); routed, it would reach the PC's localhost-only
+// services, the API service among them (spec 11). The node's own traffic (control server, DERP,
+// disco) and the flows the helper uses (the probes, the adapter, the API service) never come from
+// that inbound.
+func rejectNodeInbound() obj {
+	return obj{"inbound": []string{TagVPN}, "action": "reject"}
+}
+
 // Build returns the config as indented JSON (UTF-8 without BOM, keys sorted).
 func Build(o Options) ([]byte, error) {
 	if err := o.validate(); err != nil {
@@ -164,6 +175,7 @@ func Build(o Options) ([]byte, error) {
 		tsDir = `C:\Program Files\Tailscale`
 	}
 	routeRules := []any{
+		rejectNodeInbound(),
 		obj{"ip_version": 6, "action": "reject"},
 		route(TagVPN, obj{"inbound": []string{TagProbeVPN}}),
 		route(TagDirect, obj{"inbound": []string{TagProbeDirect}}),
