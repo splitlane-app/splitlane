@@ -261,7 +261,9 @@ type fakeCore struct {
 	leftover  *fakeProc
 	clash     *fakeClash
 	onStart   func(p *fakeProc)
-	opts      CoreOptions // of the last BuildConfig
+	opts      CoreOptions  // of the last BuildConfig
+	setupOpts SetupOptions // of the last BuildSetupConfig
+	node      *fakeNode    // the API service of every run
 }
 
 func (c *fakeCore) BuildConfig(o CoreOptions) ([]byte, error) {
@@ -358,6 +360,83 @@ func (c *fakeCore) appendLog(line string) {
 }
 
 func (c *fakeCore) Clash(port int, secret string) ClashAPI { return c.clash }
+
+func (c *fakeCore) BuildSetupConfig(o SetupOptions) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rec.add("core:setupconfig")
+	c.setupOpts = o
+	return json.Marshal(o)
+}
+
+func (c *fakeCore) Node(port int, secret string) NodeAPI { return c.node }
+
+// fakeNode is the API service of the core; all runs share it (h.core.node). By default the node
+// is logged in and running, with its address, the harness's exit node in the list and a direct
+// path. A logout that succeeds leaves it at needs_login without a link and without an address.
+type fakeNode struct {
+	mu      sync.Mutex
+	rec     *recorder
+	state   NodeState
+	nodes   []protocol.ExitNode
+	path    string
+	err     error // every call fails with it
+	logouts int
+}
+
+func newFakeNode(rec *recorder) *fakeNode {
+	return &fakeNode{
+		rec:   rec,
+		state: NodeState{Backend: protocol.BackendRunning, HasAddress: true},
+		nodes: []protocol.ExitNode{{ID: exitNode, Name: "exit-a", Online: true}},
+		path:  protocol.PathDirect,
+	}
+}
+
+func (n *fakeNode) State(ctx context.Context) (NodeState, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.err != nil {
+		return NodeState{}, n.err
+	}
+	return n.state, nil
+}
+
+func (n *fakeNode) ExitNodes(ctx context.Context) ([]protocol.ExitNode, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.err != nil {
+		return nil, n.err
+	}
+	return append([]protocol.ExitNode{}, n.nodes...), nil
+}
+
+func (n *fakeNode) Path(ctx context.Context, exitNode string) (string, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.err != nil {
+		return "", n.err
+	}
+	return n.path, nil
+}
+
+func (n *fakeNode) Logout(ctx context.Context) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.rec.add("node:logout")
+	n.logouts++
+	if n.err != nil {
+		return n.err
+	}
+	n.state = NodeState{Backend: protocol.BackendNeedsLogin}
+	return nil
+}
+
+func (n *fakeNode) set(f func(n *fakeNode)) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	f(n)
+}
 
 func (c *fakeCore) last() *fakeProc {
 	c.mu.Lock()
@@ -643,7 +722,7 @@ func newHarness(t *testing.T) *harness {
 	h.store.state.LoggedIn = true
 	h.store.state.SelectedExitNode = exitNode
 	h.clash = &fakeClash{rec: h.rec, mode: "vpn", refuse: map[string]bool{}}
-	h.core = &fakeCore{rec: h.rec, clash: h.clash}
+	h.core = &fakeCore{rec: h.rec, clash: h.clash, node: newFakeNode(h.rec)}
 	h.sys = &fakeSys{rec: h.rec, store: h.store, installed: true, on: true, ip: exitNode, allowLAN: true}
 	h.probe = &fakeProbe{vpn: []ProbeResult{atVPN}, direct: []ProbeResult{atDirect}, self: []ProbeResult{atVPN}}
 	h.host = &fakeHost{rec: h.rec, core: h.core}

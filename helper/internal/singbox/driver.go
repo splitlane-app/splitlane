@@ -1,6 +1,7 @@
 // Package singbox is the one core driver of stage 1 (spec 4): the unmodified sing-box 1.14.4
 // behind engine.CoreDriver. It builds the config (package coreconfig) and the lane files (package
-// rules), names the modes, runs the processes, reads the log and talks to the Clash API (5.3–5.5).
+// rules), names the modes, runs the processes, reads the log, talks to the Clash API (5.3–5.5) and
+// to the API service (spec 7), and builds the config of the setup mode.
 package singbox
 
 import (
@@ -225,6 +226,18 @@ func (d *Driver) LogFrom(offset int64) string {
 // Clash returns the Clash API client of the run that listens on port with secret.
 func (d *Driver) Clash(port int, secret string) engine.ClashAPI {
 	return NewClash(fmt.Sprintf("http://127.0.0.1:%d", port), secret)
+}
+
+// BuildSetupConfig is the config of the setup mode (spec 7), with the files of the driver's data folder.
+func (d *Driver) BuildSetupConfig(o engine.SetupOptions) ([]byte, error) {
+	return coreconfig.BuildSetup(coreconfig.SetupOptions{
+		DataDir: d.DataDir, Hostname: o.Hostname, APIPort: o.APIPort, APISecret: o.APISecret,
+	})
+}
+
+// Node returns the client of the API service of the run that listens on port with secret.
+func (d *Driver) Node(port int, secret string) engine.NodeAPI {
+	return NewNode(d.Exe, port, secret)
 }
 
 type process struct {
