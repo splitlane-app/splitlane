@@ -139,6 +139,25 @@ func TestChecksFailAfterNetworkChangeRestart(t *testing.T) {
 	restartedAfter(t, h, old, mark, logChecksFailed)
 }
 
+// The network is there when probe-vpn answers, also while probe-direct does not: a core whose direct lane
+// and path through the adapter fail after a network change, while probe-vpn works, is restarted at 60 s
+// like any other core whose checks do not pass. Only a round in which neither probe answers finds no
+// network and starts the 60 s again.
+func TestDeadDirectLaneAfterChangeRestarts(t *testing.T) {
+	h := netOn(t)
+	healthyCores(h)
+	old := h.core.last()
+	mark := len(h.rec.list())
+	h.probe.script([]ProbeResult{atVPN}, []ProbeResult{noAnswer}, []ProbeResult{noAnswer})
+	h.e.NetworkChanged("route")
+	ticks(h, 5)
+	if h.e.State().Phase != protocol.PhaseOn || h.rec.count("core:start") != 1 {
+		t.Fatalf("within 60 s of the network nothing happens: %v", h.rec.list()[mark:])
+	}
+	ticks(h, 1)
+	restartedAfter(t, h, old, mark, logChecksFailed)
+}
+
 // Review Focus 2: the network goes again during the 60 s of the wait. While there is no default route
 // nothing happens, however long (probe-direct answers here, so that only the missing route holds the
 // core); the 60 s start again with the round that finds the route back.

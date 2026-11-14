@@ -132,8 +132,9 @@ func (e *Engine) checkHealth(ctx context.Context) {
 			return
 		}
 	}
-	// A change that came during the round starts its wait from the next round on.
-	if w != nil && e.net == w && e.netRound(w, route, passed, d.Reached, path) {
+	// A change that came during the round starts its wait from the next round on. The network is there
+	// when either probe answered: a silent probe-direct beside a working probe-vpn is a failed check.
+	if w != nil && e.net == w && e.netRound(w, route, passed, v.Reached || d.Reached, path) {
 		e.mu.Unlock()
 		return
 	}

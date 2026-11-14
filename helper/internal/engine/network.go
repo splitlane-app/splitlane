@@ -68,12 +68,12 @@ func (e *Engine) followsNetworkLocked() bool {
 
 // netRound is the part of a round of 5.5 that follows a network change (section 10); e.mu must be held.
 // route: the default route was there when the round began; passed: probe-vpn and the path through the
-// adapter passed (in blocked probe-vpn alone, 5.5); online: probe-direct answered; path: the path to the
-// exit node read in this round once the checks have passed. True when a restart began.
+// adapter passed (in blocked probe-vpn alone, 5.5); online: probe-vpn or probe-direct answered; path: the
+// path to the exit node read in this round once the checks have passed. True when a restart began.
 //  1. Without a default route nothing counts, however long; the 60 s start when it is back, again after
 //     each time it went.
-//  2. A round that passes within the 60 s ends the wait. A round in which probe-direct does not answer
-//     either finds no network (5.5): the 60 s start again. At 60 s the core is restarted: 5.4, then 5.3.
+//  2. A round that passes within the 60 s ends the wait. A round in which neither probe answers finds no
+//     network (5.5): the 60 s start again. At 60 s the core is restarted: 5.4, then 5.3.
 //  3. After the wait a path that was direct before the change is read every round (10 s): direct ends
 //     the sequence, relay at 60 s restarts the core: the embedded node does not get the direct path back
 //     by itself, a new core does (appendix A, checks of plan 1B).
@@ -112,7 +112,7 @@ func (e *Engine) netRound(w *netWatch, route, passed, online bool, path string) 
 		e.d.Log("the checks passed after the network change")
 		e.net = nil
 	case !online:
-		w.routeAt = now // probe-direct is silent too: no network (5.5), the 60 s start again
+		w.routeAt = now // both probes are silent: no network (5.5), the 60 s start again
 	case !now.Before(w.routeAt.Add(netWait)):
 		e.net = nil
 		return e.netRestartLocked("network changed and the checks did not pass in 60 s")
