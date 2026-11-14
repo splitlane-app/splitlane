@@ -68,6 +68,8 @@ func fakeAPICommand(args []string) {
 		os.Stdout.WriteString(statusRunning)
 	case "tailscale peer list":
 		os.Stdout.WriteString(peersWithAddress)
+	case "tailscale env": // not a command of the core: the environment the CLI got
+		os.Stdout.WriteString(strings.Join(os.Environ(), "\n"))
 	case "tailscale ping " + slowPeer:
 		// a ping without pongs lives long (up to 50 s); this one tells its pid and waits
 		if file := os.Getenv("SPLITLANE_FAKE_PID_FILE"); file != "" {
@@ -88,7 +90,8 @@ const slowPeer = "100.101.102.199"
 // through the real runner, with the test binary as the core, and stays there until it is killed.
 func fakeHelper() {
 	exe, _ := os.Executable()
-	NewNode(exe, 40004, testAPISecret).Path(context.Background(), slowPeer)
+	d := &Driver{Exe: exe, Environ: fakeEnviron("SPLITLANE_FAKE_PID_FILE=" + os.Getenv("SPLITLANE_FAKE_PID_FILE"))}
+	d.Node(40004, testAPISecret).Path(context.Background(), slowPeer)
 }
 
 // waitPID reads the pid that the slow ping wrote into file.
@@ -149,11 +152,11 @@ func TestRunnerPutsTheChildInTheJob(t *testing.T) {
 	n.Run = runIn(func(p *os.Process) error {
 		assigned = append(assigned, p.Pid)
 		return nil
-	})
+	}, d.environ)
 	if st, err := n.State(context.Background()); err != nil || st.Backend != protocol.BackendRunning || len(assigned) != 2 {
 		t.Fatalf("state %+v %v, children put into the job: %v, want both", st, err, assigned)
 	}
-	n.Run = runIn(func(p *os.Process) error { return fmt.Errorf("no job here") })
+	n.Run = runIn(func(p *os.Process) error { return fmt.Errorf("no job here") }, d.environ)
 	start := time.Now()
 	_, err := n.Path(context.Background(), slowPeer)
 	if err == nil || !strings.Contains(err.Error(), "the child cannot join the helper's job: no job here") {

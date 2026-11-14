@@ -17,8 +17,9 @@ import (
 	"splitlane/helper/internal/protocol"
 )
 
-// Runner runs exe with args, with env added to the helper's own environment, and returns the
-// standard output; a non-zero exit is an error that carries the standard error text.
+// Runner runs exe with args, with env added to the system's environment (never the user's, review
+// F13-2), and returns the standard output; a non-zero exit is an error that carries the standard
+// error text.
 type Runner func(ctx context.Context, env []string, exe string, args ...string) ([]byte, error)
 
 // Node is the client of the core's API service (spec 7; Plan 0, check (б)) through the core's own
@@ -35,20 +36,26 @@ type Node struct {
 var _ engine.NodeAPI = (*Node)(nil)
 
 // NewNode talks to the API service on 127.0.0.1:port with the run's secret, through exe without a
-// window; every CLI child runs in the helper's job and ends with the helper (job.go).
+// window; every CLI child runs in the helper's job and ends with the helper (job.go), with the
+// system's environment (env.go).
 func NewNode(exe string, port int, secret string) *Node {
-	return &Node{Exe: exe, URL: fmt.Sprintf("127.0.0.1:%d", port), Secret: secret, Run: runIn(inHelperJob)}
+	return &Node{Exe: exe, URL: fmt.Sprintf("127.0.0.1:%d", port), Secret: secret, Run: runIn(inHelperJob, systemEnviron)}
 }
 
 // colorCode is an ANSI color sequence: the core colors its FATAL line on stderr.
 var colorCode = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
-// runIn is the Runner that puts every child into a job by assign before it waits for it. A child
-// that cannot be put there is killed and the call fails: no CLI child runs outside the job.
-func runIn(assign func(*os.Process) error) Runner {
+// runIn is the Runner that starts every child with base plus env and puts it into a job by assign
+// before it waits for it. A child that cannot be put there is killed and the call fails: no CLI
+// child runs outside the job.
+func runIn(assign func(*os.Process) error, base func() ([]string, error)) Runner {
 	return func(ctx context.Context, env []string, exe string, args ...string) ([]byte, error) {
+		environ, err := base()
+		if err != nil {
+			return nil, fmt.Errorf("%s %s: the system environment: %w", filepath.Base(exe), strings.Join(args, " "), err)
+		}
 		cmd := exec.CommandContext(ctx, exe, args...)
-		cmd.Env = append(os.Environ(), env...)
+		cmd.Env = append(environ, env...)
 		cmd.SysProcAttr = hidden(windows.CREATE_NO_WINDOW)
 		var stdout bytes.Buffer
 		var stderr strings.Builder

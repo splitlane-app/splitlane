@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/windows"
+
 	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/engine"
 	"splitlane/helper/internal/rules"
@@ -40,6 +42,8 @@ func fakeCore(args []string) {
 	}
 	config, _ := os.ReadFile(args[2])
 	if args[0] == "check" {
+		// the environment the check got, for TestCoreAndCLIGetTheSystemEnvironment
+		os.WriteFile(args[2]+".env", []byte(strings.Join(os.Environ(), "\n")), 0o644)
 		if bytes.Contains(config, []byte("bad")) {
 			os.Stdout.WriteString("FATAL decode config: bad field\n")
 			os.Exit(1)
@@ -59,22 +63,33 @@ func fakeCore(args []string) {
 	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
+	for _, kv := range os.Environ() {
+		appendLine("ENV " + kv)
+	}
 	appendLine("INFO sing-box started (0.01s)")
 	<-sig
 	appendLine("INFO interrupted")
 	os.Exit(0)
 }
 
+// fakeEnviron is the system's environment (systemEnviron) plus the variable that makes the test
+// binary play the core, and extra: the children get no other variable of the test process.
+func fakeEnviron(extra ...string) func() ([]string, error) {
+	return func() ([]string, error) {
+		env, err := systemEnviron()
+		return append(append(env, "SPLITLANE_FAKE_CORE=1"), extra...), err
+	}
+}
+
 func fakeDriver(t *testing.T) (*Driver, string) {
 	t.Helper()
-	t.Setenv("SPLITLANE_FAKE_CORE", "1")
 	dir := t.TempDir()
 	p := coreconfig.PathsFor(dir)
 	config := filepath.Join(dir, "config.json")
 	b, _ := json.Marshal(map[string]any{"log": map[string]string{"output": filepath.ToSlash(p.CoreLog)}})
 	os.WriteFile(config, b, 0o644)
 	exe, _ := os.Executable()
-	return &Driver{Exe: exe, DataDir: dir}, config
+	return &Driver{Exe: exe, DataDir: dir, Environ: fakeEnviron()}, config
 }
 
 func waitLog(t *testing.T, d *Driver, text string) {
@@ -176,6 +191,67 @@ func TestCheckReportsTheCoreMessage(t *testing.T) {
 	if err := d.Check(context.Background(), config); err == nil || !strings.Contains(err.Error(), "bad field") {
 		t.Fatalf("got %v", err)
 	}
+}
+
+// Review F13-2: the core, its check and its CLI run elevated, so they get the system's own
+// environment and what they need (BOX_API_* for the CLI), never the user's: a TS_* knob, a proxy or
+// GODEBUG of the user would steer them. SystemRoot is the system's even when the helper's is not:
+// a task started as the user takes it from HKCU\Environment too.
+func TestCoreAndCLIGetTheSystemEnvironment(t *testing.T) {
+	d, config := fakeDriver(t)
+	t.Setenv("TS_DEBUG_PLANTED", "user")
+	t.Setenv("SystemRoot", `X:\planted`)
+	windowsDir, err := windows.GetSystemWindowsDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := func(who string, env []string) map[string]string {
+		t.Helper()
+		got := map[string]string{}
+		for _, kv := range env {
+			k, v, _ := strings.Cut(kv, "=")
+			got[strings.ToUpper(k)] = v
+		}
+		if _, ok := got["TS_DEBUG_PLANTED"]; ok {
+			t.Errorf("%s: the user's TS_DEBUG_PLANTED reached it", who)
+		}
+		if !strings.EqualFold(got["SYSTEMROOT"], windowsDir) || strings.Contains(strings.Join(env, "\n"), `X:\planted`) {
+			t.Errorf("%s: SystemRoot %q, want %q and no trace of the planted one", who, got["SYSTEMROOT"], windowsDir)
+		}
+		return got
+	}
+
+	out, err := d.Node(40004, testAPISecret).(*Node).tailscale(context.Background(), "env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := clean("the CLI", lines(out))
+	if cli["BOX_API_URL"] != "127.0.0.1:40004" || cli["BOX_API_SECRET"] != testAPISecret {
+		t.Errorf("the CLI lacks BOX_API_*: %q %q", cli["BOX_API_URL"], cli["BOX_API_SECRET"])
+	}
+
+	if err := d.Check(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	checked, err := os.ReadFile(config + ".env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean("the check", lines(checked))
+
+	proc, err := d.Start(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { proc.Kill(); <-proc.Done() })
+	waitLog(t, d, "sing-box started")
+	var core []string
+	for _, line := range lines([]byte(d.LogFrom(0))) {
+		if kv, ok := strings.CutPrefix(line, "ENV "); ok {
+			core = append(core, kv)
+		}
+	}
+	clean("the core", core)
 }
 
 // The engine's operations in sing-box terms (spec 4): the modes of 6.3, the log lines of 5.3 and

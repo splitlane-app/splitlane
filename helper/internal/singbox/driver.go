@@ -58,9 +58,19 @@ func VerifyCore(exe string) error {
 type Driver struct {
 	Exe     string
 	DataDir string
+	// Environ is the environment of the core, its check and its CLI: nil is the system's own
+	// (systemEnviron). Tests add the variable that makes the test binary play the core.
+	Environ func() ([]string, error)
 }
 
 var _ engine.CoreDriver = (*Driver)(nil)
+
+func (d *Driver) environ() ([]string, error) {
+	if d.Environ != nil {
+		return d.Environ()
+	}
+	return systemEnviron()
+}
 
 // BuildConfig is the config of spec 6 for the options, with the files of the driver's data folder.
 func (d *Driver) BuildConfig(o engine.CoreOptions) ([]byte, error) {
@@ -98,7 +108,12 @@ func hidden(flags uint32) *syscall.SysProcAttr {
 
 // Check runs `sing-box check`; the core reads the rule files already here (spec 12).
 func (d *Driver) Check(ctx context.Context, configPath string) error {
+	env, err := d.environ()
+	if err != nil {
+		return fmt.Errorf("sing-box check: the system environment: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, d.Exe, "check", "-c", configPath, "-D", d.DataDir)
+	cmd.Env = env
 	cmd.SysProcAttr = hidden(windows.CREATE_NO_WINDOW)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -112,8 +127,13 @@ func (d *Driver) Check(ctx context.Context, configPath string) error {
 }
 
 // Start sets the old log aside, then starts the core in a process group of its own, with a
-// hidden console and its output in core-stdout.log (spec 5.3 step 4, 5.4 step 2).
+// hidden console, the system's environment and its output in core-stdout.log (spec 5.3 step 4,
+// 5.4 step 2).
 func (d *Driver) Start(configPath string) (engine.CoreProc, error) {
+	env, err := d.environ()
+	if err != nil {
+		return nil, fmt.Errorf("the system environment for the core: %w", err)
+	}
 	p := coreconfig.PathsFor(d.DataDir)
 	if err := os.MkdirAll(p.LogsDir, 0o755); err != nil {
 		return nil, err
@@ -126,6 +146,7 @@ func (d *Driver) Start(configPath string) (engine.CoreProc, error) {
 		return nil, err
 	}
 	cmd := exec.Command(d.Exe, "run", "-c", configPath, "-D", d.DataDir)
+	cmd.Env = env
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.SysProcAttr = hidden(windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW)
 	if err := cmd.Start(); err != nil {
@@ -238,9 +259,12 @@ func (d *Driver) BuildSetupConfig(o engine.SetupOptions) ([]byte, error) {
 	})
 }
 
-// Node returns the client of the API service of the run that listens on port with secret.
+// Node returns the client of the API service of the run that listens on port with secret; its CLI
+// gets the driver's environment.
 func (d *Driver) Node(port int, secret string) engine.NodeAPI {
-	return NewNode(d.Exe, port, secret)
+	n := NewNode(d.Exe, port, secret)
+	n.Run = runIn(inHelperJob, d.environ)
+	return n
 }
 
 type process struct {
