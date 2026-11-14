@@ -71,9 +71,10 @@ type CoreEvents struct {
 }
 
 // CoreDriver hides the core (spec 4): build the config, apply the lanes (the rule files and the
-// mode), get and close connections (ClashAPI), the connector state (Events). Stage 1 has one
-// driver, for sing-box 1.14.4 (package singbox). The engine knows nothing of the core's config,
-// rule-file format, mode names or log lines: a second core (stage 3) is a second driver.
+// mode), get and close connections (ClashAPI), the connector state (Events, NodeAPI), the config
+// of the setup mode (spec 7). Stage 1 has one driver, for sing-box 1.14.4 (package singbox). The
+// engine knows nothing of the core's config, rule-file format, mode names or log lines: a second
+// core (stage 3) is a second driver.
 type CoreDriver interface {
 	// BuildConfig returns the config of one run (spec 6).
 	BuildConfig(o CoreOptions) ([]byte, error)
@@ -90,6 +91,10 @@ type CoreDriver interface {
 	LogSize() int64
 	Events(offset int64) CoreEvents
 	Clash(port int, secret string) ClashAPI
+	// BuildSetupConfig returns the config of the setup mode (spec 7): the node, local DNS, the API service; no adapter.
+	BuildSetupConfig(o SetupOptions) ([]byte, error)
+	// Node is the API service of a running core.
+	Node(port int, secret string) NodeAPI
 }
 
 // Conn is one connection of the core. Lane is the lane it runs on (the driver names its outbounds
@@ -107,6 +112,28 @@ type ClashAPI interface {
 	SetMode(ctx context.Context, mode string) error
 	Connections(ctx context.Context) ([]Conn, error)
 	CloseConn(ctx context.Context, id string) error
+}
+
+// SetupOptions are the values of one run of the setup mode (spec 7); the driver adds its paths.
+type SetupOptions struct {
+	Hostname  string
+	APIPort   int
+	APISecret string
+}
+
+// NodeState is what the API service says about the embedded node (spec 7, 5.2).
+type NodeState struct {
+	Backend    string // protocol.Backend*: stopped, needs_login, starting, running, needs_approval (never expired: the engine derives it)
+	AuthURL    string // the login link, "" when none is offered
+	HasAddress bool   // the node has its IPv4 address in the tailnet
+}
+
+// NodeAPI is the core's API service (spec 3, 7), one run of the core.
+type NodeAPI interface {
+	State(ctx context.Context) (NodeState, error)
+	ExitNodes(ctx context.Context) ([]protocol.ExitNode, error) // id = IPv4 address in the tailnet (spec 7)
+	Path(ctx context.Context, exitNode string) (string, error)  // protocol.PathDirect, protocol.PathRelay or "" when unknown
+	Logout(ctx context.Context) error
 }
 
 // SysStatus is what the system Tailscale client says (spec 5.6).

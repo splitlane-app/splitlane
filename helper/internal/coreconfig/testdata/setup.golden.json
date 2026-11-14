@@ -1,0 +1,41 @@
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "dns-local",
+        "type": "local"
+      }
+    ]
+  },
+  "endpoints": [
+    {
+      "hostname": "PC-splitlane",
+      "state_directory": "C:/ProgramData/SplitLane/tailscale",
+      "tag": "vpn",
+      "type": "tailscale"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "output": "C:/ProgramData/SplitLane/logs/core.log",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "default_domain_resolver": "dns-local"
+  },
+  "services": [
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 30004,
+      "secret": "fedcba9876543210fedcba9876543210",
+      "tag": "api",
+      "type": "api"
+    }
+  ]
+}
