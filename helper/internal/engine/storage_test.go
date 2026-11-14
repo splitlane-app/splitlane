@@ -133,6 +133,44 @@ func TestStateReadErrorIsNeverOverwritten(t *testing.T) {
 // core: it ran on without an owner, and the first save that could read the file wrote its identity
 // away. While the file cannot be read at all, the save that reads it at last keeps the identity it
 // holds as long as this run has started no core of its own: the next start still finds that core.
+// A routing.disable or a helper.shutdown that comes while the start-up reads state.json again (phase
+// stopping, "was on" not known yet) is kept: the file that then reads with "was on" set does not make the
+// start-up enable again (review of plan 1B, final, minor 2, and the deferred minor of the routing.disable).
+// The read is held while the command comes; for helper.shutdown its own save meets the file still
+// unreadable.
+func TestOffDuringStateReadIsKept(t *testing.T) {
+	for _, method := range []string{protocol.MethodDisable, protocol.MethodShutdown} {
+		t.Run(method, func(t *testing.T) {
+			h := newHarness(t)
+			h.store.state.WasOn = true
+			h.store.stateReadFails = 2 + stateRetries // every read of load and the first one of the start-up fail
+			entered, release := make(chan struct{}), make(chan struct{})
+			h.store.onLoad = func(n int) {
+				if n == 3+stateRetries { // the second read of the start-up; the command's own read goes on
+					close(entered)
+					<-release
+				}
+			}
+			h.e.Start()
+			waitClosed(t, entered, "the second read of the start-up")
+			h.store.mu.Lock()
+			h.store.stateReadFails = 1 // the save of the command still finds the file unreadable
+			h.store.mu.Unlock()
+			if err := call(h, method, nil); err != nil {
+				t.Fatal(err)
+			}
+			close(release)
+			h.e.Wait()
+			if h.rec.index("core:start") >= 0 || strings.Contains(strings.Join(h.phases(), ","), "starting") {
+				t.Fatalf("%s during the read: no enable again; phases %v, events %v", method, h.phases(), h.rec.list())
+			}
+			if h.store.saved().WasOn {
+				t.Fatalf("%s during the read: \"was on\" must end cleared in state.json", method)
+			}
+		})
+	}
+}
+
 func TestStartWithUnreadStateStopsTheLeftCore(t *testing.T) {
 	h := newHarness(t)
 	old := leftover(h)

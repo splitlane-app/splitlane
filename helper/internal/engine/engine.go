@@ -74,6 +74,7 @@ type Engine struct {
 	lastGone     atomic.Int64 // Clock time (UnixNano) at which the last window went (spec 7)
 	windowSeen   atomic.Bool  // a window has connected since the start: no exit without a window (4.3)
 	reenabled    bool         // the start-up of 5.7 enabled again because "was on" was set (4.3)
+	offAsked     bool         // routing.disable came while the start-up read state.json again: its "was on" does not count
 	ending       bool         // the Windows session ends (5.4)
 	exiting      bool         // helper.shutdown was accepted
 	skip         bool         // "disable without restore" (5.4)
@@ -246,6 +247,9 @@ func (e *Engine) readState(ctx context.Context) {
 				e.d.Log("state.json: %v", err)
 			}
 			e.d.Log("state.json can be read now: its settings are back")
+			if e.offAsked || e.exiting || e.ending {
+				s.WasOn = false // the off that came during the read is kept: no enable again
+			}
 			e.saved, e.stateErr = s, nil
 			e.publish()
 			return

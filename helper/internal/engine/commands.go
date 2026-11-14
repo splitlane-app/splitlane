@@ -145,6 +145,8 @@ func (e *Engine) cmdDisable(params json.RawMessage) *protocol.Error {
 		case !pending && e.reenablesLocked():
 			e.saved.WasOn = false
 			e.save()
+		case !pending && e.op != nil && e.op.kind == "startup" && e.stateErr != nil:
+			e.offAsked = true // "was on" is not known before state.json reads (readState)
 		case !pending && e.op != nil && e.op.kind == "restart":
 			e.saved.WasOn = false
 			e.save()
