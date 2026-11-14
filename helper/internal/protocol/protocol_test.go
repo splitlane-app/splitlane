@@ -121,6 +121,19 @@ func TestMaskAddresses(t *testing.T) {
 	if got := MaskAddresses(`{"vpn":"203.0.113.9","core":"1.14.4"}`); got != `{"vpn":"<ip>","core":"1.14.4"}` {
 		t.Fatalf("masked %q", got)
 	}
+	// The errors of the core's CLI name the peers next to their addresses (task 16 of plan 1B: a ping
+	// to the exit node without a reply), and tailnet names and IPv6 addresses: none reaches a log.
+	for in, want := range map[string]string{
+		"sing-box.exe api tailscale ping 100.64.0.7: exit status 1: FATAL[0005] no reply from my-server (100.64.0.7) after 5s": "sing-box.exe api tailscale ping <ip>: exit status 1: FATAL[0005] no reply from <peer> (<ip>) after 5s",
+		"pong from box-2 (100.64.0.9) via DERP(fra) in 31ms":                                                                   "pong from <peer> (<ip>) via DERP(fra) in 31ms",
+		"lookup my-server.tail1234.ts.net: no such host":                                                                       "lookup <name>.ts.net: no such host",
+		"dial fd7a:115c:a1e0::1:7 failed; next fd7a:115c:a1e0:ab12::42 is down":                                                "dial <ip6> failed; next <ip6> is down",
+		"exit status 1: FATAL[0000] context deadline exceeded (5s)":                                                            "exit status 1: FATAL[0000] context deadline exceeded (5s)",
+	} {
+		if got := MaskAddresses(in); got != want {
+			t.Errorf("masked %q\n  to %q\nwant %q", in, got, want)
+		}
+	}
 }
 
 func TestScannerTakesLongLines(t *testing.T) {

@@ -404,7 +404,19 @@ func line(v any) []byte {
 	return append(b, '\n')
 }
 
-var ipv4Re = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}\b`)
+var (
+	ipv4Re     = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}\b`)
+	tailnet6Re = regexp.MustCompile(`(?i)\bfd7a:115c:a1e0:[0-9a-f:]*[0-9a-f]`)
+	tsNameRe   = regexp.MustCompile(`(?i)\b[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net\b`)
+	peerRe     = regexp.MustCompile(`[^\s()]+ \(<ip>\)`) // the Tailscale CLI prints a peer as "name (address)"
+)
 
-// MaskAddresses replaces IPv4 addresses with <ip>: logs and console output never carry them.
-func MaskAddresses(s string) string { return ipv4Re.ReplaceAllString(s, "<ip>") }
+// MaskAddresses replaces IPv4 addresses with <ip>, tailnet IPv6 addresses with <ip6>, tailnet names
+// with <name>.ts.net and the name of a peer printed next to its address with <peer>: logs and console
+// output never carry them.
+func MaskAddresses(s string) string {
+	s = ipv4Re.ReplaceAllString(s, "<ip>")
+	s = tailnet6Re.ReplaceAllString(s, "<ip6>")
+	s = tsNameRe.ReplaceAllString(s, "<name>.ts.net")
+	return peerRe.ReplaceAllString(s, "<peer> (<ip>)")
+}
