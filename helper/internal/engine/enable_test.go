@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -219,6 +220,35 @@ func TestTunnelNotProven(t *testing.T) {
 	h.load()
 	startEnable(h)
 	wantError(t, h, protocol.ReasonSameAddress)
+}
+
+// Review of task 7, for the investigation of the core's DNS in task 16: a proof of 5.3 step 5 that
+// gives up logs which probe never answered with an address (probe-vpn, probe-direct or both; or that
+// both did, never in the same round) and how long it waited; once per core, so the retry logs its own.
+func TestTunnelNotProvenLogsTheSilentProbe(t *testing.T) {
+	for _, c := range []struct {
+		name        string
+		vpn, direct []ProbeResult
+		want        string
+		cores       int // how many of the two cores log want
+	}{
+		{"vpn silent", []ProbeResult{noAnswer}, []ProbeResult{atDirect}, "probe-vpn never answered", 2},
+		{"direct silent", []ProbeResult{atVPN}, []ProbeResult{noAnswer}, "probe-direct never answered", 2},
+		{"both silent", []ProbeResult{noAnswer}, []ProbeResult{noAnswer}, "probe-vpn and probe-direct never answered", 2},
+		{"never together", []ProbeResult{atVPN, noAnswer}, []ProbeResult{noAnswer, atDirect},
+			"probe-vpn and probe-direct answered, never in the same round", 1},
+	} {
+		h := newHarness(t)
+		logEvents(h)
+		h.probe.script(c.vpn, c.direct, nil)
+		h.load()
+		startEnable(h)
+		wantError(t, h, protocol.ReasonTunnelNotProven)
+		line := fmt.Sprintf("log:the tunnel proof gave up after %s: %s", proveWait, c.want)
+		if n := h.rec.count(line); n != c.cores {
+			t.Errorf("%s: want %q from %d cores, got %d: %v", c.name, line, c.cores, n, h.rec.list())
+		}
+	}
 }
 
 // probesPerCore scripts both probe inbounds for each core that starts: the core whose PID is a key

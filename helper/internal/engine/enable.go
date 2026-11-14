@@ -301,12 +301,16 @@ func (e *Engine) loginLost() {
 }
 
 // proveTunnel is step 5 of 5.3: probe-vpn answers and its address differs from probe-direct's.
-// It returns the address of the direct lane.
+// It returns the address of the direct lane. A proof that gives up logs which probe never answered
+// with an address and how long it waited (silentProbes): the core's DNS now and then gets no answers
+// for the first tens of seconds (appendix A), on one lane or on both.
 func (e *Engine) proveTunnel(ctx context.Context, r *coreRun) (string, *protocol.Reason) {
 	e.mu.Lock()
 	url := e.saved.ProbeURL
 	e.mu.Unlock()
-	deadline := e.d.Clock.Now().Add(proveWait)
+	began := e.d.Clock.Now()
+	deadline := began.Add(proveWait)
+	vpnSeen, directSeen := false, false
 	for {
 		if e.d.Core.Events(0).NeedLogin {
 			e.loginLost()
@@ -317,6 +321,7 @@ func (e *Engine) proveTunnel(ctx context.Context, r *coreRun) (string, *protocol
 		}
 		v := e.d.Probe.ViaProxy(ctx, url, r.ports.ProbeVPN)
 		d := e.d.Probe.ViaProxy(ctx, url, r.ports.ProbeDirect)
+		vpnSeen, directSeen = vpnSeen || v.IP != "", directSeen || d.IP != ""
 		if v.IP != "" && d.IP != "" {
 			if v.IP == d.IP {
 				return "", reason(protocol.ReasonSameAddress)
@@ -327,13 +332,27 @@ func (e *Engine) proveTunnel(ctx context.Context, r *coreRun) (string, *protocol
 			e.mu.Unlock()
 			return d.IP, nil
 		}
-		if !e.d.Clock.Now().Before(deadline) {
+		if now := e.d.Clock.Now(); !now.Before(deadline) {
+			e.d.Log("the tunnel proof gave up after %s: %s", now.Sub(began), silentProbes(vpnSeen, directSeen))
 			return "", reason(protocol.ReasonTunnelNotProven)
 		}
 		if !e.sleep(ctx, time.Second) {
 			return "", errCancelled
 		}
 	}
+}
+
+// silentProbes names the probes of 5.3 step 5 that never answered with an address during a proof.
+func silentProbes(vpn, direct bool) string {
+	switch {
+	case !vpn && !direct:
+		return "probe-vpn and probe-direct never answered"
+	case !vpn:
+		return "probe-vpn never answered"
+	case !direct:
+		return "probe-direct never answered"
+	}
+	return "probe-vpn and probe-direct answered, never in the same round"
 }
 
 // checkSwitch is step 8 of 5.3: two good answers in a row through the adapter. Two answers in a
