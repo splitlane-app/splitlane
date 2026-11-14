@@ -66,6 +66,23 @@ func TestEnableInOrder(t *testing.T) {
 	}
 }
 
+// The development flag --core-log-level reaches the config of the core (spec 6.1); without a level
+// in Settings the options carry none, and the driver writes info.
+func TestCoreLogLevelGoesToTheConfig(t *testing.T) {
+	h := enabled(t)
+	if o := h.core.options(); o.LogLevel != "" {
+		t.Fatalf("without a level in Settings: %q", o.LogLevel)
+	}
+	h = newHarness(t)
+	h.e.d.Settings.CoreLogLevel = "debug"
+	h.load()
+	startEnable(h)
+	h.waitPhase(protocol.PhaseOn)
+	if o := h.core.options(); o.LogLevel != "debug" {
+		t.Fatalf("level %q", o.LogLevel)
+	}
+}
+
 // Without an exit node in the system client (or without the client) nothing is switched or journaled.
 func TestEnableWithoutSystemExitNode(t *testing.T) {
 	for name, change := range map[string]func(s *fakeSys){
@@ -199,6 +216,119 @@ func TestTunnelNotProven(t *testing.T) {
 	h.load()
 	startEnable(h)
 	wantError(t, h, protocol.ReasonSameAddress)
+}
+
+// probesPerCore scripts both probe inbounds for each core that starts: the core whose PID is a key
+// of answers gets that pair (probe-vpn, probe-direct), every other core proves the tunnel.
+func probesPerCore(h *harness, answers map[int][2]ProbeResult) {
+	h.core.mu.Lock()
+	defer h.core.mu.Unlock()
+	h.core.onStart = func(p *fakeProc) {
+		a, ok := answers[p.id.PID]
+		if !ok {
+			a = [2]ProbeResult{atVPN, atDirect}
+		}
+		h.probe.script([]ProbeResult{a[0]}, []ProbeResult{a[1]}, nil)
+	}
+}
+
+// Appendix A (checks of plan 1B): the core's own DNS now and then gets no answers for the first
+// tens of seconds. A tunnel that is not proven within the 45 s of 5.3 step 5 gets one more core with
+// new ports, in phase starting; the system is not touched before that core has proven the tunnel.
+func TestTunnelNotProvenIsRetriedOnce(t *testing.T) {
+	h := newHarness(t)
+	logEvents(h)
+	probesPerCore(h, map[int][2]ProbeResult{1000: {noAnswer, noAnswer}})
+	onceOnState(h, func(s protocol.State) bool { return s.Addresses.VPN != nil }, func() { h.rec.add("test:proven") })
+	h.load()
+	before := h.clock.Now()
+	startEnable(h)
+	h.waitFor("the end of the enable", h.idle)
+	if s := h.e.State(); s.Phase != protocol.PhaseOn {
+		t.Fatalf("phase %s reason %+v, starts %d: %v", s.Phase, s.Reason, h.rec.count("core:start"), h.rec.list())
+	}
+	if n := h.rec.count("core:start"); n != 2 || h.rec.count("log:tunnel not proven; trying the core once more with new ports") != 1 {
+		t.Fatalf("one retry expected, starts %d: %v", n, h.rec.list())
+	}
+	if !inOrder(h, 0, "core:start 1000", "log:tunnel not proven", "core:interrupt 1000", "core:start 1001", "test:proven", "journal:save", "sys:clear") {
+		t.Fatalf("the first core stopped before the second, the system touched only after the proof: %v", h.rec.list())
+	}
+	if proven := h.rec.index("test:proven"); h.rec.index("sys:") < proven || h.rec.index("journal:") < proven || h.rec.index("sys:set") >= 0 {
+		t.Fatalf("nothing switched or journaled before the second proof: %v", h.rec.list())
+	}
+	if waited := h.clock.Now().Sub(before); waited < proveWait {
+		t.Fatalf("the first proof gave up after %s", waited)
+	}
+	if got := strings.Join(h.phases(), ","); got != "starting,on" {
+		t.Fatalf("phases %s", got)
+	}
+}
+
+// Two cores that do not prove the tunnel: the rollback of 5.4, error tunnel_not_proven, the system
+// untouched. With a core that exits before its start line first, the enable starts three cores, not more.
+func TestTunnelNotProvenTwiceRollsBack(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		early  int
+		starts int
+	}{{"two cores", 0, 2}, {"early exit first", 1, 3}} {
+		h := newHarness(t)
+		h.core.dieEarly = c.early
+		h.probe.script([]ProbeResult{noAnswer}, []ProbeResult{noAnswer}, nil)
+		h.load()
+		startEnable(h)
+		wantError(t, h, protocol.ReasonTunnelNotProven)
+		if n := h.rec.count("core:start"); n != c.starts {
+			t.Errorf("%s: starts %d, want %d: %v", c.name, n, c.starts, h.rec.list())
+		}
+		if h.rec.index("sys:") >= 0 || h.rec.index("journal:") >= 0 || h.core.anyAlive() {
+			t.Errorf("%s: system untouched, no core left: %v", c.name, h.rec.list())
+		}
+		if on, ip := systemExitNode(h); !on || ip != exitNode {
+			t.Errorf("%s: exit node on=%v ip=%s", c.name, on, ip)
+		}
+	}
+}
+
+// The retry is for tunnel_not_proven alone: same_address rolls back at once, even when a second
+// core would prove the tunnel, and also when the core of the retry gives it (no third core).
+func TestSameAddressIsNotRetried(t *testing.T) {
+	h := newHarness(t)
+	logEvents(h)
+	probesPerCore(h, map[int][2]ProbeResult{1000: {atDirect, atDirect}})
+	h.load()
+	startEnable(h)
+	wantError(t, h, protocol.ReasonSameAddress)
+	if n := h.rec.count("core:start"); n != 1 || h.rec.count("log:tunnel not proven") != 0 || h.rec.index("sys:") >= 0 {
+		t.Fatalf("same_address: one core, no retry, system untouched; starts %d: %v", n, h.rec.list())
+	}
+
+	h = newHarness(t)
+	probesPerCore(h, map[int][2]ProbeResult{1000: {noAnswer, noAnswer}, 1001: {atDirect, atDirect}})
+	h.load()
+	startEnable(h)
+	wantError(t, h, protocol.ReasonSameAddress)
+	if n := h.rec.count("core:start"); n != 2 || h.rec.index("sys:") >= 0 {
+		t.Fatalf("same_address of the retried core: two cores, system untouched; starts %d: %v", n, h.rec.list())
+	}
+}
+
+// The restarts of 5.5 run the same 5.3: a core of a restart that does not prove the tunnel gets one
+// more core within the same attempt, not a failed attempt.
+func TestRestartRetriesTheTunnelProof(t *testing.T) {
+	h := enabled(t)
+	logEvents(h)
+	probesPerCore(h, map[int][2]ProbeResult{1001: {noAnswer, noAnswer}})
+	h.core.last().crash()
+	h.waitFor("third core on", func() bool {
+		return h.rec.count("core:start") == 3 && h.e.State().Phase == protocol.PhaseOn && h.idle()
+	})
+	if h.rec.count("log:restart attempt failed") != 0 || h.rec.count("log:tunnel not proven") != 1 {
+		t.Fatalf("one restart attempt with a retried proof: %v", h.rec.list())
+	}
+	if got := strings.Join(h.phases(), ","); got != "starting,on,starting,on" {
+		t.Fatalf("phases %s", got)
+	}
 }
 
 // Section 10 row 3: the check after the switch fails: rollback 5.4 restores the exit node first.

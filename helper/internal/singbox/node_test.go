@@ -219,12 +219,12 @@ func TestNodeErrorIsReturned(t *testing.T) {
 // config, the API service of this run.
 func TestDriverSetupConfig(t *testing.T) {
 	d := &Driver{Exe: `C:\core\sing-box.exe`, DataDir: t.TempDir()}
-	b, err := d.BuildSetupConfig(engine.SetupOptions{Hostname: "pc-splitlane", APIPort: 40004, APISecret: testAPISecret})
+	b, err := d.BuildSetupConfig(engine.SetupOptions{Hostname: "pc-splitlane", APIPort: 40004, APISecret: testAPISecret, LogLevel: "debug"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := coreconfig.PathsFor(d.DataDir)
-	for _, want := range []string{`"output": "` + filepath.ToSlash(p.CoreLog) + `"`,
+	for _, want := range []string{`"output": "` + filepath.ToSlash(p.CoreLog) + `"`, `"level": "debug"`,
 		`"state_directory": "` + filepath.ToSlash(p.StateDir) + `"`, `"hostname": "pc-splitlane"`, `"listen_port": 40004`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("setup config lacks %s", want)

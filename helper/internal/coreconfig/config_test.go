@@ -147,6 +147,26 @@ func TestDevPinOnlyWhenAsked(t *testing.T) {
 	}
 }
 
+// Spec 6.1: the core log is written at level info; debug comes only from the development flag
+// --core-log-level. Any other level is refused, also the names the core itself would take.
+func TestLogLevel(t *testing.T) {
+	for _, c := range []struct{ level, want string }{{"", `"level": "info"`}, {"info", `"level": "info"`}, {"debug", `"level": "debug"`}} {
+		o := testOptions(`C:\ProgramData\SplitLane`)
+		o.LogLevel = c.level
+		b, err := Build(o)
+		if err != nil || !bytes.Contains(b, []byte(c.want)) {
+			t.Errorf("level %q: %v, want %s", c.level, err, c.want)
+		}
+	}
+	for _, level := range []string{"trace", "warn", "INFO"} {
+		o := testOptions(`C:\ProgramData\SplitLane`)
+		o.LogLevel = level
+		if _, err := Build(o); err == nil || !strings.Contains(err.Error(), "log level must be info or debug") {
+			t.Errorf("level %q: want an error, got %v", level, err)
+		}
+	}
+}
+
 func TestBuildRejectsBadOptions(t *testing.T) {
 	bad := []func(*Options){
 		func(o *Options) { o.Mode = "global" },

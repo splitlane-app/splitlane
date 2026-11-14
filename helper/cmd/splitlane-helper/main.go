@@ -45,11 +45,12 @@ const (
 const pipeTakenLabel = "the pipe already exists: another helper runs"
 
 type options struct {
-	dev     bool
-	dataDir string
-	core    string
-	pipe    string
-	devPin  bool
+	dev          bool
+	dataDir      string
+	core         string
+	pipe         string
+	devPin       bool
+	coreLogLevel string
 }
 
 func parse(args []string) (options, error) {
@@ -61,10 +62,17 @@ func parse(args []string) (options, error) {
 	fs.StringVar(&o.core, "core", "", "full path of sing-box.exe 1.14.4")
 	fs.StringVar(&o.pipe, "pipe", pipe.DefaultName, "pipe name")
 	fs.BoolVar(&o.devPin, "dev-pin", false, "development only: keep the AI assistant's programs on the VPN lane")
+	fs.StringVar(&o.coreLogLevel, "core-log-level", coreconfig.LogInfo, "development only: the core's log level, info or debug (spec 6.1)")
 	if err := fs.Parse(args); err != nil {
 		return o, err
 	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	switch {
+	case given["core-log-level"] && !o.dev:
+		return o, fmt.Errorf("--core-log-level needs --dev: the product always writes the core log at level info")
+	case o.coreLogLevel != coreconfig.LogInfo && o.coreLogLevel != coreconfig.LogDebug:
+		return o, fmt.Errorf("--core-log-level must be info or debug")
 	case !o.dev:
 		return o, fmt.Errorf("this build runs only with --dev")
 	case !filepath.IsAbs(o.dataDir) || !filepath.IsAbs(o.core):
@@ -100,7 +108,7 @@ func run(args []string) int {
 	defer logFile.Close()
 	logger := log.New(logFile, "", log.LstdFlags|log.Lmicroseconds)
 	logf := func(format string, a ...any) { logger.Printf(format, a...) }
-	logf("splitlane-helper %s starting, dev=%v dev-pin=%v", version, o.dev, o.devPin)
+	logf("splitlane-helper %s starting, dev=%v dev-pin=%v core-log-level=%s", version, o.dev, o.devPin, o.coreLogLevel)
 
 	if err := singbox.VerifyCore(o.core); err != nil {
 		logf("core refused: %v", err)
@@ -130,7 +138,7 @@ func run(args []string) int {
 		Host:  winhost.Host{},
 		Rules: winhost.RulesEnv(protected),
 		Settings: engine.Settings{HelperPath: helperPath, Hostname: host + "-splitlane",
-			DevPin: o.devPin, HelperVersion: version, CoreVersion: singbox.CoreVersion},
+			DevPin: o.devPin, HelperVersion: version, CoreVersion: singbox.CoreVersion, CoreLogLevel: o.coreLogLevel},
 		Log: logf,
 		OnState: func(s protocol.State) {
 			code := "-"

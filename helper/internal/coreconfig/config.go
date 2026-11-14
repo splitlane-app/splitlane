@@ -92,6 +92,25 @@ type Options struct {
 	ClashSecret  string
 	APISecret    string
 	DevPin       bool
+	LogLevel     string // "" or info (spec 6.1); debug only from the development flag --core-log-level
+}
+
+// Levels of the core log (spec 6.1): the product writes info; debug is for development only, to
+// collect evidence of a failure (appendix A: the core's own DNS without answers at its start).
+const (
+	LogInfo  = "info"
+	LogDebug = "debug"
+)
+
+// logLevel is the level a config writes: "" is info; any level but info and debug is an error.
+func logLevel(level string) (string, error) {
+	switch level {
+	case "", LogInfo:
+		return LogInfo, nil
+	case LogDebug:
+		return LogDebug, nil
+	}
+	return "", fmt.Errorf("coreconfig: log level must be info or debug, not %q", level)
 }
 
 // Paths are the files of the data folder that the config names.
@@ -135,6 +154,10 @@ func Build(o Options) ([]byte, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
 	}
+	level, err := logLevel(o.LogLevel)
+	if err != nil {
+		return nil, err
+	}
 	p := PathsFor(o.DataDir)
 	tsDir := o.TailscaleDir
 	if tsDir == "" {
@@ -172,7 +195,7 @@ func Build(o Options) ([]byte, error) {
 	}
 	config := obj{
 		// a log written to a file carries no color codes (spec 6.1)
-		"log": obj{"level": "info", "timestamp": true, "output": filepath.ToSlash(p.CoreLog)},
+		"log": obj{"level": level, "timestamp": true, "output": filepath.ToSlash(p.CoreLog)},
 		"dns": obj{
 			"servers": []any{
 				obj{"type": "local", "tag": "dns-local"},

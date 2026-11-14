@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -64,6 +65,23 @@ func TestSetupConfigHasNoAdapter(t *testing.T) {
 	api := c["services"].([]any)[0].(map[string]any)
 	if api["type"] != "api" || api["listen"] != "127.0.0.1" || api["listen_port"] != float64(30004) {
 		t.Fatalf("api service %v", api)
+	}
+}
+
+// The setup mode follows --core-log-level as the main config does (spec 6.1).
+func TestSetupLogLevel(t *testing.T) {
+	for _, c := range []struct{ level, want string }{{"", `"level": "info"`}, {"info", `"level": "info"`}, {"debug", `"level": "debug"`}} {
+		o := testSetupOptions(`C:\ProgramData\SplitLane`)
+		o.LogLevel = c.level
+		b, err := BuildSetup(o)
+		if err != nil || !bytes.Contains(b, []byte(c.want)) {
+			t.Errorf("level %q: %v, want %s", c.level, err, c.want)
+		}
+	}
+	o := testSetupOptions(`C:\ProgramData\SplitLane`)
+	o.LogLevel = "trace"
+	if _, err := BuildSetup(o); err == nil || !strings.Contains(err.Error(), "log level must be info or debug") {
+		t.Errorf("level trace: want an error, got %v", err)
 	}
 }
 
