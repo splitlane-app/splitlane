@@ -215,7 +215,7 @@ type Set struct {
 }
 
 type entry struct {
-	lane  string
+	rule  protocol.AppRule
 	rank  int
 	depth int
 	res   []*regexp.Regexp
@@ -226,7 +226,7 @@ type entry struct {
 func Compile(apps []protocol.AppRule, env Env) (*Set, error) {
 	s := &Set{}
 	for _, a := range apps {
-		e := entry{lane: a.Lane, rank: 2, depth: len(a.Matcher.Value)}
+		e := entry{rule: a, rank: 2, depth: len(a.Matcher.Value)}
 		if a.Matcher.Kind == protocol.KindFolder {
 			e.rank = 1
 		}
@@ -247,6 +247,16 @@ func Compile(apps []protocol.AppRule, env Env) (*Set, error) {
 
 // LaneOf returns the lane of the most specific matching rule, and false when no rule matches.
 func (s *Set) LaneOf(path string) (string, bool) {
+	r, ok := s.RuleOf(path)
+	return r.Lane, ok
+}
+
+// RuleOf is the rule that decides the lane of path (the same precedence as LaneOf), if any.
+// The activity groups a pinned program by it (spec 8.4). A nil Set has no rules.
+func (s *Set) RuleOf(path string) (protocol.AppRule, bool) {
+	if s == nil {
+		return protocol.AppRule{}, false
+	}
 	best := -1
 	for i, e := range s.entries {
 		if !matchAny(e.res, path) {
@@ -257,9 +267,9 @@ func (s *Set) LaneOf(path string) (string, bool) {
 		}
 	}
 	if best < 0 {
-		return "", false
+		return protocol.AppRule{}, false
 	}
-	return s.entries[best].lane, true
+	return s.entries[best].rule, true
 }
 
 func matchAny(res []*regexp.Regexp, path string) bool {
