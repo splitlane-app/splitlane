@@ -32,7 +32,7 @@ export function parseSid(whoamiCsv: string): string {
 function checkPath(p: string): void {
   if (/["']/.test(p)) throw new Error(`path must not contain quotes: ${p}`)
   if (!/^[A-Za-z]:\\/.test(p)) throw new Error(`path must be absolute: ${p}`)
-  if (!/^[\x20-\x7e]*$/.test(p)) throw new Error(`path must be ASCII: ${p}`)
+  if (p.includes('%')) throw new Error(`path must not contain %: ${p}`)
 }
 
 /**
@@ -49,7 +49,13 @@ export function installScript(exe: string, sid: string, outFile: string): string
     'try {',
     `  Start-Process -FilePath cmd.exe -ArgumentList '/c', '${cmd}' -Verb RunAs -Wait -WindowStyle Hidden -ErrorAction Stop`,
     '} catch {',
-    `  exit ${UAC_CANCELLED}`,
+    '  $e = $_.Exception',
+    '  while ($null -ne $e) {',
+    `    if (($e -is [System.ComponentModel.Win32Exception]) -and ($e.NativeErrorCode -eq ${UAC_CANCELLED})) { exit ${UAC_CANCELLED} }`,
+    '    $e = $e.InnerException',
+    '  }',
+    '  [Console]::Error.WriteLine($_.Exception.Message)',
+    '  exit 1',
     '}',
     'exit 0',
     ''
@@ -84,6 +90,7 @@ export async function installHelper(d: {
   tempDir: string
   readText(path: string): Promise<string>
   exists(path: string): Promise<boolean>
+  remove?(path: string): Promise<void>
 }): Promise<InstallOutcome> {
   const missing: string[] = []
   for (const f of HELPER_FILES) {
@@ -101,19 +108,27 @@ export async function installHelper(d: {
   }
 
   const outFile = win32.join(d.tempDir, `splitlane-install-${randomBytes(6).toString('hex')}.txt`)
-  let r: { code: number; stdout: string; stderr: string }
   try {
-    const script = installScript(win32.join(d.sourceDir, 'splitlane-helper.exe'), sid, outFile)
-    r = await d.exec('powershell.exe', encodePowerShell(script))
-  } catch (e) {
-    return { kind: 'failed', detail: e instanceof Error ? e.message : String(e) }
-  }
-  if (r.code === UAC_CANCELLED) return { kind: 'cancelled' }
-  if (r.code !== 0) return { kind: 'failed', detail: `powershell failed with code ${r.code}: ${tail(r.stderr || r.stdout)}` }
+    let r: { code: number; stdout: string; stderr: string }
+    try {
+      const script = installScript(win32.join(d.sourceDir, 'splitlane-helper.exe'), sid, outFile)
+      r = await d.exec('powershell.exe', encodePowerShell(script))
+    } catch (e) {
+      return { kind: 'failed', detail: e instanceof Error ? e.message : String(e) }
+    }
+    if (r.code === UAC_CANCELLED) return { kind: 'cancelled' }
+    if (r.code !== 0) return { kind: 'failed', detail: `powershell failed with code ${r.code}: ${tail(r.stderr || r.stdout)}` }
 
-  try {
-    return parseInstallOutput(await d.readText(outFile))
-  } catch (e) {
-    return { kind: 'failed', detail: `cannot read the installer output: ${e instanceof Error ? e.message : String(e)}` }
+    try {
+      return parseInstallOutput(await d.readText(outFile))
+    } catch (e) {
+      return { kind: 'failed', detail: `cannot read the installer output: ${e instanceof Error ? e.message : String(e)}` }
+    }
+  } finally {
+    try {
+      await d.remove?.(outFile)
+    } catch {
+      // best effort
+    }
   }
 }

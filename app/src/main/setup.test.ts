@@ -45,6 +45,22 @@ describe('setup', () => {
     expect(s).toMatch(/catch/)
   })
 
+  it('installScript keeps a Cyrillic path and refuses %', () => {
+    const exe = 'C:\\Users\\Иван\\app\\splitlane-helper.exe'
+    const out = 'C:\\Users\\Иван\\AppData\\Local\\Temp\\o.txt'
+    const script = Buffer.from(encodePowerShell(installScript(exe, SID, out))[3], 'base64').toString('utf16le')
+    expect(script).toContain(exe)
+    expect(script).toContain(out)
+    expect(() => installScript('C:\\%TEMP%\\x.exe', SID, OUT)).toThrow(Error)
+  })
+
+  it('installScript distinguishes a cancelled UAC from other failures', () => {
+    const s = installScript(EXE, SID, OUT)
+    expect(s).toContain('NativeErrorCode')
+    expect(s).toContain('InnerException')
+    expect(s).toMatch(/exit 1\r?\n/)
+  })
+
   it('installScript refuses quotes in paths', () => {
     expect(() => installScript('C:\\a"b\\x.exe', SID, OUT)).toThrow(Error)
     expect(() => installScript(EXE, SID, "C:\\a'b.txt")).toThrow(Error)
@@ -90,6 +106,31 @@ describe('setup', () => {
     const exec: Exec = async (file) => (file === 'whoami' ? whoami : { code: 1223, stdout: '', stderr: '' })
     const r = await installHelper({ exec, sourceDir: dir, tempDir: 'C:\\t', readText: async () => '', exists: all })
     expect(r).toEqual({ kind: 'cancelled' })
+  })
+
+  it('installHelper reports a PowerShell failure with its stderr', async () => {
+    const exec: Exec = async (file) => (file === 'whoami' ? whoami : { code: 1, stdout: '', stderr: 'blocked by policy' })
+    const r = await installHelper({ exec, sourceDir: dir, tempDir: 'C:\\t', readText: async () => '', exists: all })
+    expect(r.kind).toBe('failed')
+    expect(r.kind === 'failed' && r.detail).toContain('blocked by policy')
+  })
+
+  it('installHelper removes the output file', async () => {
+    const exec: Exec = async (file) => (file === 'whoami' ? whoami : { code: 0, stdout: '', stderr: '' })
+    const removed: string[] = []
+    await installHelper({
+      exec,
+      sourceDir: dir,
+      tempDir: 'C:\\t',
+      readText: async () => 'INSTALL-OK',
+      exists: all,
+      remove: async (p) => {
+        removed.push(p)
+        throw new Error('ignored')
+      }
+    })
+    expect(removed).toHaveLength(1)
+    expect(removed[0]).toMatch(/splitlane-install-.+\.txt$/)
   })
 
   it('installHelper reads the output file', async () => {
