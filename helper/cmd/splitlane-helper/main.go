@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -66,8 +67,16 @@ const idleExit = 60 * time.Second
 var (
 	programDir  = place.ProgramDir
 	productData = place.DataDir
+	readSetup   = place.ReadSetup
 	executable  = os.Executable
 )
+
+// setupReads is how many times the product reads setup.json, setupRetryWait apart (the tests shorten
+// it): at logon another program may hold the file for a moment, and a helper that ends there leaves the
+// journal unrestored and the system exit node off after a reboot. Only a missing file is "not installed".
+const setupReads = 3
+
+var setupRetryWait = 200 * time.Millisecond
 
 // adminCommands are the subcommands of the setup (spec 4.3) and newSys the system they change; the
 // tests replace both.
@@ -271,10 +280,18 @@ func productPlace(helperPath, dataDir string, logf func(string, ...any)) (core, 
 		logf("refused: the product runs only as %s, this is %s (spec 11); a development run takes --dev", want, helperPath)
 		return "", "", exitUsage
 	}
-	s, err := place.ReadSetup(dataDir)
-	if err != nil {
+	s, err := readSetup(dataDir)
+	for i := 1; i < setupReads && err != nil && !errors.Is(err, os.ErrNotExist); i++ {
+		time.Sleep(setupRetryWait)
+		s, err = readSetup(dataDir)
+	}
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		logf("not installed: %v; the window runs install first (spec 4.3)", err)
 		return "", "", exitNotInstalled
+	case err != nil:
+		logf("%s cannot be read (%d tries): %v", place.SetupFile, setupReads, err)
+		return "", "", exitInternal
 	}
 	return filepath.Join(dir, "sing-box.exe"), s.UserSID, exitOK
 }

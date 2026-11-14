@@ -2,10 +2,14 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/windows"
 
 	"splitlane/helper/internal/install"
 	"splitlane/helper/internal/pipe"
@@ -147,6 +151,57 @@ func TestProductPaths(t *testing.T) {
 	}
 	if _, err := os.Stat(data); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the helper made the data folder")
+	}
+}
+
+// setup.json at logon (spec 4.3): a read that fails for a moment (another program holds the file) is
+// tried again, setupReads times, so the helper still starts and restores the journal after a reboot.
+// Only a missing file is "not installed" (exit 6, at once); one that stays unreadable or does not
+// parse is an internal error, never "not installed".
+func TestProductSetupReadIsRetried(t *testing.T) {
+	prog, data := fakePlace(t)
+	const sid = "S-1-5-21-1000-2000-3000-1001"
+	if err := place.WriteSetup(data, place.Setup{UserSID: sid}); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(data, place.SetupFile)
+	busy := &os.PathError{Op: "open", Path: file, Err: windows.ERROR_SHARING_VIOLATION}
+	reads, fails := 0, 0
+	oldRead, oldWait := readSetup, setupRetryWait
+	readSetup = func(dir string) (place.Setup, error) {
+		reads++
+		if reads <= fails {
+			return place.Setup{}, busy
+		}
+		return place.ReadSetup(dir)
+	}
+	setupRetryWait = time.Millisecond
+	t.Cleanup(func() { readSetup, setupRetryWait = oldRead, oldWait })
+	helper := filepath.Join(prog, "splitlane-helper.exe")
+	var log strings.Builder
+	logf := func(format string, a ...any) { fmt.Fprintf(&log, format+"\n", a...) }
+
+	reads, fails = 0, setupReads-1
+	if _, user, code := productPlace(helper, data, logf); code != exitOK || user != sid || reads != setupReads {
+		t.Fatalf("busy %d times: user %q, exit code %d, %d reads, log:\n%s", fails, user, code, reads, log.String())
+	}
+	reads, fails = 0, setupReads
+	log.Reset()
+	if _, _, code := productPlace(helper, data, logf); code != exitInternal || reads != setupReads ||
+		strings.Contains(log.String(), "not installed") || !strings.Contains(log.String(), file) {
+		t.Fatalf("busy all the time: exit code %d, %d reads, log:\n%s", code, reads, log.String())
+	}
+	reads, fails = 0, 0
+	log.Reset()
+	os.WriteFile(file, []byte(`{broken`), 0o644)
+	if _, _, code := productPlace(helper, data, logf); code != exitInternal || strings.Contains(log.String(), "not installed") {
+		t.Fatalf("a broken setup.json: exit code %d, log:\n%s", code, log.String())
+	}
+	reads = 0
+	log.Reset()
+	os.Remove(file)
+	if _, _, code := productPlace(helper, data, logf); code != exitNotInstalled || reads != 1 || !strings.Contains(log.String(), "not installed") {
+		t.Fatalf("no setup.json: exit code %d, %d reads, log:\n%s", code, reads, log.String())
 	}
 }
 
