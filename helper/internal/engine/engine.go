@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,11 +28,21 @@ const (
 	callTimeout    = 20 * time.Second       // one call of tailscale.exe
 )
 
+// A state.json that cannot be read at start (an antivirus or a backup holds it for a moment) is read
+// again so many times, this far apart, before the helper goes on with the defaults.
+const (
+	stateRetries = 3
+	stateEvery   = 200 * time.Millisecond
+)
+
 // restartPauses: at most three restarts with a growing pause (5.5).
 var restartPauses = []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second}
 
 // errCancelled ends an operation that routing.disable or helper.shutdown cancelled; it is never published.
 var errCancelled = &protocol.Reason{Code: "cancelled", Params: map[string]string{}}
+
+// errStateLate: a save found state.json readable only now; its settings replaced the change being saved.
+var errStateLate = errors.New("state.json could be read only now: the settings it holds are back and this change is not kept")
 
 // Engine is the helper's phase machine.
 type Engine struct {
@@ -44,6 +55,8 @@ type Engine struct {
 	st           protocol.State
 	saved        store.State
 	journal      *store.Journal
+	stateErr     error // state.json could not be read (store.ErrIO): nothing is written over it until it reads
+	journalErr   error // restore.json could not be read (store.ErrIO): the start-up reads it again first
 	run          *coreRun
 	op           *op
 	degraded     bool
@@ -100,20 +113,81 @@ func New(d Deps) *Engine {
 	return e
 }
 
-// load reads state.json and restore.json into the engine.
+// load reads state.json and restore.json into the engine. A state.json that cannot be read
+// (store.ErrIO) is read again three times 200 ms apart; if it still fails, the defaults stay in
+// memory and save writes nothing over the file until it reads. A journal that cannot be read is
+// not "no journal": the start-up reads it again before anything else (readJournal). A journal with
+// unreadable content has been set aside by the store: there is none.
 func (e *Engine) load() {
 	s, err := e.d.Store.LoadState()
-	if err != nil {
+	for n := 0; n < stateRetries && errors.Is(err, store.ErrIO); n++ {
+		<-e.d.Clock.After(stateEvery)
+		s, err = e.d.Store.LoadState()
+	}
+	var stateErr error
+	switch {
+	case errors.Is(err, store.ErrIO):
+		stateErr = err
+		e.d.Log("state.json: %v; starting from defaults, the file is not written over until it can be read", err)
+	case err != nil:
 		e.d.Log("state.json: %v; starting from defaults", err)
 	}
 	j, err := e.d.Store.LoadJournal()
-	if err != nil {
+	var journalErr error
+	switch {
+	case errors.Is(err, store.ErrIO):
+		journalErr = err
+		e.d.Log("restore journal: %v; it is read again before anything else", err)
+	case err != nil:
 		e.d.Log("restore journal: %v", err)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.saved, e.journal = s, j
+	e.stateErr, e.journalErr = stateErr, journalErr
 	e.syncSaved()
+}
+
+// readJournal begins the start-up (5.7) when restore.json could not be read: the journal may be
+// there, so the helper does not go on as if there were none. The phase is stopping with reason
+// restore_pending (the read error; no command: the exit node is unknown until the journal reads),
+// and the journal is read again every 5 s, or at once on "Повторить", until it reads. "Disable
+// without restore" (5.4) gives it up: the journal is deleted as far as it can be and the start-up
+// goes on without it.
+func (e *Engine) readJournal() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.journalErr == nil {
+		return
+	}
+	for e.journalErr != nil {
+		if e.skip {
+			e.skip, e.journalErr = false, nil
+			e.dropJournal()
+			e.d.Log("restore skipped by the user: the unread journal deleted, system exit node left as is")
+			return
+		}
+		e.setPhase(protocol.PhaseStopping, reason(protocol.ReasonRestorePending,
+			protocol.ParamCommand, "", protocol.ParamError, e.journalErr.Error()))
+		e.mu.Unlock()
+		select {
+		case <-e.wake:
+		case <-e.d.Clock.After(restoreEvery):
+		}
+		j, err := e.d.Store.LoadJournal()
+		e.mu.Lock()
+		switch {
+		case errors.Is(err, store.ErrIO):
+			e.journalErr = err
+		case err != nil:
+			e.d.Log("restore journal: %v", err)
+			e.journal, e.journalErr = nil, nil
+		default:
+			e.journal, e.journalErr = j, nil
+		}
+	}
+	e.d.Log("restore journal read")
+	e.setPhase(protocol.PhaseStopping, nil)
 }
 
 // State is a copy of the current state (5.2).
@@ -179,7 +253,7 @@ func (e *Engine) syncSaved() {
 		e.st.Tailscale.SelectedExitNode = &v
 	}
 	e.st.Tailscale.DeviceName = e.hostname()
-	e.st.SystemTailscale.RestoreOnDisable = e.journal != nil
+	e.st.SystemTailscale.RestoreOnDisable = e.journal != nil || e.journalErr != nil
 }
 
 func (e *Engine) hostname() string {
@@ -189,11 +263,35 @@ func (e *Engine) hostname() string {
 	return e.d.Settings.Hostname
 }
 
-// save writes state.json; e.mu must be held.
-func (e *Engine) save() {
-	if err := e.d.Store.SaveState(e.saved); err != nil {
+// save writes state.json; e.mu must be held. A failed write leaves the engine's copy as it is, and
+// the next save writes all of it again, "was on" and the core identity with it. While state.json
+// could not be read (load), nothing is written over it: each save reads it again first. Once it
+// reads, the settings it holds are taken over, "was on" and the core identity stay those of this
+// run, and save returns errStateLate: the change being saved has given way to the file.
+func (e *Engine) save() error {
+	late := false
+	if e.stateErr != nil {
+		s, err := e.d.Store.LoadState()
+		if errors.Is(err, store.ErrIO) {
+			e.stateErr = err
+			e.d.Log("state.json not saved: it still cannot be read and is not written over: %v", err)
+			return err
+		}
+		if err != nil {
+			e.d.Log("state.json: %v", err)
+		}
+		e.d.Log("state.json can be read now: its settings are back")
+		s.WasOn, s.Core = e.saved.WasOn, e.saved.Core
+		e.saved, e.stateErr, late = s, nil, true
+	}
+	err := e.d.Store.SaveState(e.saved)
+	if err != nil {
 		e.d.Log("state.json not saved: %v", err)
 	}
+	if late {
+		return errStateLate
+	}
+	return err
 }
 
 // publish sends the state to the clients; e.mu must be held.

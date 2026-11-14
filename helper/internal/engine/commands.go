@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 
 	"splitlane/helper/internal/protocol"
@@ -183,22 +184,39 @@ func (e *Engine) cmdLanesSet(ctx context.Context, params json.RawMessage) *proto
 	if len(rejected) > 0 {
 		return &protocol.Error{Code: protocol.CodeRuleRejected, Message: "rules rejected", Rules: rejected}
 	}
+	var undo func()
 	if live(phase) {
-		if err := e.applyLanes(ctx, apps, p.DefaultLane); err != nil {
-			return err
+		var aerr *protocol.Error
+		if undo, aerr = e.applyLanes(ctx, apps, p.DefaultLane); aerr != nil {
+			return aerr
 		}
 	}
+	// Step 3: the answer comes only after the layout is in state.json. A write that fails is
+	// apply_failed: the previous layout stays, and the core gets its previous files and mode back.
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	prevApps, prevLane := e.saved.Apps, e.saved.DefaultLane
 	e.saved.Apps, e.saved.DefaultLane = apps, p.DefaultLane
-	e.save()
-	e.publish()
+	saveErr := e.save()
+	switch {
+	case saveErr == nil, errors.Is(saveErr, errStateLate):
+		e.publish() // the new layout, or the one state.json holds, read only now
+	default:
+		e.saved.Apps, e.saved.DefaultLane = prevApps, prevLane
+	}
+	e.mu.Unlock()
+	if saveErr != nil {
+		if undo != nil {
+			undo()
+		}
+		return protocol.Errorf(protocol.CodeApplyFailed, "layout not saved: %v", saveErr)
+	}
 	return nil
 }
 
 // applyLanes writes the rule files and switches the mode, then reconciles for 3 s (8.3).
 // On a reload error or connections left on the wrong lane the previous files and mode come back.
-func (e *Engine) applyLanes(ctx context.Context, apps []protocol.AppRule, defaultLane string) *protocol.Error {
+// After a success it returns undo, which brings the previous files and mode back the same way.
+func (e *Engine) applyLanes(ctx context.Context, apps []protocol.AppRule, defaultLane string) (func(), *protocol.Error) {
 	e.mu.Lock()
 	r, allDirect, degraded := e.run, e.st.AllDirect, e.degraded
 	var oldDirect, oldVPN []byte
@@ -208,36 +226,42 @@ func (e *Engine) applyLanes(ctx context.Context, apps []protocol.AppRule, defaul
 	}
 	e.mu.Unlock()
 	if r == nil {
-		return protocol.Errorf(protocol.CodeApplyFailed, "no core is running")
+		return nil, protocol.Errorf(protocol.CodeApplyFailed, "no core is running")
 	}
 	set, err := rules.Compile(apps, e.d.Rules)
 	if err != nil {
-		return protocol.Errorf(protocol.CodeApplyFailed, "%v", err)
+		return nil, protocol.Errorf(protocol.CodeApplyFailed, "%v", err)
 	}
 	direct, vpn, err := e.d.Core.LaneFiles(apps, e.d.Rules)
 	if err != nil {
-		return protocol.Errorf(protocol.CodeApplyFailed, "%v", err)
+		return nil, protocol.Errorf(protocol.CodeApplyFailed, "%v", err)
 	}
 	mode := e.d.Core.Mode(defaultLane, allDirect, degraded)
 	mark := e.d.Core.LogSize()
 	if err := e.d.Store.WriteRules(direct, vpn); err != nil {
 		e.revert(ctx, r, oldDirect, oldVPN, oldMode, false)
-		return protocol.Errorf(protocol.CodeApplyFailed, "rule files: %v", err)
+		return nil, protocol.Errorf(protocol.CodeApplyFailed, "rule files: %v", err)
 	}
 	if mode != oldMode {
 		if err := r.clash.SetMode(ctx, mode); err != nil {
 			e.revert(ctx, r, oldDirect, oldVPN, oldMode, false)
-			return protocol.Errorf(protocol.CodeApplyFailed, "mode: %v", err)
+			return nil, protocol.Errorf(protocol.CodeApplyFailed, "mode: %v", err)
 		}
 	}
 	if !e.reconcile(ctx, r, func(path string) string { return expectedLane(set, defaultLane, allDirect, path) }, mark) {
 		e.revert(ctx, r, oldDirect, oldVPN, oldMode, mode != oldMode)
-		return protocol.Errorf(protocol.CodeApplyFailed, "the core did not apply the layout within %s", applyWindow)
+		return nil, protocol.Errorf(protocol.CodeApplyFailed, "the core did not apply the layout within %s", applyWindow)
 	}
 	e.mu.Lock()
 	r.direct, r.vpn, r.mode = direct, vpn, mode
 	e.mu.Unlock()
-	return nil
+	undo := func() {
+		e.revert(ctx, r, oldDirect, oldVPN, oldMode, mode != oldMode)
+		e.mu.Lock()
+		r.direct, r.vpn, r.mode = oldDirect, oldVPN, oldMode
+		e.mu.Unlock()
+	}
+	return undo, nil
 }
 
 func (e *Engine) revert(ctx context.Context, r *coreRun, direct, vpn []byte, mode string, modeChanged bool) {
