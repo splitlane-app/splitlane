@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"splitlane/helper/internal/install"
 	"splitlane/helper/internal/pipe"
 	"splitlane/helper/internal/place"
 )
@@ -80,10 +81,11 @@ func TestProductModeRejectsDevFlags(t *testing.T) {
 }
 
 // No test reads the real places of the product: a test of the product mode fakes them (fakePlace), any
-// other run without --dev stops at once.
+// other run without --dev stops at once. No test reaches the real system of install and uninstall.
 func init() {
 	programDir = func() (string, error) { return "", errors.New("the tests do not read the real program folder") }
 	productData = func() (string, error) { return "", errors.New("the tests do not read the real data folder") }
+	newSys = func() install.Sys { return nil }
 }
 
 // fakePlace puts the product into temporary folders: the program folder with the helper's exe in it
@@ -162,5 +164,72 @@ func TestRunRefusesAWrongCore(t *testing.T) {
 	}
 	if code := run([]string{"--dev", "--data-dir", `data`, "--core", core}); code != exitUsage {
 		t.Fatalf("a relative data folder: %d", code)
+	}
+}
+
+// The subcommands install and uninstall (spec 4.3) come first, before any flag of the run mode:
+// install takes --user-sid only and needs it, uninstall takes --purge only. The folders come from the
+// system as in the product, never from the command line; the lines go to the output that the window
+// reads, and a refusal exits with code 7 (a usage error with 2). The commands are replaced here.
+func TestInstallSubcommandArgs(t *testing.T) {
+	prog, data := fakePlace(t)
+	const sid = "S-1-5-21-1000-2000-3000-1001"
+	var got []install.Options
+	var answer error
+	old := adminCommands
+	adminCommands = map[string]func(install.Options, install.Sys) error{}
+	for name := range old {
+		adminCommands[name] = func(o install.Options, s install.Sys) error {
+			got = append(got, o)
+			return answer
+		}
+	}
+	t.Cleanup(func() { adminCommands = old })
+
+	var out strings.Builder
+	if code := admin("install", []string{"--user-sid", sid}, &out); code != exitOK || len(got) != 1 {
+		t.Fatalf("exit code %d, %d calls, output:\n%s", code, len(got), out.String())
+	}
+	o := got[0]
+	if o.UserSID != sid || o.Purge || o.ProgramDir != prog || o.DataDir != data || o.Exe != filepath.Join(prog, "splitlane-helper.exe") || o.Out != &out {
+		t.Fatalf("options %+v", o)
+	}
+	if code := run([]string{"uninstall", "--purge"}); code != exitOK || len(got) != 2 || !got[1].Purge || got[1].UserSID != "" {
+		t.Fatalf("run uninstall --purge: exit code %d, %+v", code, got)
+	}
+	if code := run([]string{"uninstall"}); code != exitOK || len(got) != 3 || got[2].Purge {
+		t.Fatalf("run uninstall: exit code %d, %+v", code, got)
+	}
+
+	for _, c := range []struct {
+		cmd  string
+		args []string
+		want string
+	}{
+		{"install", nil, "--user-sid is required"},
+		{"install", []string{"--user-sid"}, "flag needs an argument: -user-sid"},
+		{"install", []string{"--user-sid", sid, "extra"}, `unexpected "extra"`},
+		{"install", []string{"--user-sid", sid, "--purge"}, "flag provided but not defined: -purge"},
+		{"install", []string{"--dev", "--user-sid", sid}, "flag provided but not defined: -dev"},
+		{"uninstall", []string{"--user-sid", sid}, "flag provided but not defined: -user-sid"},
+		{"uninstall", []string{"--purge", "--data-dir", `C:\d`}, "flag provided but not defined: -data-dir"},
+	} {
+		out.Reset()
+		label := strings.ToUpper(c.cmd) + "-REFUSED: "
+		if code := admin(c.cmd, c.args, &out); code != exitUsage || !strings.HasPrefix(out.String(), label) || !strings.Contains(out.String(), c.want) {
+			t.Errorf("%s %v: exit code %d, output %q", c.cmd, c.args, code, out.String())
+		}
+	}
+
+	out.Reset()
+	answer = errors.New("refused")
+	if code := admin("uninstall", nil, &out); code != exitRefused {
+		t.Fatalf("a refused uninstall: exit code %d", code)
+	}
+	programDir = func() (string, error) { return "", errors.New("no program folder") }
+	out.Reset()
+	calls := len(got)
+	if code := admin("install", []string{"--user-sid", sid}, &out); code != exitRefused || len(got) != calls || out.String() != "INSTALL-REFUSED: no program folder\n" {
+		t.Fatalf("without the program folder: exit code %d, output %q", code, out.String())
 	}
 }
