@@ -274,13 +274,13 @@ async function corePids() {
 }
 
 // watchCore looks at the core process every 500 ms for step 7; stop takes one more look.
-function watchCore() {
+function watchCore(phaseOf) {
   const looks = [];
   let stopped = false;
   const look = async () => {
-    const t = Date.now();
     const pids = await corePids();
-    looks.push({ t, alive: pids === null ? null : pids.length > 0 });
+    const phase = phaseOf();
+    looks.push({ t: Date.now(), pids, live: phase === 'on' || phase === 'degraded' || phase === 'blocked' });
   };
   const loop = (async () => {
     while (!stopped) {
@@ -584,7 +584,7 @@ async function withHelper(helper, opts, report) {
     tracker.observed(s.allDirect === true, t);
   };
   const ctx = { helper, p, layout, tracker };
-  const core = watchCore();
+  const core = watchCore(() => helper.state?.phase);
   const leaks = watchLeaks(p.curlVpn);
   let routing = true; // from routing.enable until the disable of step 8
   let restored = false;

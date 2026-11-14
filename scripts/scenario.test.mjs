@@ -199,9 +199,9 @@ test('leak verdict ignores all-direct', () => {
   open.observed(false, 200);
   assert.deepEqual(open.windows(), [{ from: 100, to: Infinity }], 'not closed before it was on');
 
-  const core = [{ t: 0, alive: false }];
-  for (let t = 400; t <= 8900; t += 500) core.push({ t, alive: true });
-  core.push({ t: 9400, alive: false }, { t: 9900, alive: false });
+  const core = [{ t: 0, pids: [], live: false }];
+  for (let t = 400; t <= 8900; t += 500) core.push({ t, pids: [10], live: true });
+  core.push({ t: 9400, pids: [], live: false }, { t: 9900, pids: [], live: false });
   const s = (sent, done, ip) => ({ sent, done, ip });
   const samples = [
     s(100, 300, DIRECT), // no core yet
@@ -214,15 +214,15 @@ test('leak verdict ignores all-direct', () => {
     s(8800, 9200, DIRECT), // the core may have ended during the request
     s(9500, 9700, DIRECT), // no core any more
   ];
-  assert.deepEqual(verdictLeak(samples, core, windows, book), { ok: true, counted: 3, ignored: 6, leaks: 0 });
+  assert.deepEqual(verdictLeak(samples, core, windows, book), { ok: true, counted: 3, ignored: 6, leaks: 0, replied: 2 });
   assert.deepEqual(verdictLeak([...samples, s(8100, 8300, DIRECT)], core, windows, book),
-    { ok: false, counted: 4, ignored: 6, leaks: 1 });
+    { ok: false, counted: 4, ignored: 6, leaks: 1, replied: 3 });
   assert.equal(verdictLeak([s(100, 300, VPN)], core, windows, book).ok, false, 'nothing counted proves nothing');
 
   assert.equal(coreAliveThroughout(core, 500, 700), true);
   assert.equal(coreAliveThroughout(core, 300, 500), false);
-  assert.equal(coreAliveThroughout([{ t: 0, alive: true }], 100, 200), false, 'no look after the reply');
-  assert.equal(coreAliveThroughout([{ t: 0, alive: true }, { t: 300, alive: null }], 100, 200), false, 'tasklist failed');
+  assert.equal(coreAliveThroughout([{ t: 0, pids: [10], live: true }], 100, 200), false, 'no look after the reply');
+  assert.equal(coreAliveThroughout([{ t: 0, pids: [10], live: true }, { t: 300, pids: null, live: true }], 100, 200), false, 'tasklist failed');
 });
 
 test('layout has unique uuids and file rules', () => {
@@ -353,4 +353,25 @@ test('keep child reuses one connection and reconnects', async () => {
 test('the wait for step 1 covers the tunnel retry of spec 5.3 (review F7-1)', () => {
   // first start and proof 45 s + stop + second start and proof 45 s, and the early-exit retry
   assert.ok(ENABLE_WAIT_MS >= 180000, `ENABLE_WAIT_MS ${ENABLE_WAIT_MS} is below 180000`);
+});
+
+test('step 7 counts a request only when one core process of phase on lived through it (review F5-1)', () => {
+  const book = addressBook();
+  learn(book, { vpn: '203.0.113.10', direct: '198.51.100.20' });
+  const look = (t, pids, live) => ({ t, pids, live });
+  // 100 and 200: the setup-mode core (pid 7, phase not on); 300..: the real core pid 10; a swap to 11 at 900
+  const core = [
+    look(0, [7], false), look(200, [7], false), look(400, [10], true), look(600, [10], true),
+    look(800, [10], true), look(1000, [11], true), look(1200, [11], true), look(1400, [11], true),
+  ];
+  const s = (sent, done, ip) => ({ sent, done, ip });
+  const samples = [
+    s(150, 250, '198.51.100.20'), // only the setup-mode core ran
+    s(450, 550, '198.51.100.20'), // pid 10 in every look: counted, a leak
+    s(850, 1050, '198.51.100.20'), // pid 10 then pid 11: no core lived through it
+    s(1250, 1350, '203.0.113.10'), // pid 11: counted
+  ];
+  assert.deepEqual(verdictLeak(samples, core, [], book), { ok: false, counted: 2, ignored: 2, leaks: 1, replied: 2 });
+  assert.equal(verdictLeak([s(450, 550, null), s(1250, 1350, null)], core, [], book).ok, false, 'no counted request got a reply');
+  assert.equal(verdictLeak([s(450, 550, '203.0.113.10')], core, [], book).ok, true);
 });

@@ -221,17 +221,26 @@ export function createAllDirectTracker() {
   };
 }
 
-// coreAliveThroughout: core is the list of looks at the core process, {t, alive} (alive null when
-// the look failed). True when the last look at or before from and every look up to the first one
-// at or after to saw the core.
+// A look at the core process is {t, pids, live}: t is when tasklist returned, pids the sing-box.exe
+// processes it listed (null when it failed), live whether the helper's observed phase was on, degraded
+// or blocked at that time (a setup-mode core or a `sing-box check` is not the core of the scenario).
+
+// coreAliveThroughout: true when one process that was seen in a live look is in every look from the
+// last one at or before from to the first one at or after to.
 export function coreAliveThroughout(core, from, to) {
+  const cores = new Set();
+  for (const l of core) if (l.live && l.pids) for (const p of l.pids) cores.add(p);
   let start = -1;
   for (let i = 0; i < core.length; i++) {
     if (core[i].t <= from) start = i;
   }
   if (start < 0) return false;
+  let span = null;
   for (let i = start; i < core.length; i++) {
-    if (core[i].alive !== true) return false;
+    if (core[i].pids === null) return false;
+    const here = new Set(core[i].pids.filter((p) => cores.has(p)));
+    span = span ? new Set([...span].filter((p) => here.has(p))) : here;
+    if (span.size === 0) return false;
     if (core[i].t >= to) return true;
   }
   return false;
@@ -240,11 +249,12 @@ export function coreAliveThroughout(core, from, to) {
 // verdictLeak is step 7: samples are {sent, done, ip} replies of the VPN copy of curl during the
 // whole scenario. A reply counts when the core lived through the request and the request did not
 // overlap a window of "all direct"; a counted reply from a direct address is a leak. With no
-// counted reply there is nothing to judge, and the step fails.
+// counted request that got a reply there is nothing to judge, and the step fails.
 export function verdictLeak(samples, core, windows, book) {
   let counted = 0;
   let ignored = 0;
   let leaks = 0;
+  let replied = 0;
   for (const s of samples) {
     const allDirect = windows.some((w) => s.sent <= w.to && s.done >= w.from);
     if (allDirect || !coreAliveThroughout(core, s.sent, s.done)) {
@@ -252,9 +262,10 @@ export function verdictLeak(samples, core, windows, book) {
       continue;
     }
     counted++;
+    if (s.ip) replied++;
     if (laneOf(s.ip, book) === 'direct') leaks++;
   }
-  return { ok: counted > 0 && leaks === 0, counted, ignored, leaks };
+  return { ok: replied > 0 && leaks === 0, counted, ignored, leaks, replied };
 }
 
 // scenarioPaths are the copies of spec 12 under root (%TEMP%\splitlane-scenario): a folder for each
