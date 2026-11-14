@@ -77,3 +77,37 @@ test('ProgramCard says there are no connections without detail', () => {
   renderWith(<ProgramCard />, services)
   expect(screen.getByText('Нет соединений')).toBeTruthy()
 })
+
+const GAME_DIR = 'C:\\Games\\Game\\'
+const GAME = `${GAME_DIR}game.exe`
+
+function unpinned() {
+  // the helper never answers: the change stays on screen as it would until the next state
+  const fake = fakeBridge({ command: () => new Promise(() => {}) })
+  const services = servicesFor(fake.bridge, snap({ apps: [] }))
+  services.store.getState().setActivity(activity([entry(GAME_DIR, { name: 'Game', exe: GAME, down: 5 })]))
+  services.store.getState().openCard(GAME_DIR)
+  return services
+}
+
+test('ProgramCard follows the program to its new key after pin', async () => {
+  const services = unpinned()
+  renderWith(<ProgramCard />, services)
+  expect(screen.queryByRole('switch', { name: 'Вся папка программы' })).toBeNull()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Закрепить' }))
+  })
+  const sw = await screen.findByRole('switch', { name: 'Вся папка программы' })
+  expect(sw.getAttribute('aria-checked')).toBe('true')
+  expect(services.store.getState().ui.cardKey).not.toBe(GAME_DIR)
+  expect(screen.getByRole('dialog', { name: 'Game' })).toBeTruthy()
+})
+
+test('ProgramCard keeps an unpinned program that went quiet', () => {
+  const services = unpinned()
+  renderWith(<ProgramCard />, services)
+  act(() => services.store.getState().setActivity(activity([])))
+  expect(services.store.getState().ui.cardKey).toBe(GAME_DIR)
+  expect(screen.getByRole('dialog', { name: 'Game' })).toBeTruthy()
+  expect(screen.getByText('Нет соединений')).toBeTruthy()
+})

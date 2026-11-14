@@ -71,3 +71,16 @@ test('AddPanel shows the picked file with both lane buttons, and closes with Esc
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
   expect(services.store.getState().ui.addOpen).toBe(false)
 })
+
+test('AddPanel gives the picked row and the list row of one program different drag ids', async () => {
+  setup({
+    installedPrograms: async () => [{ exe: MAIL, name: 'Mail' }],
+    pickProgram: async () => ({ exe: MAIL, name: 'Mail' })
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл…' }))
+  await screen.findByRole('button', { name: 'Через VPN: Mail' })
+  fireEvent.click(screen.getByRole('tab', { name: 'Установленные' }))
+  await waitFor(() => expect(document.querySelectorAll('[data-add-row]').length).toBe(2))
+  const ids = Array.from(document.querySelectorAll<HTMLElement>('[data-add-row]')).map((e) => e.dataset.dragId)
+  expect(new Set(ids).size).toBe(2)
+})

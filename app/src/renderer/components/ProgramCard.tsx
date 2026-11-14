@@ -53,21 +53,36 @@ function CardDialog({ cardKey }: { cardKey: string }): React.JSX.Element | null 
     }
   }, [bridge, cardKey])
 
-  const card = useMemo(() => {
+  const last = useRef<CardVM | null>(null)
+  const cards = useMemo(() => {
     if (layout === null || addresses === null) return null
     const view = boardView(layout.apps, layout.defaultLane, activity, addresses, '')
-    return [...view.vpn.pinned, ...view.direct.pinned, ...view.vpn.unpinned, ...view.direct.unpinned].find(
-      (c) => c.key === cardKey
-    )
-  }, [layout, addresses, activity, cardKey])
-
-  // a card that is not on the board any more (unpinned from here, pinned under a new key) closes
-  const gone = layout !== null && addresses !== null && card === undefined
+    return [...view.vpn.pinned, ...view.direct.pinned, ...view.vpn.unpinned, ...view.direct.unpinned]
+  }, [layout, addresses, activity])
+  const found = cards?.find((c) => c.key === cardKey)
+  if (found !== undefined) last.current = found
+  // the program under another key (pinned, moved, unpinned from here): the card follows it
+  const prev = last.current
+  const successor =
+    cards === null || found !== undefined || prev === null
+      ? undefined
+      : cards.find(
+          (c) =>
+            c.key !== cardKey &&
+            (prev.kind === 'system'
+              ? c.kind === 'system'
+              : c.kind === 'app' && prev.exe !== '' && c.exe.toLowerCase() === prev.exe.toLowerCase())
+        )
+  // an unpinned program that went quiet keeps its card; a pinned one that is gone for good closes it
+  const vanished = cards !== null && found === undefined && successor === undefined && (prev === null || prev.pinned)
+  const successorKey = successor?.key
   useEffect(() => {
-    if (gone) store.getState().openCard(null)
-  }, [gone, store])
+    if (successorKey !== undefined) store.getState().openCard(successorKey)
+    else if (vanished) store.getState().openCard(null)
+  }, [successorKey, vanished, store])
 
-  if (card === null || card === undefined || layout === null) return null
+  const card = found ?? prev
+  if (card === null || layout === null) return null
 
   const rule = card.ruleId === null ? undefined : layout.apps.find((r) => r.id === card.ruleId)
   const kind = rule?.matcher.kind

@@ -4,12 +4,13 @@ const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), [tabin
 
 /**
  * The keyboard behaviour of a dialog or a side sheet: the focus goes into it when it opens and back to what had it
- * when it closes; Tab stays inside; Escape closes (a key that something else handled already is not a close).
+ * when it closes; Tab stays inside a modal one (trap); Escape closes (a key that something else handled already is not a close).
  * Returns the key handler for the dialog's element.
  */
 export function useDialog(
   ref: RefObject<HTMLElement | null>,
-  onClose: () => void
+  onClose: () => void,
+  trap = true
 ): { onKeyDown(e: KeyboardEvent<HTMLElement>): void } {
   const close = useRef(onClose)
   close.current = onClose
@@ -32,7 +33,7 @@ export function useDialog(
         close.current()
         return
       }
-      if (e.key !== 'Tab') return
+      if (e.key !== 'Tab' || !trap) return
       const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE))
       if (items.length === 0) return
       const first = items[0]

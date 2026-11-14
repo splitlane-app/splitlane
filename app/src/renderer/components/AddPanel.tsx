@@ -29,6 +29,8 @@ interface RowProps {
   row: AddRow
   /** An online row is the card of the board; the others are programs. */
   card?: CardVM
+  /** Tells the picked row from the same program's row in the list: draggable ids must be unique. */
+  idPrefix?: string
   onAct(row: AddRow, action: AddRow['actions'][number], card: CardVM | undefined): void
 }
 
@@ -36,16 +38,16 @@ interface RowProps {
  * A row of the panel: the program (it can be dragged onto a lane) and its buttons. A button of the lane the
  * program is in already is disabled.
  */
-function Row({ row, card, onAct }: RowProps): React.JSX.Element {
+function Row({ row, card, idPrefix = '', onAct }: RowProps): React.JSX.Element {
   const program: Program = { exe: row.exe, name: row.name }
   const { ref, handleRef } = useDraggable({
-    id: `add:${row.key}`,
+    id: `add:${idPrefix}${row.key}`,
     data: card ?? program,
     type: card !== undefined ? CARD : ADD_ROW,
     sensors: CARD_SENSORS
   })
   return (
-    <li ref={ref} className={styles.row} data-add-row={row.key}>
+    <li ref={ref} className={styles.row} data-add-row={row.key} data-drag-id={`add:${idPrefix}${row.key}`}>
       <div ref={handleRef} className={styles.info} title={row.exe}>
         <ExeIcon exe={row.exe} />
         <span className={styles.text}>
@@ -93,7 +95,7 @@ export function AddPanel(): React.JSX.Element {
   const [picked, setPicked] = useState<Program | null>(null)
   const ref = useRef<HTMLElement | null>(null)
   const close = (): void => store.getState().openAdd(false)
-  const dialog = useDialog(ref, close)
+  const dialog = useDialog(ref, close, false)
 
   useEffect(() => {
     if (tab !== 'installed' || installed !== null) return
@@ -191,7 +193,7 @@ export function AddPanel(): React.JSX.Element {
       {pickedRow !== null && (
         <section className={styles.picked} aria-label={t('add.picked')}>
           <ul className={styles.list}>
-            <Row row={pickedRow} onAct={act} />
+            <Row row={pickedRow} idPrefix="picked:" onAct={act} />
           </ul>
         </section>
       )}
