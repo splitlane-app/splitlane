@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import type { InstallState } from '../shared/ipc'
+import type { LinkStatus } from '../shared/status'
 import {
   HELPER_FILES,
   encodePowerShell,
   helperSourceDir,
+  installAfterLink,
   installHelper,
   installScript,
   parseInstallOutput,
   parseSid
 } from './setup'
-import type { Exec } from './task'
+import { systemTools, type Exec } from './task'
 
 const SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
 const EXE = 'C:\\Program Files\\SplitLane\\resources\\helper\\splitlane-helper.exe'
@@ -74,6 +77,21 @@ describe('setup', () => {
     expect(Buffer.from(a[3], 'base64').toString('utf16le')).toBe('exit 0')
   })
 
+  it('installAfterLink keeps the outcome until the link is ready, then starts afresh', () => {
+    const ready: LinkStatus = { kind: 'ready', hello: { protocol: 1, helper: '0.1.0', core: '1.14.4' } }
+    const done: InstallState = { kind: 'done', outcome: { kind: 'ok' } }
+    // «Готово, служебный процесс запускается…» stays while the link connects
+    expect(installAfterLink(done, { kind: 'connecting' })).toBe(done)
+    expect(installAfterLink(done, { kind: 'setup-needed' })).toBe(done)
+    expect(installAfterLink(done, ready)).toEqual({ kind: 'idle' })
+    const failed: InstallState = { kind: 'done', outcome: { kind: 'failed', detail: 'x' } }
+    expect(installAfterLink(failed, ready)).toEqual({ kind: 'idle' })
+    const running: InstallState = { kind: 'running' }
+    expect(installAfterLink(running, ready)).toBe(running)
+    const idle: InstallState = { kind: 'idle' }
+    expect(installAfterLink(idle, ready)).toBe(idle)
+  })
+
   it('parseInstallOutput ok, refused, failed', () => {
     expect(parseInstallOutput('INSTALL: copying\r\nINSTALL-OK\r\n\r\n')).toEqual({ kind: 'ok' })
     expect(parseInstallOutput('INSTALL-REFUSED: other user\n')).toEqual({ kind: 'refused', reason: 'other user' })
@@ -84,6 +102,7 @@ describe('setup', () => {
   })
 
   const dir = 'C:\\h'
+  const tools = systemTools({ SystemRoot: 'D:\\Win' })
   const all = async (): Promise<boolean> => true
   const whoami = { code: 0, stdout: `"PC\\u","${SID}"\r\n`, stderr: '' }
 
@@ -93,6 +112,7 @@ describe('setup', () => {
     }
     const r = await installHelper({
       exec,
+      tools,
       sourceDir: dir,
       tempDir: 'C:\\t',
       readText: async () => '',
@@ -103,23 +123,24 @@ describe('setup', () => {
   })
 
   it('installHelper maps exit 1223 to cancelled', async () => {
-    const exec: Exec = async (file) => (file === 'whoami' ? whoami : { code: 1223, stdout: '', stderr: '' })
-    const r = await installHelper({ exec, sourceDir: dir, tempDir: 'C:\\t', readText: async () => '', exists: all })
+    const exec: Exec = async (file) => (file === tools.whoami ? whoami : { code: 1223, stdout: '', stderr: '' })
+    const r = await installHelper({ exec, tools, sourceDir: dir, tempDir: 'C:\\t', readText: async () => '', exists: all })
     expect(r).toEqual({ kind: 'cancelled' })
   })
 
   it('installHelper reports a PowerShell failure with its stderr', async () => {
-    const exec: Exec = async (file) => (file === 'whoami' ? whoami : { code: 1, stdout: '', stderr: 'blocked by policy' })
-    const r = await installHelper({ exec, sourceDir: dir, tempDir: 'C:\\t', readText: async () => '', exists: all })
+    const exec: Exec = async (file) => (file === tools.whoami ? whoami : { code: 1, stdout: '', stderr: 'blocked by policy' })
+    const r = await installHelper({ exec, tools, sourceDir: dir, tempDir: 'C:\\t', readText: async () => '', exists: all })
     expect(r.kind).toBe('failed')
     expect(r.kind === 'failed' && r.detail).toContain('blocked by policy')
   })
 
   it('installHelper removes the output file', async () => {
-    const exec: Exec = async (file) => (file === 'whoami' ? whoami : { code: 0, stdout: '', stderr: '' })
+    const exec: Exec = async (file) => (file === tools.whoami ? whoami : { code: 0, stdout: '', stderr: '' })
     const removed: string[] = []
     await installHelper({
       exec,
+      tools,
       sourceDir: dir,
       tempDir: 'C:\\t',
       readText: async () => 'INSTALL-OK',
@@ -137,11 +158,12 @@ describe('setup', () => {
     const calls: Array<[string, string[]]> = []
     const exec: Exec = async (file, args) => {
       calls.push([file, args])
-      return file === 'whoami' ? whoami : { code: 0, stdout: '', stderr: '' }
+      return file === tools.whoami ? whoami : { code: 0, stdout: '', stderr: '' }
     }
     let read = ''
     const r = await installHelper({
       exec,
+      tools,
       sourceDir: dir,
       tempDir: 'C:\\t',
       readText: async (p) => {
@@ -152,14 +174,16 @@ describe('setup', () => {
     })
     expect(r).toEqual({ kind: 'ok' })
     expect(read).toMatch(/^C:\\t\\splitlane-install-.+\.txt$/)
-    expect(calls[0]).toEqual(['whoami', ['/user', '/fo', 'csv', '/nh']])
-    expect(calls[1][0]).toBe('powershell.exe')
+    // by full path, never through PATH
+    expect(calls[0]).toEqual(['D:\\Win\\System32\\whoami.exe', ['/user', '/fo', 'csv', '/nh']])
+    expect(calls[1][0]).toBe('D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
     const script = Buffer.from(calls[1][1][3], 'base64').toString('utf16le')
     expect(script).toContain('C:\\h\\splitlane-helper.exe')
     expect(script).toContain(SID)
 
     const bad = await installHelper({
       exec,
+      tools,
       sourceDir: dir,
       tempDir: 'C:\\t',
       readText: async () => {

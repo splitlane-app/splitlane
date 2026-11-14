@@ -21,6 +21,9 @@ describe('trayModel', () => {
       [ready, st('stopping', 'restore_pending'), 'action'],
       [ready, st('on', undefined, true), 'action'],
       [ready, st('off', undefined, true), 'action'],
+      // the all-direct mode needs an action whatever the phase says (allDirect wins)
+      [ready, st('degraded', 'vpn_unreachable', true), 'action'],
+      [ready, st('degraded', 'core_crashed', true), 'action'],
       [{ kind: 'setup-needed' }, null, 'action'],
       [{ kind: 'other-user' }, null, 'action'],
       [{ kind: 'helper-older', helperProtocol: 0 }, null, 'action'],

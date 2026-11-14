@@ -4,7 +4,7 @@ import { access, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 
 import { dirname, join, win32 } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { IPC, type InstallState, type Snapshot } from '../shared/ipc'
-import type { Program } from '../shared/programs'
+import type { Dropped } from '../shared/programs'
 import { PIPE_NAME, type HelperError, type HelperState } from '../shared/protocol'
 import { DEFAULT_SETTINGS, type WindowSettings } from '../shared/settings'
 import type { InstallOutcome, LinkStatus } from '../shared/status'
@@ -12,12 +12,14 @@ import { AutoEnable } from './autoEnable'
 import { IconCache, type IconFs } from './icons'
 import { exportPath, mergePrograms, registerIpc, runCommand, toHelperError } from './ipc'
 import { HelperLink, SHUTDOWN_TIMEOUT_MS } from './link'
+import { loginItemSettings, startupLoginItem } from './loginItem'
+import { PageCrashReload } from './pageCrash'
 import { dialPipe } from './pipe'
-import { installedPrograms, resolveDropped, startMenuDirs, type ProgramsFs } from './programs'
+import { installedPrograms, pickedFile, resolveDropped, startMenuDirs, type ProgramsFs } from './programs'
 import { SettingsFile } from './settingsFile'
-import { encodePowerShell, helperSourceDir, installHelper } from './setup'
+import { encodePowerShell, helperSourceDir, installAfterLink, installHelper } from './setup'
 import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
-import { runTask, taskRegistered, type Exec } from './task'
+import { runTask, systemTools, taskRegistered, type Exec } from './task'
 import { AppTray, MAIN_TEXT } from './tray'
 
 /** schtasks and whoami answer at once; the Store listing takes about a second. */
@@ -119,6 +121,8 @@ app.setAppUserModelId('SplitLane')
 
 const startHidden = process.argv.includes('--hidden')
 const exec = execText(QUICK_EXEC_TIMEOUT_MS)
+/** schtasks, whoami and powershell by full path under %SystemRoot%\System32, never through PATH. */
+const tools = systemTools(process.env)
 
 let win: BrowserWindow | null = null
 let tray: AppTray | null = null
@@ -138,8 +142,8 @@ let saving: Promise<void> = Promise.resolve()
 
 const link = new HelperLink({
   dial: () => dialPipe(PIPE_NAME),
-  taskRegistered: () => taskRegistered(exec),
-  runTask: () => runTask(exec),
+  taskRegistered: () => taskRegistered(exec, tools),
+  runTask: () => runTask(exec, tools),
   sleep: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
   log
 })
@@ -172,7 +176,7 @@ const storeApps = new StoreAppsCache(async () => {
     STORE_APPS_SCRIPT
   ].join('\r\n')
   try {
-    const r = await execText(STORE_APPS_TIMEOUT_MS)('powershell.exe', encodePowerShell(script))
+    const r = await execText(STORE_APPS_TIMEOUT_MS)(tools.powershell, encodePowerShell(script))
     if (r.code !== 0) throw new Error(`powershell failed with code ${r.code}`)
     return stripBom(r.stdout)
   } catch (e) {
@@ -229,6 +233,7 @@ function pushSnapshot(): void {
 
 link.on('status', (s) => {
   log(`link: ${describeLink(s)}`)
+  install = installAfterLink(install, s)
   if (s.kind === 'ready' && firstReady) {
     const state = link.state()
     if (state !== null) {
@@ -266,7 +271,7 @@ function applyOpenAtLogin(openAtLogin: boolean): void {
     log('settings: open at login is applied only in the built app')
     return
   }
-  app.setLoginItemSettings({ openAtLogin, path: process.execPath, args: ['--hidden'] })
+  app.setLoginItemSettings(loginItemSettings(openAtLogin, process.execPath))
 }
 
 async function setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings> {
@@ -286,6 +291,7 @@ async function runInstall(): Promise<void> {
   try {
     outcome = await installHelper({
       exec: execText(), // waits for the UAC prompt as long as the user takes
+      tools,
       sourceDir: helperSourceDir({
         isPackaged: app.isPackaged,
         resourcesPath: process.resourcesPath,
@@ -304,7 +310,7 @@ async function runInstall(): Promise<void> {
   pushSnapshot()
   if (outcome.kind !== 'ok') return
   try {
-    await runTask(exec)
+    await runTask(exec, tools)
   } catch (e) {
     log(`setup: ${errText(e)}`) // the link runs the task again when the pipe does not show up
   }
@@ -320,15 +326,15 @@ function startInstall(): Promise<void> {
 
 // ---- dialogs ----
 
-async function pickProgram(): Promise<Program | null> {
+/** The picked file as a program, or its name for the notice «Не программа: …» (a network path, say). */
+async function pickProgram(): Promise<Dropped | null> {
   const options = {
     properties: ['openFile' as const],
     filters: [{ name: MAIN_TEXT.programsFilter, extensions: ['exe'] }]
   }
   const r = win !== null ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
   if (r.canceled || r.filePaths.length === 0) return null
-  const [first] = resolveDropped([r.filePaths[0]], programsFs.readShortcut)
-  return first !== undefined && first.kind === 'program' ? first.program : null
+  return pickedFile(r.filePaths[0], programsFs.readShortcut)
 }
 
 async function saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError }> {
@@ -406,6 +412,18 @@ function createWindow(): void {
   w.on('closed', () => {
     if (win === w) win = null
   })
+  // a crashed page would leave the window blank: it is reloaded once (pageCrash.ts)
+  const crash = new PageCrashReload(() => Date.now())
+  w.webContents.on('render-process-gone', (_event, details) => {
+    log(`window: the page process is gone (${details.reason}, exit code ${details.exitCode})`)
+    if (allowClose || w.isDestroyed() || details.reason === 'clean-exit') return
+    if (!crash.onGone(details.reason)) {
+      log('window: the page died again soon after its reload: not reloaded again')
+      return
+    }
+    log('window: reloading the page')
+    w.webContents.reload()
+  })
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (!app.isPackaged && devUrl) {
@@ -417,6 +435,13 @@ function createWindow(): void {
 
 async function main(): Promise<void> {
   settings = await settingsFile.load()
+  // the saved autostart again, for the exe of this start (the unpacked folder may have moved)
+  const item = startupLoginItem({ isPackaged: app.isPackaged, execPath: process.execPath }, settings.openAtLogin)
+  try {
+    if (item !== null) app.setLoginItemSettings(item)
+  } catch (e) {
+    log(`settings: cannot apply open at login: ${errText(e)}`)
+  }
   registerIpc({
     ipc: ipcMain,
     accept: (e) => win !== null && !win.isDestroyed() && e.sender === win.webContents,

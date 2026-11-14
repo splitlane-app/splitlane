@@ -64,7 +64,9 @@ test('AddPanel asks for the installed programs once and marks pinned ones', asyn
 })
 
 test('AddPanel shows the picked file with both lane buttons, and closes with Escape', async () => {
-  const { services } = setup({ pickProgram: async () => ({ exe: 'C:\\Tools\\tool.exe', name: 'Tool' }) })
+  const { services } = setup({
+    pickProgram: async () => ({ kind: 'program', program: { exe: 'C:\\Tools\\tool.exe', name: 'Tool' } })
+  })
   fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл…' }))
   await screen.findByRole('button', { name: 'Через VPN: Tool' })
   expect(screen.getByRole('button', { name: 'Напрямую: Tool' })).toBeTruthy()
@@ -72,10 +74,19 @@ test('AddPanel shows the picked file with both lane buttons, and closes with Esc
   expect(services.store.getState().ui.addOpen).toBe(false)
 })
 
+test('AddPanel names a picked file that is not a program', async () => {
+  const { services } = setup({ pickProgram: async () => ({ kind: 'skipped', name: 'tool.exe' }) })
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл…' }))
+  })
+  expect(services.store.getState().notice).toBe('Не программа: tool.exe')
+  expect(screen.queryByText('Выбранный файл')).toBeNull()
+})
+
 test('AddPanel gives the picked row and the list row of one program different drag ids', async () => {
   setup({
     installedPrograms: async () => [{ exe: MAIL, name: 'Mail' }],
-    pickProgram: async () => ({ exe: MAIL, name: 'Mail' })
+    pickProgram: async () => ({ kind: 'program', program: { exe: MAIL, name: 'Mail' } })
   })
   fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл…' }))
   await screen.findByRole('button', { name: 'Через VPN: Mail' })

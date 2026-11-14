@@ -58,6 +58,11 @@ export async function installedPrograms(fs: ProgramsFs, dirs: string[]): Promise
   return out.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
 }
 
+/** The file picked in the dialog as one dropped from Explorer: its program, or its name when it is none. */
+export function pickedFile(path: string, readShortcut: ProgramsFs['readShortcut']): Dropped {
+  return resolveDropped([path], readShortcut)[0] ?? { kind: 'skipped', name: baseName(path) }
+}
+
 export function resolveDropped(paths: string[], readShortcut: ProgramsFs['readShortcut']): Dropped[] {
   const seen = new Set<string>()
   const out: Dropped[] = []

@@ -16,7 +16,8 @@ export function trayIconFor(link: LinkStatus, state: HelperState | null, previou
     case 'blocked':
       return 'action'
     case 'degraded':
-      return state.reason?.code === 'login_expired' ? 'action' : 'vpn-down'
+      // the all-direct mode is «нужно действие» (9.6) before the VPN without link
+      return state.allDirect || state.reason?.code === 'login_expired' ? 'action' : 'vpn-down'
     case 'on':
       return state.allDirect ? 'action' : 'working'
     case 'off':

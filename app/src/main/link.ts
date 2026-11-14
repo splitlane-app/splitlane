@@ -190,7 +190,10 @@ export class HelperLink {
     if ((await this.handshake(conn, gen)) === 'failed') await this.recover(gen)
   }
 
-  /** The pipe is absent or does not answer: restart the task when it is registered, else setup. */
+  /**
+   * At a start or a retry the pipe is absent or does not answer: run the task when it is registered (the status
+   * stays connecting), else setup.
+   */
   private async recover(gen: number): Promise<void> {
     let registered = false
     try {
@@ -203,12 +206,17 @@ export class HelperLink {
       this.setStatus({ kind: 'setup-needed' })
       return
     }
-    await this.restartLoop(gen)
+    await this.restartLoop(gen, false)
   }
 
-  private async restartLoop(gen: number): Promise<void> {
+  /**
+   * Up to RESTART_ATTEMPTS runs of the task, each followed by a wait for the pipe; unresponsive after the last.
+   * Only a pipe lost while ready (lost) shows restarting with the attempt (spec 9.5: «Служебный процесс
+   * перезапускается»); a start or a retry that has to run the task first stays connecting.
+   */
+  private async restartLoop(gen: number, lost: boolean): Promise<void> {
     for (let attempt = 1; attempt <= RESTART_ATTEMPTS; attempt++) {
-      this.setStatus({ kind: 'restarting', attempt })
+      this.setStatus(lost ? { kind: 'restarting', attempt } : { kind: 'connecting' })
       try {
         await this.deps.runTask()
       } catch (e) {
@@ -315,7 +323,7 @@ export class HelperLink {
     this.rpc = null
     if (this.current.kind !== 'ready') return // a handshake in progress handles its own failure
     this.deps.log('link: the helper pipe closed')
-    this.run(this.restartLoop(++this.generation))
+    this.run(this.restartLoop(++this.generation, true))
   }
 
   private dropRpc(): void {

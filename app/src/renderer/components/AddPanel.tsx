@@ -145,7 +145,10 @@ export function AddPanel(): React.JSX.Element {
   const pick = (): void => {
     bridge.pickProgram().then(
       (p) => {
-        if (p !== null) setPicked(p)
+        if (p === null) return // cancelled
+        // a file that is no program (a network path, say) is named as for a drop from Explorer
+        if (p.kind === 'program') setPicked(p.program)
+        else store.getState().showNotice(t('notice.notProgram', { names: p.name }))
       },
       () => {}
     )

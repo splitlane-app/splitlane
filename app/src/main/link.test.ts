@@ -156,10 +156,8 @@ test('starts the task when the pipe is absent but the task exists', async () => 
   t.link.start()
   await settle()
 
-  expect(t.statuses).toEqual([
-    { kind: 'restarting', attempt: 1 },
-    { kind: 'ready', hello: HELLO }
-  ])
+  // a helper that was not running yet is started while the window connects: no «перезапускается»
+  expect(t.statuses).toEqual([{ kind: 'ready', hello: HELLO }])
   expect(t.deps.runTask).toHaveBeenCalledTimes(1)
   expect(t.deps.sleep.mock.calls).toEqual([[200], [200], [200]])
   expect(c.methods()).toEqual(['hello', 'state.get', 'activity.subscribe'])
@@ -227,6 +225,30 @@ test('restarts the task up to five times when the pipe is lost, then unresponsiv
   expect(t.deps.dial).toHaveBeenCalledTimes(1 + 50)
   // the board keeps the last state under the banner
   expect(t.link.state()).toEqual(parseState(STATE))
+})
+
+test('a start without the pipe runs the task while connecting, then unresponsive', async () => {
+  const t = harness()
+  const held: (() => void)[] = []
+  t.deps.sleep.mockImplementation(() => new Promise<void>((r) => held.push(r)))
+  t.link.start()
+  await settle()
+  expect(t.deps.runTask).toHaveBeenCalledTimes(1)
+  expect(t.link.status()).toEqual({ kind: 'connecting' })
+
+  t.deps.sleep.mockImplementation(async () => {})
+  for (const r of held.splice(0)) r()
+  await settle()
+  // the same five runs with a wait of up to 2 s each as after a loss of the pipe
+  expect(t.deps.runTask).toHaveBeenCalledTimes(5)
+  expect(t.deps.sleep).toHaveBeenCalledTimes(50)
+  expect(t.statuses).toEqual([{ kind: 'unresponsive' }])
+
+  // «Повторить» connects again the same way
+  t.link.retry()
+  await settle()
+  expect(t.statuses).toEqual([{ kind: 'unresponsive' }, { kind: 'connecting' }, { kind: 'unresponsive' }])
+  expect(t.deps.runTask).toHaveBeenCalledTimes(10)
 })
 
 test('retry starts over', async () => {
@@ -402,10 +424,8 @@ test('an unusual dial error follows the rules of an absent pipe', async () => {
   u.deps.dial.mockRejectedValueOnce(new Error('something odd')).mockResolvedValueOnce(c)
   u.link.start()
   await settle()
-  expect(u.statuses).toEqual([
-    { kind: 'restarting', attempt: 1 },
-    { kind: 'ready', hello: HELLO }
-  ])
+  expect(u.statuses).toEqual([{ kind: 'ready', hello: HELLO }])
+  expect(u.deps.runTask).toHaveBeenCalledTimes(1)
 })
 
 test('a failed handshake restarts the task', async () => {
@@ -416,10 +436,7 @@ test('a failed handshake restarts the task', async () => {
   t.link.start()
   await settle()
   expect(broken.ended).toBe(true)
-  expect(t.statuses).toEqual([
-    { kind: 'restarting', attempt: 1 },
-    { kind: 'ready', hello: HELLO }
-  ])
+  expect(t.statuses).toEqual([{ kind: 'ready', hello: HELLO }])
   expect(t.deps.runTask).toHaveBeenCalledTimes(1)
 })
 
@@ -429,6 +446,7 @@ test('a failing runTask counts as a failed attempt', async () => {
   t.link.start()
   await settle()
   expect(t.link.status()).toEqual({ kind: 'unresponsive' })
+  expect(t.statuses).toEqual([{ kind: 'unresponsive' }])
   expect(t.deps.runTask).toHaveBeenCalledTimes(5)
   expect(t.deps.log.mock.calls.filter(([m]) => m.includes('schtasks /run failed')).length).toBe(5)
 })
@@ -486,13 +504,14 @@ test('shutdown closes without a restart', async () => {
   w.deps.sleep.mockImplementation(() => new Promise<void>((r) => held.push(r)))
   w.link.start()
   await settle()
-  expect(w.link.status()).toEqual({ kind: 'restarting', attempt: 1 })
+  expect(w.deps.runTask).toHaveBeenCalledTimes(1)
+  expect(w.link.status()).toEqual({ kind: 'connecting' })
   await w.link.shutdown()
   for (const r of held.splice(0)) r()
   await settle()
   expect(w.deps.runTask).toHaveBeenCalledTimes(1)
   expect(w.deps.dial).toHaveBeenCalledTimes(1)
-  expect(w.link.status()).toEqual({ kind: 'restarting', attempt: 1 })
+  expect(w.link.status()).toEqual({ kind: 'connecting' })
 })
 
 test('stop cancels the link and closes the connection', async () => {

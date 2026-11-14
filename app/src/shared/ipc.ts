@@ -44,7 +44,8 @@ export interface SplitLaneBridge {
   retryLink(): Promise<void>
   setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings>
   installedPrograms(): Promise<Program[]>
-  pickProgram(): Promise<Program | null>
+  /** The program of the file picked in the dialog, or the name of a file that is none; null when cancelled. */
+  pickProgram(): Promise<Dropped | null>
   resolveDropped(files: File[]): Promise<Dropped[]>
   icon(exe: string): Promise<string | null>
   openLogin(url: string): Promise<boolean>

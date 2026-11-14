@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import { win32 } from 'node:path'
-import type { InstallOutcome } from '../shared/status'
-import type { Exec } from './task'
+import type { InstallState } from '../shared/ipc'
+import type { InstallOutcome, LinkStatus } from '../shared/status'
+import type { Exec, SystemTools } from './task'
 
 /** The six files that must sit next to `splitlane-helper.exe` for `install`. */
 export const HELPER_FILES = [
@@ -67,6 +68,14 @@ export function encodePowerShell(script: string): string[] {
   return ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
 }
 
+/**
+ * The install state after a new link status: a finished install stays on screen («Готово…», or why it failed)
+ * until the link is ready, then it is idle again, so that a setup needed later in the same run starts afresh.
+ */
+export function installAfterLink(install: InstallState, link: LinkStatus): InstallState {
+  return link.kind === 'ready' && install.kind === 'done' ? { kind: 'idle' } : install
+}
+
 /** The last non-empty line decides: `INSTALL-OK`, `INSTALL-REFUSED: <reason>`, anything else is a failure. */
 export function parseInstallOutput(text: string): InstallOutcome {
   const lines = text
@@ -86,6 +95,8 @@ function tail(s: string): string {
 /** Installs the helper: checks the files, finds the user SID, runs `install` elevated and parses its output. */
 export async function installHelper(d: {
   exec: Exec
+  /** whoami and powershell by full path (systemTools). */
+  tools: Pick<SystemTools, 'whoami' | 'powershell'>
   sourceDir: string
   tempDir: string
   readText(path: string): Promise<string>
@@ -100,7 +111,7 @@ export async function installHelper(d: {
 
   let sid: string
   try {
-    const w = await d.exec('whoami', ['/user', '/fo', 'csv', '/nh'])
+    const w = await d.exec(d.tools.whoami, ['/user', '/fo', 'csv', '/nh'])
     if (w.code !== 0) return { kind: 'failed', detail: `whoami failed with code ${w.code}: ${tail(w.stderr || w.stdout)}` }
     sid = parseSid(w.stdout)
   } catch (e) {
@@ -112,7 +123,7 @@ export async function installHelper(d: {
     let r: { code: number; stdout: string; stderr: string }
     try {
       const script = installScript(win32.join(d.sourceDir, 'splitlane-helper.exe'), sid, outFile)
-      r = await d.exec('powershell.exe', encodePowerShell(script))
+      r = await d.exec(d.tools.powershell, encodePowerShell(script))
     } catch (e) {
       return { kind: 'failed', detail: e instanceof Error ? e.message : String(e) }
     }

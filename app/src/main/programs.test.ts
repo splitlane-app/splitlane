@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { installedPrograms, resolveDropped, startMenuDirs, type ProgramsFs } from './programs'
+import { installedPrograms, pickedFile, resolveDropped, startMenuDirs, type ProgramsFs } from './programs'
 
 test('startMenuDirs builds both folders', () => {
   expect(startMenuDirs({ ProgramData: 'C:\\ProgramData', AppData: 'C:\\Users\\Ann\\AppData\\Roaming' })).toEqual([
@@ -77,4 +77,15 @@ test('resolves dropped files to programs and skips the rest', () => {
     { kind: 'skipped', name: 'a.exe' },
     { kind: 'skipped', name: 'b.exe' },
   ])
+})
+
+test('pickedFile names a picked file that is not a program', () => {
+  const read = (p: string) => (p === 'C:\\L\\Beta.lnk' ? { target: 'D:\\Beta\\beta.exe' } : null)
+  expect(pickedFile('C:\\Apps\\Gamma\\gamma.exe', read)).toEqual({
+    kind: 'program',
+    program: { exe: 'C:\\Apps\\Gamma\\gamma.exe', name: '' },
+  })
+  expect(pickedFile('C:\\L\\Beta.lnk', read)).toEqual({ kind: 'program', program: { exe: 'D:\\Beta\\beta.exe', name: 'Beta' } })
+  // the dialog also hands over network paths: the helper takes only drive paths
+  expect(pickedFile('\\\\server\\share\\tool.exe', read)).toEqual({ kind: 'skipped', name: 'tool.exe' })
 })

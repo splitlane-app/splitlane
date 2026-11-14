@@ -1,4 +1,4 @@
-﻿import net from 'node:net'
+import net from 'node:net'
 import type { Conn } from './rpc'
 
 export type DialFailure = 'absent' | 'denied' | 'other'

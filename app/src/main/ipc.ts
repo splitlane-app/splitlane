@@ -251,7 +251,7 @@ export interface IpcDeps {
   installHelper(): Promise<void>
   setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings>
   installedPrograms(): Promise<Program[]>
-  pickProgram(): Promise<Program | null>
+  pickProgram(): Promise<Dropped | null>
   resolveDropped(paths: string[]): Dropped[]
   icon(exe: string): Promise<string | null>
   openExternal(url: string): Promise<void>
