@@ -17,6 +17,10 @@ import (
 // keep is how long a group stays in the summary after its last connection (spec 8.4).
 const keep = 5 * time.Minute
 
+// gap: a sample that comes more than this after the one before is a baseline, as the first one is (review
+// F4-2): the counters moved for longer than its rates could tell.
+const gap = 2 * time.Second
+
 // Conn is one connection of the core at one moment: cumulative byte counters.
 type Conn struct {
 	ID          string
@@ -118,10 +122,13 @@ func (t *Tracker) special(key, mainLane string) class {
 
 // Sample takes the connections of one second. mainLane is the lane of unpinned programs now (the default lane,
 // or direct in "all direct"). The rates are the bytes since the previous sample per second of the time
-// between the two samples (a tick may come late), and at least one second: the first sample, and a tick
-// right after a late one, count as one second. The descriptions of the programs seen for the first time
-// are read before, outside the lock (describeNew).
-func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane string) {
+// between the two samples (a tick may come late), and at least one second: a tick right after a late one
+// counts as one second. A connection first seen began since the sample before: it counts its counters.
+// The first sample after New or Reset, and one more than gap after the one before (no window for a
+// while), is a baseline (review F4-2): the counters of a connection count from its start, so every rate
+// is 0 there and the counters are kept for the next sample; Sample returns false for it. The descriptions
+// of the programs seen for the first time are read before, outside the lock (describeNew).
+func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane string) (counted bool) {
 	t.describeNew(conns, layout, mainLane)
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -130,6 +137,7 @@ func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane st
 	}
 	t.lanes = protocol.ActivityLanes{}
 	t.sysPinned = pinsSystem(layout)
+	baseline := t.last.IsZero() || now.Sub(t.last) > gap
 	elapsed := time.Second
 	if !t.last.IsZero() && now.Sub(t.last) > elapsed {
 		elapsed = now.Sub(t.last)
@@ -149,7 +157,10 @@ func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane st
 	for _, c := range conns {
 		cur := counters{up: c.Upload, down: c.Download}
 		was, seen := t.prev[c.ID]
-		if !seen || cur.up < was.up || cur.down < was.down {
+		switch {
+		case baseline:
+			was = cur
+		case !seen || cur.up < was.up || cur.down < was.down:
 			was = counters{} // a new connection, or a new one under a reused id
 		}
 		next[c.ID] = cur
@@ -207,6 +218,7 @@ func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane st
 		}
 		t.settle(g)
 	}
+	return !baseline
 }
 
 // perSecond is n bytes over elapsed (at least a second) as bytes per second; float64, so that the

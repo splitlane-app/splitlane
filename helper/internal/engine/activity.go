@@ -18,7 +18,7 @@ const activityEvery = time.Second
 type liveActivity struct {
 	tracker *activity.Tracker
 	run     *coreRun // guarded by Engine.mu: the run the tracker's samples are of; nil after a reset
-	fresh   bool     // guarded by Engine.mu: the last tick sampled run while a window was connected
+	fresh   bool     // guarded by Engine.mu: the last tick sampled run while a window was connected, not as a baseline
 	resets  int      // guarded by Engine.mu: the resets of tracker so far (Activity reads it without Engine.mu)
 
 	// Owned by sampleActivity.
@@ -32,8 +32,10 @@ type liveActivity struct {
 // grouped by the saved layout (compiled again when it changes), the unpinned programs on the main lane:
 // direct in "all direct", else the default lane. The tracker starts again from nothing for each run of
 // the core and when the phase leaves on, degraded and blocked. Without a window nothing is read, and
-// the summary of the last sample is no longer offered: it would be old when a window comes back. A
-// failed read is logged masked, once while it repeats; the summary of that tick is not offered either.
+// the summary of the last sample is no longer offered: it would be old when a window comes back. The
+// first sample of a run, and the first after a gap (a window back after a while), is a baseline (review
+// F4-2): no summary is offered after it, the next tick's counts. A failed read is logged masked, once
+// while it repeats; the summary of that tick is not offered either.
 func (e *Engine) sampleActivity(ctx context.Context) {
 	a := &e.act
 	e.mu.Lock()
@@ -87,9 +89,9 @@ func (e *Engine) sampleActivity(ctx context.Context) {
 		sample = append(sample, activity.Conn{ID: c.ID, ProcessPath: c.ProcessPath, Lane: c.Lane, Host: c.Host,
 			Upload: c.Upload, Download: c.Download})
 	}
-	a.tracker.Sample(now, sample, a.set, mainLane)
+	counted := a.tracker.Sample(now, sample, a.set, mainLane)
 	e.mu.Lock()
-	a.fresh = e.run == r
+	a.fresh = e.run == r && counted
 	e.mu.Unlock()
 }
 
@@ -101,7 +103,8 @@ func (a *liveActivity) reset() {
 
 // Activity is the summary of the last sample (spec 8.4) with the detail of the group detailFor ("" for
 // none): the data of the activity event. false while no core with the adapter runs (any phase but on,
-// degraded and blocked), and until the run has been sampled with a window connected. The summary is
+// degraded and blocked), and unless the last tick sampled the run with a window connected and counted
+// its rates (not a baseline: the run's first sample, the first after a gap). The summary is
 // taken without e.mu, under the tracker's own lock (review F4-1: nothing of the engine waits for it);
 // the run is checked before and again after it, and a reset in between (a new run of the core) gives
 // false, never the empty tracker of the new run.

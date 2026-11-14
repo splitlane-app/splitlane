@@ -90,15 +90,16 @@ func TestRatesFromCounters(t *testing.T) {
 	tr := New(testEnv)
 	none := layout(t)
 	a, b := `C:\Apps\A\a.exe`, `C:\Apps\B\b.exe`
+	// the first sample is a baseline (TestFirstSampleIsABaseline): it keeps the counters, every rate is 0
 	tr.Sample(start, []Conn{conn("1", a, protocol.LaneVPN, 100, 1000), conn("2", b, protocol.LaneDirect, 10, 20)}, none, protocol.LaneVPN)
 	s := tr.Summary("")
-	if want := (protocol.ActivityLanes{VPN: protocol.Traffic{Down: 1000, Up: 100}, Direct: protocol.Traffic{Down: 20, Up: 10}}); s.Lanes != want {
-		t.Fatalf("a connection seen for the first time counts its whole counters: %+v", s.Lanes)
+	if s.Lanes != (protocol.ActivityLanes{}) {
+		t.Fatalf("the first sample: %+v", s.Lanes)
 	}
-	if g := find(t, s, `C:\Apps\A\`); g.Down != 1000 || g.Up != 100 || g.Connections != 1 {
+	if g := find(t, s, `C:\Apps\A\`); g.Down != 0 || g.Up != 0 || g.Connections != 1 {
 		t.Fatalf("group a %+v", g)
 	}
-	// 1 goes on, 2 is gone, 3 is new
+	// 1 goes on, 2 is gone, 3 is new: it began since the sample before and counts its whole counters
 	tr.Sample(start.Add(time.Second), []Conn{conn("1", a, protocol.LaneVPN, 150, 1600), conn("3", b, protocol.LaneDirect, 5, 7)}, none, protocol.LaneVPN)
 	s = tr.Summary("")
 	if want := (protocol.ActivityLanes{VPN: protocol.Traffic{Down: 600, Up: 50}, Direct: protocol.Traffic{Down: 7, Up: 5}}); s.Lanes != want {
@@ -127,6 +128,7 @@ func TestGroupingByRuleAndFolder(t *testing.T) {
 		pinned(steamID, protocol.LaneDirect, protocol.KindFolder, `C:\Games\Steam\steam.exe`),
 		pinned(gameID, protocol.LaneVPN, protocol.KindFile, `C:\Games\Steam\steamapps\common\Game\game.exe`))
 	tr := New(testEnv)
+	tr.Sample(start.Add(-time.Second), nil, set, protocol.LaneVPN) // the baseline: the connections below count their counters
 	tr.Sample(start, []Conn{
 		conn("1", `C:\Games\Steam\steam.exe`, protocol.LaneDirect, 10, 100),
 		conn("2", `C:\Games\Steam\bin\cef\steamwebhelper.exe`, protocol.LaneDirect, 10, 300),
@@ -233,6 +235,7 @@ func TestSystemAndUnattributedTiles(t *testing.T) {
 func TestNoSystemTileWhenSystemIsPinned(t *testing.T) {
 	tr := New(testEnv)
 	sys := layout(t, pinned(sysID, protocol.LaneDirect, protocol.KindSystem, ""))
+	tr.Sample(start.Add(-time.Second), nil, sys, protocol.LaneVPN) // the baseline
 	tr.Sample(start, []Conn{conn("1", `:System`, protocol.LaneDirect, 1, 2), conn("2", "", protocol.LaneVPN, 3, 4)}, sys, protocol.LaneVPN)
 	s := tr.Summary(protocol.KeySystem)
 	if got, want := keys(s), []string{protocol.KeyUnattributed, sysID}; !reflect.DeepEqual(got, want) {
@@ -253,14 +256,14 @@ func TestNoSystemTileWhenSystemIsPinned(t *testing.T) {
 
 // Ruling of plan 1B: a rate is the bytes since the previous sample per second of the real time between
 // the two samples, so a tick that came late does not show a burst; a gap shorter than a second (the tick
-// after a late one) counts as one second. The first sample counts as one second too. The executable of
-// a group is still chosen by its bytes.
+// after a late one) counts as one second. The first sample is a baseline (TestFirstSampleIsABaseline). The
+// executable of a group is still chosen by its bytes.
 func TestRatesScaleWithElapsedTime(t *testing.T) {
 	tr := New(testEnv)
 	none := layout(t)
 	a, b := `C:\Apps\A\a.exe`, `C:\Apps\A\b.exe`
 	tr.Sample(start, []Conn{conn("1", a, protocol.LaneVPN, 100, 1000)}, none, protocol.LaneVPN)
-	if s := tr.Summary(""); s.Lanes.VPN != (protocol.Traffic{Down: 1000, Up: 100}) {
+	if s := tr.Summary(""); s.Lanes != (protocol.ActivityLanes{}) {
 		t.Fatalf("first sample: %+v", s.Lanes)
 	}
 	// 2 s later: 2000 and 200 more bytes are 1000 and 100 a second; a new connection counts its
@@ -282,6 +285,51 @@ func TestRatesScaleWithElapsedTime(t *testing.T) {
 	tr.Sample(start.Add(2500*time.Millisecond), []Conn{conn("1", a, protocol.LaneVPN, 350, 3500), conn("2", b, protocol.LaneDirect, 40, 401)}, none, protocol.LaneVPN)
 	if s := tr.Summary(""); s.Lanes != (protocol.ActivityLanes{VPN: protocol.Traffic{Down: 500, Up: 50}}) {
 		t.Fatalf("500 ms: %+v", s.Lanes)
+	}
+}
+
+// Review F4-2: the counters of a connection count from its start. The first sample after New or Reset, and
+// the first after a gap of more than 2 s (no window for a while, the tracker kept), is a baseline: every
+// rate is 0 there, for the connections seen before too, and the counters are kept for the next sample; a
+// download under way never shows its whole size as one second. A connection first seen on a regular tick
+// began since the tick before: it counts its counters.
+func TestFirstSampleIsABaseline(t *testing.T) {
+	tr := New(testEnv)
+	none := layout(t)
+	a := `C:\Apps\A\a.exe`
+	const size = 400 << 20 // a download under way: 400 MiB so far
+	if tr.Sample(start, []Conn{conn("1", a, protocol.LaneVPN, 100, size)}, none, protocol.LaneVPN) {
+		t.Fatal("the first sample counted")
+	}
+	s := tr.Summary("")
+	if s.Lanes != (protocol.ActivityLanes{}) {
+		t.Fatalf("the first sample is a baseline: %+v", s.Lanes)
+	}
+	if g := find(t, s, `C:\Apps\A\`); g.Down != 0 || g.Up != 0 || g.Connections != 1 || g.Exe != a {
+		t.Fatalf("the first sample: %+v", g)
+	}
+	if !tr.Sample(start.Add(time.Second), []Conn{conn("1", a, protocol.LaneVPN, 150, size+1000), conn("2", a, protocol.LaneDirect, 5, 7)}, none, protocol.LaneVPN) {
+		t.Fatal("a regular tick did not count")
+	}
+	if s := tr.Summary(""); s.Lanes != (protocol.ActivityLanes{VPN: protocol.Traffic{Down: 1000, Up: 50}, Direct: protocol.Traffic{Down: 7, Up: 5}}) {
+		t.Fatalf("a second later: %+v", s.Lanes)
+	}
+	// 3 s without a sample: a baseline again, for every connection
+	if tr.Sample(start.Add(4*time.Second), []Conn{conn("1", a, protocol.LaneVPN, 300, size+9000), conn("2", a, protocol.LaneDirect, 9, 9),
+		conn("3", a, protocol.LaneVPN, 1, 20<<20)}, none, protocol.LaneVPN) {
+		t.Fatal("the sample after a gap counted")
+	}
+	if s := tr.Summary(""); s.Lanes != (protocol.ActivityLanes{}) {
+		t.Fatalf("after a gap of 3 s: %+v", s.Lanes)
+	}
+	tr.Sample(start.Add(5*time.Second), []Conn{conn("1", a, protocol.LaneVPN, 310, size+10000), conn("3", a, protocol.LaneVPN, 2, 20<<20+100)}, none, protocol.LaneVPN)
+	if s := tr.Summary(""); s.Lanes != (protocol.ActivityLanes{VPN: protocol.Traffic{Down: 1100, Up: 11}}) {
+		t.Fatalf("a second after the gap: %+v", s.Lanes)
+	}
+	tr.Reset()
+	tr.Sample(start.Add(6*time.Second), []Conn{conn("1", a, protocol.LaneVPN, 320, size+11000)}, none, protocol.LaneVPN)
+	if s := tr.Summary(""); s.Lanes != (protocol.ActivityLanes{}) {
+		t.Fatalf("the first sample after Reset: %+v", s.Lanes)
 	}
 }
 
@@ -324,6 +372,7 @@ func TestUnpinnedKeptFiveMinutes(t *testing.T) {
 func TestDetailForAGroup(t *testing.T) {
 	tr := New(testEnv)
 	none := layout(t)
+	tr.Sample(start.Add(-time.Second), nil, none, protocol.LaneVPN) // the baseline
 	tr.Sample(start, []Conn{
 		{ID: "1", ProcessPath: discord + `app-1.0.9\Discord.exe`, Lane: protocol.LaneVPN, Host: "gateway.discord.example", Upload: 10, Download: 100},
 		{ID: "2", ProcessPath: discord + `Update.exe`, Lane: protocol.LaneDirect, Host: "203.0.113.7", Upload: 1, Download: 1000},
@@ -448,9 +497,12 @@ func TestResetForgets(t *testing.T) {
 	if s.Lanes != (protocol.ActivityLanes{}) || !reflect.DeepEqual(s.Apps, idle(protocol.LaneVPN)) || s.Detail != nil {
 		t.Fatalf("after Reset: %+v", s)
 	}
-	// the same connection counts its whole counters again
-	tr.Sample(start.Add(time.Second), []Conn{conn("1", tool, protocol.LaneVPN, 100, 200)}, none, protocol.LaneVPN)
-	if g := find(t, tr.Summary(""), `C:\Apps\Tool\`); g.Down != 200 || g.Up != 100 {
+	// the first sample after Reset is a baseline again, the next counts from its counters
+	if tr.Sample(start.Add(time.Second), []Conn{conn("1", tool, protocol.LaneVPN, 100, 200)}, none, protocol.LaneVPN) {
+		t.Fatal("the first sample after Reset counted")
+	}
+	tr.Sample(start.Add(2*time.Second), []Conn{conn("1", tool, protocol.LaneVPN, 110, 230)}, none, protocol.LaneVPN)
+	if g := find(t, tr.Summary(""), `C:\Apps\Tool\`); g.Down != 30 || g.Up != 10 {
 		t.Fatalf("after Reset: %+v", g)
 	}
 }

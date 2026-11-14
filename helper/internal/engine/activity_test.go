@@ -93,8 +93,8 @@ func TestActivityWhileOn(t *testing.T) {
 	}
 	windows(h, 1)
 	h.e.sampleActivity(ctx)
-	if s := summaryNow(t, h, ""); s.Lanes.Direct != (protocol.Traffic{Down: 1000, Up: 100}) {
-		t.Fatalf("the first sample counts the whole counters: %+v", s.Lanes)
+	if _, ok := h.e.Activity(""); ok || reads() != 1 {
+		t.Fatalf("the first sample is a baseline (TestActivityStartsFromABaseline): read %d times, no summary", reads())
 	}
 	h.clock.After(time.Second)
 	setConns(h,
@@ -156,7 +156,7 @@ func TestActivityWhileOn(t *testing.T) {
 // Spec 8.4: the event goes only while the core with the adapter runs: on, degraded, blocked. In off,
 // in starting and stopping, and after a disable, the connections are not read and there is no
 // summary, with a window connected. A phase that leaves on, degraded and blocked starts the tracker
-// again: back in on, the connections count their whole counters.
+// again: back in on, the first sample is a baseline again (TestActivityStartsFromABaseline).
 func TestNoActivityWhenOff(t *testing.T) {
 	h := newHarness(t)
 	h.load()
@@ -171,15 +171,17 @@ func TestNoActivityWhenOff(t *testing.T) {
 	startEnable(h)
 	h.waitPhase(protocol.PhaseOn)
 	h.waitFor("the path read after phase on", func() bool { return h.e.State().Tailscale.Path != nil })
-	want := int64(1000) // the first sample of the run counts the whole counters, the next ones what is new
+	h.e.sampleActivity(ctx) // the first sample of the run is a baseline, the next ones count what is new
+	down := int64(1000)
 	for _, phase := range []string{protocol.PhaseOn, protocol.PhaseDegraded, protocol.PhaseBlocked} {
 		setPhase(h, phase)
 		h.clock.After(time.Second)
+		down += 10
+		setConns(h, Conn{ID: "1", ProcessPath: curlA, Lane: protocol.LaneVPN, Upload: 100, Download: down})
 		h.e.sampleActivity(ctx)
-		if s := summaryNow(t, h, ""); s.Lanes.VPN.Down != want {
+		if s := summaryNow(t, h, ""); s.Lanes.VPN.Down != 10 {
 			t.Fatalf("%s: %+v", phase, s.Lanes)
 		}
-		want = 0
 	}
 	read := reads()
 	for _, phase := range []string{protocol.PhaseStarting, protocol.PhaseStopping} {
@@ -192,8 +194,14 @@ func TestNoActivityWhenOff(t *testing.T) {
 	setPhase(h, protocol.PhaseOn)
 	h.clock.After(time.Second)
 	h.e.sampleActivity(ctx)
-	if s := summaryNow(t, h, ""); s.Lanes.VPN.Down != 1000 {
-		t.Fatalf("back in on the tracker starts again: %+v", s.Lanes)
+	if s, ok := h.e.Activity(""); ok {
+		t.Fatalf("back in on the tracker starts again, from a baseline: %+v", s.Lanes)
+	}
+	h.clock.After(time.Second)
+	setConns(h, Conn{ID: "1", ProcessPath: curlA, Lane: protocol.LaneVPN, Upload: 100, Download: down + 7})
+	h.e.sampleActivity(ctx)
+	if s := summaryNow(t, h, ""); s.Lanes.VPN.Down != 7 {
+		t.Fatalf("back in on, a second after the baseline: %+v", s.Lanes)
 	}
 	if err := call(h, protocol.MethodDisable, nil); err != nil {
 		t.Fatal(err)
@@ -203,6 +211,42 @@ func TestNoActivityWhenOff(t *testing.T) {
 	h.e.sampleActivity(ctx)
 	if _, ok := h.e.Activity(""); ok || reads() != read {
 		t.Fatal("after the disable: a summary, or read")
+	}
+}
+
+// Review F4-2: the first sample of a run, and the first after a gap (the last window went, one came back), is
+// a baseline: no summary after it, neither the whole counters of a download under way as one second nor an
+// event with every rate 0; the tick after it counts what is new.
+func TestActivityStartsFromABaseline(t *testing.T) {
+	h := enabled(t)
+	windows(h, 1)
+	ctx := context.Background()
+	const size = 400 << 20 // a download under way: 400 MiB so far
+	setConns(h, Conn{ID: "1", ProcessPath: curlA, Lane: protocol.LaneVPN, Upload: 100, Download: size})
+	h.e.sampleActivity(ctx)
+	if s, ok := h.e.Activity(""); ok {
+		t.Fatalf("the first sample of the run is a baseline, no summary: %+v", s.Lanes)
+	}
+	h.clock.After(time.Second)
+	setConns(h, Conn{ID: "1", ProcessPath: curlA, Lane: protocol.LaneVPN, Upload: 150, Download: size + 1000})
+	h.e.sampleActivity(ctx)
+	if s := summaryNow(t, h, ""); s.Lanes.VPN != (protocol.Traffic{Down: 1000, Up: 50}) {
+		t.Fatalf("a second later: %+v", s.Lanes)
+	}
+	windows(h, 0)
+	h.e.sampleActivity(ctx)
+	h.clock.After(5 * time.Second)
+	windows(h, 1)
+	setConns(h, Conn{ID: "1", ProcessPath: curlA, Lane: protocol.LaneVPN, Upload: 400, Download: size + 6000})
+	h.e.sampleActivity(ctx)
+	if s, ok := h.e.Activity(""); ok {
+		t.Fatalf("a window back after 5 s: a baseline, no summary: %+v", s.Lanes)
+	}
+	h.clock.After(time.Second)
+	setConns(h, Conn{ID: "1", ProcessPath: curlA, Lane: protocol.LaneVPN, Upload: 410, Download: size + 7000})
+	h.e.sampleActivity(ctx)
+	if s := summaryNow(t, h, ""); s.Lanes.VPN != (protocol.Traffic{Down: 1000, Up: 10}) {
+		t.Fatalf("a second after the baseline: %+v", s.Lanes)
 	}
 }
 
@@ -256,9 +300,10 @@ func TestActivityDoesNotWaitForADescription(t *testing.T) {
 	}
 }
 
-// Spec 8.4: the tracker starts again with each run of the core. After a restart (5.5) the connections
-// of the new core count their whole counters, and a program seen only by the core that is gone is not
-// kept: its 5 minutes belonged to that run. The new run has no summary before its first sample.
+// Spec 8.4: the tracker starts again with each run of the core. After a restart (5.5) the first sample of
+// the new core is a baseline (TestActivityStartsFromABaseline), and a program seen only by the core that is
+// gone is not kept: its 5 minutes belonged to that run. The new run has no summary before its first
+// sample, nor after that baseline.
 func TestActivityResetsOnRestart(t *testing.T) {
 	h := enabled(t)
 	windows(h, 1)
@@ -286,9 +331,15 @@ func TestActivityResetsOnRestart(t *testing.T) {
 	}
 	h.clock.After(time.Second)
 	h.e.sampleActivity(ctx)
+	if _, ok := h.e.Activity(""); ok {
+		t.Fatal("the first sample of the new run is a baseline")
+	}
+	h.clock.After(time.Second)
+	setConns(h, Conn{ID: "1", ProcessPath: curlA, Lane: protocol.LaneVPN, Upload: 160, Download: 1700})
+	h.e.sampleActivity(ctx)
 	s = summaryNow(t, h, "")
-	if g, ok := appIn(s, `C:\Tools\a\`); !ok || g.Down != 1600 || g.Up != 150 {
-		t.Fatalf("the new run counts the whole counters: %+v", s.Apps)
+	if g, ok := appIn(s, `C:\Tools\a\`); !ok || g.Down != 100 || g.Up != 10 {
+		t.Fatalf("the new run counts from its baseline: %+v", s.Apps)
 	}
 	if _, ok := appIn(s, `C:\Tools\b\`); ok {
 		t.Fatalf("a program of the run that is gone is not kept: %+v", s.Apps)
