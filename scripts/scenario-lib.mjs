@@ -1,9 +1,10 @@
 // Pure parts of the scenario check of spec 12 (scripts/scenario.mjs): STUN messages (RFC 5389), the
 // line framing of the pipe and the matching of replies to requests (spec 5.1), the lane addresses
 // and their masks, the layout of the renamed copies (spec 8.1), the verdicts of the steps and the
-// parsing of what tailscale.exe and tasklist.exe print. Nothing here does I/O.
+// parsing of what tailscale.exe and tasklist.exe print. Only applyScenarioLayout writes a file.
 import { randomUUID } from 'node:crypto';
-import { win32 } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, win32 } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
 export const STUN_MAGIC = 0x2112a442;
@@ -391,4 +392,25 @@ export function scrubPaths(text, roots) {
     out = res + out.slice(at);
   }
   return out;
+}
+
+// BUDGET_MS is the time after which steps 1-6 are not started any more: the tool that runs the
+// scenario kills it at 600 s, and step 8 with the clean-up needs the rest.
+export const BUDGET_MS = 480000;
+
+// PREVIOUS_LAYOUT_FILE is the name, under %TEMP%\splitlane-scenario, of the layout that was in place
+// before the scenario; it is written before the first lanes.set, so a killed run can be undone by hand.
+export const PREVIOUS_LAYOUT_FILE = 'previous-layout.json';
+
+// stepAction: 'run' or 'skip' for step n at time now. Steps 7 and 8 (the verdict and the disable)
+// run always; the others are not started at or after the deadline.
+export function stepAction(n, now, deadline) {
+  return n >= 7 || now < deadline ? 'run' : 'skip';
+}
+
+// applyScenarioLayout saves previous in dir and only then gives layout to setLayout (lanes.set).
+export async function applyScenarioLayout(dir, previous, layout, setLayout) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, PREVIOUS_LAYOUT_FILE), JSON.stringify(previous, null, 2));
+  return setLayout(layout);
 }

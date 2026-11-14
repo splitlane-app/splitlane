@@ -15,7 +15,7 @@ import {
   addressBook, buildLayout, coreAliveThroughout, createAllDirectTracker, createLineReader, createRpc,
   laneOf, lanesKnown, learn, mask, maskText, parseSample, parseStunResponse, parseTasklist, sameSystem,
   scenarioPaths, stunRequest, systemExitNode, verdictLane, verdictLeak, verdictSwitch, withDefault,
-  withLane, ENABLE_WAIT_MS, scrubPaths,
+  withLane, ENABLE_WAIT_MS, scrubPaths, stepAction, BUDGET_MS, PREVIOUS_LAYOUT_FILE, applyScenarioLayout,
 } from './scenario-lib.mjs';
 
 const SCENARIO = fileURLToPath(new URL('./scenario.mjs', import.meta.url));
@@ -383,4 +383,30 @@ test('the output hides the temp and the home folder (review F5-3)', () => {
     String.raw`EPERM: open '%TEMP%\splitlane-scenario\vpn\curl-vpn.exe'`);
   assert.equal(scrubPaths(String.raw`c:\users\ivan petrov\x`, roots), String.raw`%USERPROFILE%\x`);
   assert.equal(scrubPaths('nothing here', roots), 'nothing here');
+});
+
+test('the time budget skips steps 1-6 but never step 8, and the previous layout is saved first (review F5-2)', async () => {
+  assert.ok(BUDGET_MS <= 480000, 'the tool limit is 600 s; the clean-up needs the rest');
+  const start = 1000;
+  const deadline = start + BUDGET_MS;
+  for (const n of [1, 2, 3, 4, 5, 6]) {
+    assert.equal(stepAction(n, deadline - 1, deadline), 'run', `step ${n} before the deadline`);
+    assert.equal(stepAction(n, deadline, deadline), 'skip', `step ${n} at the deadline`);
+  }
+  for (const n of [7, 8]) assert.equal(stepAction(n, deadline + 999999, deadline), 'run', `step ${n} always`);
+
+  const dir = mkdtempSync(join(tmpdir(), 'sl-prev-'));
+  try {
+    const previous = { apps: [{ uuid: 'u1', lane: 'direct' }], defaultLane: 'vpn' };
+    const calls = [];
+    const r = await applyScenarioLayout(dir, previous, { apps: [] }, async (layout) => {
+      // the file must exist already when the first lanes.set is made
+      calls.push(JSON.parse(readFileSync(join(dir, PREVIOUS_LAYOUT_FILE), 'utf8')));
+      return { ok: layout };
+    });
+    assert.deepEqual(calls, [previous]);
+    assert.deepEqual(r, { ok: { apps: [] } });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

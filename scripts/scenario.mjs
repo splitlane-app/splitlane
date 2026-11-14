@@ -34,9 +34,9 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import {
-  ENABLE_WAIT_MS, addressBook, buildLayout, createAllDirectTracker, createLineReader, createRpc, heartbeatText, isIPv4,
+  BUDGET_MS, ENABLE_WAIT_MS, addressBook, applyScenarioLayout, buildLayout, createAllDirectTracker, createLineReader, createRpc, heartbeatText, isIPv4,
   laneOf, lanesKnown, learn, maskText, parseSample, parseStunResponse, parseTasklist, sameSystem,
-  scenarioPaths, scrubPaths, stunRequest, systemExitNode, verdictLane, verdictLeak, verdictSwitch, withDefault, withLane,
+  scenarioPaths, scrubPaths, stepAction, stunRequest, systemExitNode, verdictLane, verdictLeak, verdictSwitch, withDefault, withLane,
 } from './scenario-lib.mjs';
 
 const USAGE = 'usage: node scripts/scenario.mjs [--pipe \\\\.\\pipe\\SplitLane.Helper] [--heartbeat FILE] [--keep]';
@@ -579,7 +579,8 @@ async function withHelper(helper, opts, report) {
   const before = await systemTailscale();
   const p = prepareCopies();
   const layout = buildLayout(p);
-  const set = await helper.call('lanes.set', layout);
+  const deadline = Date.now() + BUDGET_MS;
+  const set = await applyScenarioLayout(p.root, previous, layout, (l) => helper.call('lanes.set', l));
   if (set.error) {
     report(0, false, `lanes.set of the scenario layout: ${errText(set)}`);
     return true;
@@ -597,12 +598,31 @@ async function withHelper(helper, opts, report) {
   const leaks = watchLeaks(p.curlVpn);
   let routing = true; // from routing.enable until the disable of step 8
   let restored = false;
+  // The same clean-up for the normal end and for a signal (Ctrl+C, the console closed): once.
+  let cleaning = null;
+  const cleanup = () => (cleaning ??= (async () => {
+    if (routing) await disableQuietly(helper);
+    await leaks.stop();
+    await core.stop();
+    return restoreLayout(helper, previous, opts.keep);
+  })());
+  const onSignal = (name) => () => {
+    say(`SCENARIO-SIGNAL ${name}: disabling routing and restoring the previous layout`);
+    cleanup().then((ok) => process.exit(ok ? 1 : 2), () => process.exit(2));
+  };
+  const handlers = ['SIGINT', 'SIGBREAK', 'SIGHUP'].map((name) => [name, onSignal(name)]);
+  for (const [name, h] of handlers) process.on(name, h);
   try {
-    const one = await stepEnable(helper);
+    const oneRun = stepAction(1, Date.now(), deadline) === 'run';
+    const one = oneRun ? await stepEnable(helper) : { ok: false, text: 'not run: time budget' };
     report(1, one.ok, one.text);
     for (const [n, step] of [[2, stepTcp], [3, stepUdp], [4, stepMove], [5, stepMain], [6, stepNested]]) {
       if (!one.ok) {
         report(n, false, 'not run: routing is not on');
+        continue;
+      }
+      if (stepAction(n, Date.now(), deadline) === 'skip') {
+        report(n, false, 'not run: time budget');
         continue;
       }
       const r = await step(ctx);
@@ -617,10 +637,8 @@ async function withHelper(helper, opts, report) {
       + `${v.leaks} of them from <direct>`);
     report(8, eight.ok, eight.text);
   } finally {
-    if (routing) await disableQuietly(helper);
-    await leaks.stop();
-    await core.stop();
-    restored = await restoreLayout(helper, previous, opts.keep);
+    restored = await cleanup();
+    for (const [name, h] of handlers) process.off(name, h);
   }
   return restored;
 }
