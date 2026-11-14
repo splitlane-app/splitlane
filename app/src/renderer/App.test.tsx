@@ -1,7 +1,10 @@
 import { act, cleanup, screen } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
 import { App } from './App'
-import { fakeBridge, renderWith, servicesFor, snap } from './testing'
+import { DEFAULT_SETTINGS } from '../shared/settings'
+import { fakeBridge, renderWith, servicesFor, snap as baseSnap } from './testing'
+
+const snap: typeof baseSnap = (over) => ({ ...baseSnap(over), settings: { ...DEFAULT_SETTINGS, connectedOnce: true } })
 
 afterEach(cleanup)
 

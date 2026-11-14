@@ -173,14 +173,65 @@ export const ru = {
   'notice.notProgram': 'Не программа: {names}',
   'notice.close': 'Закрыть',
 
-  // screens until task 13 gives them their content
+  // the screens of the link (spec 4.3, 5.1)
   'screen.splash': 'Подключение к служебному процессу…',
-  'screen.setup': 'Настройка',
   'screen.otherUser': 'Служебный процесс настроен для другого пользователя Windows',
-  'screen.updateHelper': 'Обновите служебный процесс',
+  'screen.otherUserLead':
+    'SplitLane на этом компьютере настроен другим пользователем Windows. Войдите под тем пользователем или попросите его всё переустановить',
   'screen.updateApp': 'Обновите приложение',
-  'screen.connection': 'Подключение',
-  'screen.back': 'Назад к дорожкам'
+  'screen.updateAppLead': 'Служебный процесс новее этого окна. Обновите SplitLane, чтобы они снова работали вместе',
+
+  // setup and update of the helper (spec 4.3, 5.1)
+  'setup.title': 'Настройка',
+  'setup.lead': 'SplitLane нужен служебный процесс. Он ставится один раз, Windows попросит подтвердить',
+  'setup.install': 'Настроить',
+  'setup.updateTitle': 'Обновите служебный процесс',
+  'setup.updateLead': 'Служебный процесс старее этого окна. Обновление ставится так же, с подтверждением Windows',
+  'setup.update': 'Обновить служебный процесс',
+  'setup.running': 'Подтвердите запрос Windows…',
+  'setup.done': 'Готово, служебный процесс запускается…',
+  'setup.cancelled': 'Настройка отменена',
+  'setup.failed': 'Не удалось выполнить настройку',
+
+  // connect the VPN and the connection screen (spec 9.5, 9.6)
+  'connect.title': 'Подключите VPN',
+  'connect.lead': 'Выберите, как SplitLane получит VPN',
+  'connect.methods': 'Способы подключения',
+  'connect.tailscale': 'Tailscale',
+  'connect.tailscaleNote': 'доступно',
+  'connect.key': 'Ключ или подписка',
+  'connect.file': 'Файл настроек',
+  'connect.soon': 'скоро',
+  'connect.steps': 'Шаги',
+  'connect.step.login': 'Войти в Tailscale',
+  'connect.step.exitNode': 'Выбрать exit node',
+  'connect.step.enable': 'Включить деление',
+  'connect.loginHint': 'Откроется страница входа в браузере',
+  'connect.loginButton': 'Войти в Tailscale',
+  'connect.waitLogin': 'Страница входа открыта в браузере. Войдите там, и окно продолжит само',
+  'connect.openAgain': 'Открыть ссылку снова',
+  'connect.openFailed': 'Не удалось открыть ссылку входа',
+  'connect.approval':
+    'Ссылка использована, устройство ждёт одобрения администратором сети Tailscale. Окно продолжит само, когда его одобрят',
+  'connect.exitNodeHint': 'Выберите сервер, через который пойдёт дорожка VPN',
+  'connect.noExitNodes': 'В вашей сети Tailscale нет exit node',
+  'connect.offline': 'не в сети',
+  'connect.offlineWarn': 'Узел сейчас не в сети, дорожка VPN может не заработать',
+  'connect.exitNodes': 'Exit node',
+  'connect.systemWarn':
+    'В приложении Tailscale сейчас включён exit node. Пока SplitLane работает, он будет выключен, а при выключении деления вернётся',
+  'connect.enable': 'Включить деление',
+  'connect.enabling': 'Включается…',
+  'connection.title': 'Подключение',
+  'connection.device': 'Устройство в сети Tailscale',
+  'connection.exitNode': 'Выбранный exit node',
+  'connection.changeNote': 'Смена exit node ненадолго перезапустит деление',
+  'connection.logout': 'Выйти из Tailscale',
+  'connection.logoutBlocked': 'Выйти можно, когда деление выключено',
+  'connection.openAtLogin': 'Запускать при входе в Windows',
+  'connection.enableOnStart': 'Включать деление при запуске',
+  'connection.settings': 'Настройки',
+  'screen.back': 'Назад к дорожкам',
 } as const
 
 export type Key = keyof typeof ru
