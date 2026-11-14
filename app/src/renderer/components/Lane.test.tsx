@@ -170,3 +170,48 @@ test('a click on the pin of an unpinned card pins it in the default lane', async
   ])
 })
 
+
+test('files dropped from Explorer are pinned in that lane, the rest named in a notice', async () => {
+  const asked: File[][] = []
+  const { bridge, commands } = fakeBridge({
+    resolveDropped: async (files) => {
+      asked.push(files)
+      return [
+        { kind: 'program', program: { exe: GAME, name: 'Game' } },
+        { kind: 'skipped', name: 'notes' },
+        { kind: 'skipped', name: 'Документы' }
+      ]
+    }
+  })
+  const services = servicesFor(bridge, board)
+  const state = board.state!
+  const view = boardView(state.apps, state.defaultLane, null, state.addresses, '')
+  renderWith(<Lane vm={view.direct} onMakeDefault={() => {}} />, services)
+
+  const lane = screen.getByRole('region', { name: 'Напрямую' })
+  const files = [new File([''], 'Game.lnk'), new File([''], 'notes.txt'), new File([''], 'Документы')]
+  const dataTransfer = { types: ['Files'], files, dropEffect: 'none' }
+  // a drag of text is not for the lane
+  const text = { types: ['text/plain'], files: [], dropEffect: 'none' }
+  fireEvent.dragOver(lane, { dataTransfer: text })
+  expect(lane.dataset.filesOver).toBe('false')
+  expect(text.dropEffect).toBe('none')
+
+  fireEvent.dragOver(within(lane).getByText('Browser'), { dataTransfer })
+  expect(lane.dataset.filesOver).toBe('true')
+  expect(dataTransfer.dropEffect).toBe('copy')
+  await act(async () => {
+    fireEvent.drop(lane, { dataTransfer })
+  })
+  expect(lane.dataset.filesOver).toBe('false')
+  expect(asked).toEqual([files])
+  expect(commands).toHaveLength(1)
+  const c = commands[0] as { method: string; apps: { name: string; exe: string; lane: string }[] }
+  expect(c.method).toBe('lanes.set')
+  expect(c.apps.map((r) => [r.name, r.exe, r.lane])).toEqual([
+    ['Mail', MAIL, 'vpn'],
+    ['Browser', BROWSER, 'direct'],
+    ['Game', GAME, 'direct']
+  ])
+  expect(services.store.getState().notice).toBe('Не программа: notes, Документы')
+})

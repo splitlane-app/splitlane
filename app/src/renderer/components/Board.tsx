@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { Lane as LaneName } from '../../shared/protocol'
+import { BoardDnd } from '../dnd/BoardDnd'
 import { boardView } from '../model/board'
 import { makeDefault } from '../model/layout'
 import { useApp, useServices } from '../services'
@@ -10,7 +11,10 @@ import { Header } from './Header'
 import { Lane } from './Lane'
 import { Notice } from './Notice'
 
-/** The main window (spec 9.1): the header, the state banner and the two lanes side by side, VPN on the left. */
+/**
+ * The main window (spec 9.1): the header, the state banner and the two lanes side by side, VPN on the left; the
+ * cards drag between them (9.2).
+ */
 export function Board(): React.JSX.Element {
   const { store } = useServices()
   const layout = useApp(effectiveLayout)
@@ -29,18 +33,20 @@ export function Board(): React.JSX.Element {
   }
 
   return (
-    <div className={styles.board}>
-      <Header />
-      <div className={styles.bannerSlot}>
-        <Banner />
+    <BoardDnd>
+      <div className={styles.board}>
+        <Header />
+        <div className={styles.bannerSlot}>
+          <Banner />
+        </div>
+        {view !== null && (
+          <main className={styles.lanes}>
+            <Lane vm={view.vpn} onMakeDefault={() => setDefault('vpn')} />
+            <Lane vm={view.direct} onMakeDefault={() => setDefault('direct')} />
+          </main>
+        )}
+        <Notice />
       </div>
-      {view !== null && (
-        <main className={styles.lanes}>
-          <Lane vm={view.vpn} onMakeDefault={() => setDefault('vpn')} />
-          <Lane vm={view.direct} onMakeDefault={() => setDefault('direct')} />
-        </main>
-      )}
-      <Notice />
-    </div>
+    </BoardDnd>
   )
 }

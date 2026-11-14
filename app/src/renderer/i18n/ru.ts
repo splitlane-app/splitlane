@@ -33,6 +33,19 @@ export const ru = {
   unpin: 'Открепить',
   pin: 'Закрепить',
   'card.quiet': 'тихо',
+  // what a screen reader says of a card: its name and lane, its kind; the menu of its actions
+  'card.label': '{name}, {lane}',
+  'card.labelUnpinned': '{name}, {lane}, не закреплена',
+  'card.role': 'карточка программы',
+  'menu.label': 'Действия: {name}',
+
+  // dragging a card (said by the screen reader)
+  'dnd.instructions':
+    'Пробел — взять карточку, стрелки — перенести, пробел — положить, Escape — отменить. Ввод — открыть карточку программы, Shift+F10 — действия',
+  'dnd.picked': '{name}: перенос',
+  'dnd.action': '{name}: {action}',
+  'dnd.stay': '{name}: на своём месте',
+  'dnd.canceled': '{name}: перенос отменён',
 
   // speeds: down and up of a lane
   'speed.down': '↓ {speed}',
@@ -118,6 +131,8 @@ export const ru = {
   // notices over the board: one rejected rule, joined with "; " when there are several
   'notice.rejected': '{name}: {reason}',
   'notice.logSaved': 'Журнал сохранён',
+  // files from Explorer that are neither programs nor shortcuts to them, joined with ", "
+  'notice.notProgram': 'Не программа: {names}',
   'notice.close': 'Закрыть',
 
   // screens until task 13 gives them their content

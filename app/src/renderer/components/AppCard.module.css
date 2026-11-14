@@ -4,15 +4,36 @@
   gap: 9px;
   min-width: 0;
   min-height: 36px;
-  padding: 6px 6px 6px 9px;
+  padding-right: 6px;
   border: 1px solid var(--line2);
   border-radius: 8px;
   background: var(--card);
-  cursor: pointer;
   user-select: none;
   transition:
     border-color 140ms ease,
     background-color 140ms ease;
+}
+
+/* the card itself: everything but the pin; the frame shows its focus */
+.main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+  padding: 6px 0 6px 9px;
+  border-radius: 7px 0 0 7px;
+  cursor: pointer;
+}
+
+.main:focus-visible {
+  outline: none;
+}
+
+.card:has(.main:focus-visible) {
+  outline: 2px solid color-mix(in srgb, var(--vpn) 80%, white);
+  outline-offset: 2px;
 }
 
 .card:hover {
@@ -119,7 +140,19 @@
 }
 
 .card[data-pinned='false']:hover .pin,
-.card[data-pinned='false']:focus-within .pin,
-.card[data-pinned='false']:focus-visible .pin {
+.card[data-pinned='false']:focus-within .pin {
   opacity: 1;
+}
+
+/* the card in the hand: solid, above the lanes (dnd-kit moves the frame itself and keeps its place empty) */
+.card[data-dnd-dragging] {
+  border-color: color-mix(in srgb, var(--lane, var(--vpn)) 55%, var(--line3));
+  background: var(--card);
+  color: var(--text);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 55%);
+  cursor: grabbing;
+}
+
+.card[data-dnd-dragging] .main {
+  cursor: grabbing;
 }

@@ -10,6 +10,16 @@
   background: var(--lane-bg);
   box-shadow: inset 0 2px 0 var(--lane);
   overflow: hidden;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+/* a card that would be pinned here, or files from Explorer, over the lane */
+.lane[data-over='true'],
+.lane[data-files-over='true'] {
+  border-color: color-mix(in srgb, var(--lane) 60%, var(--border));
+  background: color-mix(in srgb, var(--lane) 6%, var(--lane-bg));
 }
 
 .lane[data-lane='direct'] {
@@ -75,7 +85,7 @@
 
 .sees {
   margin: 3px 0 0;
-  padding: 0 12px 8px;
+  padding: 0 12px 5px;
   overflow: hidden;
   color: var(--muted);
   font-size: 11.5px;
@@ -112,7 +122,8 @@
   gap: 6px;
   flex: 1;
   min-height: 0;
-  padding: 0 12px 12px;
+  /* room at the top for the focus ring of the first card (the list scrolls, so it would cut it off) */
+  padding: 3px 12px 12px;
   overflow-y: auto;
 }
 
@@ -155,4 +166,33 @@
   border-radius: 8px;
   color: var(--dim);
   text-align: center;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.lane[data-over='true'] .drop,
+.lane[data-files-over='true'] .drop {
+  border-color: color-mix(in srgb, var(--lane) 70%, transparent);
+  color: var(--lane-soft);
+}
+
+/* the line and the unpinned cards: the place below the line, down to the bottom of the lane */
+.below {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 0 auto;
+  margin: 0 -6px;
+  padding: 0 6px 6px;
+  border-radius: 10px;
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+/* a pinned card that would be unpinned here */
+.below[data-over='true'] {
+  background: color-mix(in srgb, var(--lane) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lane) 35%, transparent);
 }
