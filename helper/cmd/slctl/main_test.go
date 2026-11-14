@@ -24,21 +24,37 @@ import (
 	"splitlane/helper/internal/store"
 )
 
+// verdict: a copy of the VPN lane fails at its first answer from the direct lane's address (that is
+// traffic past the VPN); the Plan 0 rule (the first answer right, or two of three) stays for the
+// direct lane and for answers from another address under the VPN lane (the exit node's external
+// address may change).
 func TestVerdict(t *testing.T) {
 	cases := []struct {
 		seen     []string
+		want     string
 		ok, done bool
 	}{
-		{[]string{"vpn"}, true, true},
-		{[]string{"none", "vpn"}, true, true},
-		{[]string{"direct"}, false, false},
-		{[]string{"direct", "vpn", "vpn"}, true, true},
-		{[]string{"direct", "vpn", "direct"}, false, true},
-		{[]string{"none", "none", "none", "none", "none", "none"}, false, true},
+		{[]string{"vpn"}, "vpn", true, true},
+		{[]string{"none", "vpn"}, "vpn", true, true},
+		{[]string{"direct"}, "vpn", false, true},
+		{[]string{"none", "direct"}, "vpn", false, true},
+		{[]string{"direct", "vpn", "vpn"}, "vpn", false, true},
+		{[]string{"direct", "vpn", "direct"}, "vpn", false, true},
+		{[]string{"other"}, "vpn", false, false},
+		{[]string{"other", "vpn", "vpn"}, "vpn", true, true},
+		{[]string{"other", "vpn", "other"}, "vpn", false, true},
+		{[]string{"other", "vpn", "direct"}, "vpn", false, true},
+		{[]string{"none", "none", "none", "none", "none", "none"}, "vpn", false, true},
+		{[]string{"direct"}, "direct", true, true},
+		{[]string{"none", "direct"}, "direct", true, true},
+		{[]string{"vpn"}, "direct", false, false},
+		{[]string{"vpn", "direct", "direct"}, "direct", true, true},
+		{[]string{"vpn", "direct", "vpn"}, "direct", false, true},
+		{[]string{"none", "none", "none", "none", "none", "none"}, "direct", false, true},
 	}
 	for _, c := range cases {
-		if ok, done := verdict(c.seen, "vpn"); ok != c.ok || done != c.done {
-			t.Errorf("%v: %v %v", c.seen, ok, done)
+		if ok, done := verdict(c.seen, c.want); ok != c.ok || done != c.done {
+			t.Errorf("%v want=%s: %v %v, expected %v %v", c.seen, c.want, ok, done, c.ok, c.done)
 		}
 	}
 }
@@ -233,8 +249,10 @@ func TestExpectLanes(t *testing.T) {
 	name := fakePipe(t)
 	var mu sync.Mutex
 	answers := map[string][]string{
-		`C:\x\curl-vpn.exe`:    {"203.0.113.1"},                                // right at once
-		`C:\x\curl-direct.exe`: {"203.0.113.1", "198.51.100.1", "203.0.113.1"}, // two of three wrong
+		`C:\x\curl-vpn.exe`:    {"203.0.113.1"},                                 // right at once
+		`C:\x\curl-direct.exe`: {"203.0.113.1", "198.51.100.1", "203.0.113.1"},  // two of three wrong
+		`C:\x\curl-leak.exe`:   {"198.51.100.1", "203.0.113.1", "203.0.113.1"},  // VPN lane: one direct answer is a leak
+		`C:\x\curl-late.exe`:   {"203.0.113.1", "198.51.100.1", "198.51.100.1"}, // direct lane: two of three right
 	}
 	old := egress
 	egress = func(exe, url string) string {
@@ -249,10 +267,20 @@ func TestExpectLanes(t *testing.T) {
 	}
 	t.Cleanup(func() { egress = old })
 	var out strings.Builder
-	code := run([]string{"-pipe", name, "expect-lanes", `C:\x\curl-vpn.exe=vpn`, `C:\x\curl-direct.exe=direct`}, &out)
+	code := run([]string{"-pipe", name, "expect-lanes", `C:\x\curl-vpn.exe=vpn`, `C:\x\curl-direct.exe=direct`,
+		`C:\x\curl-leak.exe=vpn`, `C:\x\curl-late.exe=direct`}, &out)
 	text := out.String()
-	if code != exitFailed || !strings.Contains(text, "LANE-OK curl-vpn.exe vpn") ||
-		!strings.Contains(text, "LANE-WRONG curl-direct.exe want=direct seen=[vpn direct vpn]") {
+	for _, line := range []string{
+		"LANE-OK curl-vpn.exe vpn seen=[vpn]",
+		"LANE-WRONG curl-direct.exe want=direct seen=[vpn direct vpn]",
+		"LANE-WRONG curl-leak.exe want=vpn seen=[direct]",
+		"LANE-OK curl-late.exe direct seen=[vpn direct direct]",
+	} {
+		if !strings.Contains(text, line) {
+			t.Errorf("missing %q", line)
+		}
+	}
+	if code != exitFailed || t.Failed() {
 		t.Fatalf("%d\n%s", code, text)
 	}
 	for _, bad := range []string{`C:\x\curl-vpn.exe`, `C:\x\curl-vpn.exe=tunnel`} {

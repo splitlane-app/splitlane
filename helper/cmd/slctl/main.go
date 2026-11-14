@@ -471,8 +471,10 @@ func laneName(ip string, s protocol.State) string {
 	return "other"
 }
 
-// verdict judges answers only (Plan 0 rule): the first answer is right, or two of three are.
-// More requests are needed while it returns done=false.
+// verdict judges answers only. A copy of the VPN lane fails at once on any answer from the direct
+// lane's address: that request went past the VPN. Otherwise the Plan 0 rule holds: the first answer
+// is right, or two of three are; for the VPN lane this covers answers from another address ("other"),
+// since the exit node's external address may change. More requests are needed while done=false.
 func verdict(seen []string, want string) (ok, done bool) {
 	var answers []string
 	for _, s := range seen {
@@ -481,6 +483,8 @@ func verdict(seen []string, want string) (ok, done bool) {
 		}
 	}
 	switch {
+	case want == protocol.LaneVPN && slices.Contains(answers, protocol.LaneDirect):
+		return false, true
 	case len(answers) > 0 && answers[0] == want:
 		return true, true
 	case len(answers) >= 3:
@@ -529,7 +533,7 @@ func expectLanes(c *client, args []string, url string) int {
 			good, done = verdict(seen, want)
 		}
 		if good {
-			c.print("LANE-OK %s %s", filepath.Base(exe), want)
+			c.print("LANE-OK %s %s seen=%v", filepath.Base(exe), want, seen)
 		} else {
 			c.print("LANE-WRONG %s want=%s seen=%v", filepath.Base(exe), want, seen)
 			code = exitFailed
