@@ -1,0 +1,28 @@
+:root {
+  --bg: #0e1014;
+  --panel: #14171d;
+  --card: #181c24;
+  --border: #232733;
+  --text: #e6e8ee;
+  --muted: #8b93a7;
+  --vpn: #8b7cff;
+  --direct: #3ddc97;
+  --warn: #ffb454;
+  --error: #ff6b6b;
+  --font-ui: 'Segoe UI Variable', 'Segoe UI', sans-serif;
+  --font-num: 'Cascadia Mono', Consolas, monospace;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+}

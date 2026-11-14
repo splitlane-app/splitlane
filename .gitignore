@@ -17,3 +17,4 @@ node_modules/
 /dist/
 /app/out/
 /app/dist/
+/app/release/
