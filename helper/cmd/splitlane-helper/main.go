@@ -6,6 +6,13 @@
 // <ProgramDir>\sing-box.exe, the user of the pipe comes from setup.json, and a helper that no window
 // reaches ends 60 s after the start-up. For development it runs from an elevated terminal with paths
 // in the repository: --dev --data-dir <folder> --core <sing-box.exe>.
+//
+// The window runs the setup with UAC from its own copy, dist\helper (package install, spec 4.3):
+//
+//	splitlane-helper.exe install --user-sid <SID>
+//	splitlane-helper.exe uninstall [--purge]
+//
+// Their lines go to the standard output (the window redirects it); a refusal exits with code 7.
 package main
 
 import (
@@ -24,6 +31,7 @@ import (
 
 	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/engine"
+	"splitlane/helper/internal/install"
 	"splitlane/helper/internal/pipe"
 	"splitlane/helper/internal/place"
 	"splitlane/helper/internal/probe"
@@ -45,6 +53,7 @@ const (
 	exitBadCore      = 4
 	exitInternal     = 5
 	exitNotInstalled = 6 // the product without its data folder or setup.json: install has not run
+	exitRefused      = 7 // install or uninstall refused; the reason is on its -REFUSED line
 )
 
 const pipeTakenLabel = "the pipe already exists: another helper runs"
@@ -58,6 +67,16 @@ var (
 	programDir  = place.ProgramDir
 	productData = place.DataDir
 	executable  = os.Executable
+)
+
+// adminCommands are the subcommands of the setup (spec 4.3) and newSys the system they change; the
+// tests replace both.
+var (
+	adminCommands = map[string]func(install.Options, install.Sys) error{
+		"install":   install.Install,
+		"uninstall": install.Uninstall,
+	}
+	newSys = func() install.Sys { return install.NewSys() }
 )
 
 type options struct {
@@ -111,6 +130,9 @@ func (realClock) Now() time.Time                         { return time.Now() }
 func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 func run(args []string) int {
+	if len(args) > 0 && adminCommands[args[0]] != nil {
+		return admin(args[0], args[1:], os.Stdout)
+	}
 	o, err := parse(args)
 	if err != nil {
 		return exitUsage
@@ -255,4 +277,58 @@ func productPlace(helperPath, dataDir string, logf func(string, ...any)) (core, 
 		return "", "", exitNotInstalled
 	}
 	return filepath.Join(dir, "sing-box.exe"), s.UserSID, exitOK
+}
+
+var adminUsage = map[string]string{
+	"install":   "splitlane-helper install --user-sid <SID>",
+	"uninstall": "splitlane-helper uninstall [--purge]",
+}
+
+// parseAdmin reads the flags of a subcommand: --user-sid of install, which it needs, or --purge of
+// uninstall; nothing else, no flag of the run mode.
+func parseAdmin(cmd string, args []string) (install.Options, error) {
+	var o install.Options
+	fs := flag.NewFlagSet("splitlane-helper "+cmd, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if cmd == "install" {
+		fs.StringVar(&o.UserSID, "user-sid", "", "the SID of the user who runs the setup, S-1-...")
+	} else {
+		fs.BoolVar(&o.Purge, "purge", false, "remove the data folder too")
+	}
+	if err := fs.Parse(args); err != nil {
+		return o, fmt.Errorf("%v; usage: %s", err, adminUsage[cmd])
+	}
+	switch {
+	case fs.NArg() != 0:
+		return o, fmt.Errorf("unexpected %q; usage: %s", fs.Arg(0), adminUsage[cmd])
+	case cmd == "install" && o.UserSID == "":
+		return o, fmt.Errorf("--user-sid is required; usage: %s", adminUsage[cmd])
+	}
+	return o, nil
+}
+
+// admin runs install or uninstall with its lines to out. The program and data folders come from the
+// system as in the product (package place); the source of install is the folder of the running exe.
+func admin(cmd string, args []string, out io.Writer) int {
+	refused := strings.ToUpper(cmd) + "-REFUSED"
+	o, err := parseAdmin(cmd, args)
+	if err != nil {
+		fmt.Fprintf(out, "%s: %v\n", refused, err)
+		return exitUsage
+	}
+	if o.ProgramDir, err = programDir(); err == nil {
+		if o.DataDir, err = productData(); err == nil {
+			o.Exe, err = executable()
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(out, "%s: %v\n", refused, err)
+		return exitRefused
+	}
+	o.Hostname, _ = os.Hostname()
+	o.Out = out
+	if adminCommands[cmd](o, newSys()) != nil {
+		return exitRefused // the command printed its -REFUSED line
+	}
+	return exitOK
 }
