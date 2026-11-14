@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "description": "SplitLane window",
+  "author": "SplitLane",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "pack": "electron-builder --win --dir"
   },
   "devDependencies": {
     "@dnd-kit/abstract": "0.5.3",

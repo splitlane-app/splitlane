@@ -1,0 +1,12 @@
+appId: app.splitlane.window
+productName: SplitLane
+directories:
+  output: release
+files:
+  - out/**
+extraResources:
+  - from: ../dist/helper
+    to: helper
+win:
+  target: dir
+  signAndEditExecutable: false
