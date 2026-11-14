@@ -73,6 +73,47 @@ func TestSetupConfigHasNoAdapter(t *testing.T) {
 	}
 }
 
+// Spec 7: the node of the setup mode resolves names to IPv4 only, as the main config does. With
+// A and AAAA asked together, a lost A answer left the node with the IPv6 addresses of the control
+// server only, and IPv6 that leads nowhere (the system exit node without IPv6) held it for minutes
+// with backend stopped; with A alone a lost answer is a failed lookup, retried in 10 s.
+func TestSetupConfigResolvesIPv4Only(t *testing.T) {
+	b, err := BuildSetup(testSetupOptions(`C:\ProgramData\SplitLane`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct {
+		DNS map[string]any `json:"dns"`
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.DNS["strategy"] != "ipv4_only" {
+		t.Fatalf("dns %v: want strategy ipv4_only", c.DNS)
+	}
+}
+
+// Spec 6.1: the setup core writes a log of its own, so that a setup run never sets aside the log of
+// a main core that failed (review of plan 1B, final, minor 4).
+func TestSetupConfigWritesItsOwnLog(t *testing.T) {
+	b, err := BuildSetup(testSetupOptions(`C:\ProgramData\SplitLane`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct {
+		Log struct {
+			Output string `json:"output"`
+		} `json:"log"`
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		t.Fatal(err)
+	}
+	p := PathsFor(`C:\ProgramData\SplitLane`)
+	if c.Log.Output != "C:/ProgramData/SplitLane/logs/core-setup.log" || p.SetupLog != `C:\ProgramData\SplitLane\logs\core-setup.log` {
+		t.Fatalf("setup log %q, paths %q", c.Log.Output, p.SetupLog)
+	}
+}
+
 // The setup mode follows --core-log-level as the main config does (spec 6.1).
 func TestSetupLogLevel(t *testing.T) {
 	for _, c := range []struct{ level, want string }{{"", `"level": "info"`}, {"info", `"level": "info"`}, {"debug", `"level": "debug"`}} {

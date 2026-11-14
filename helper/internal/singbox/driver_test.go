@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"splitlane/helper/internal/engine"
 	"splitlane/helper/internal/rules"
 	"splitlane/helper/internal/store"
+	"splitlane/helper/internal/winhost"
 )
 
 // TestMain lets the test binary play the core: started with SPLITLANE_FAKE_CORE=1 it reads the
@@ -72,11 +74,11 @@ func fakeCore(args []string) {
 	os.Exit(0)
 }
 
-// fakeEnviron is the system's environment (systemEnviron) plus the variable that makes the test
+// fakeEnviron is the system's environment (winhost.SystemEnviron) plus the variable that makes the test
 // binary play the core, and extra: the children get no other variable of the test process.
 func fakeEnviron(extra ...string) func() ([]string, error) {
 	return func() ([]string, error) {
-		env, err := systemEnviron()
+		env, err := winhost.SystemEnviron()
 		return append(append(env, "SPLITLANE_FAKE_CORE=1"), extra...), err
 	}
 }
@@ -128,6 +130,46 @@ func TestStartRotatesTheLogAndIdentifiesTheProcess(t *testing.T) {
 	size := d.LogSize()
 	if size == 0 || d.LogFrom(size) != "" {
 		t.Fatalf("size %d, text after the end %q", size, d.LogFrom(size))
+	}
+}
+
+// A setup core sets aside its own log only (spec 6.1): the log of a main core that failed stays for
+// diagnostics.export however many setup runs follow (review of plan 1B, final, minor 4).
+func TestStartSetupKeepsTheMainLog(t *testing.T) {
+	d, _ := fakeDriver(t)
+	p := coreconfig.PathsFor(d.DataDir)
+	os.MkdirAll(p.LogsDir, 0o755)
+	os.WriteFile(p.CoreLog, []byte("ERROR the main core failed\n"), 0o644)
+	os.WriteFile(p.SetupLog, []byte("INFO sing-box started (old setup run)\n"), 0o644)
+	config := filepath.Join(d.DataDir, "setup.json")
+	b, _ := json.Marshal(map[string]any{"log": map[string]string{"output": filepath.ToSlash(p.SetupLog)}})
+	os.WriteFile(config, b, 0o644)
+	for run := 0; run < 2; run++ {
+		proc, err := d.StartSetup(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for !d.SetupStarted() {
+			if time.Now().After(deadline) {
+				t.Fatal("the setup core's start line never came")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		proc.Kill()
+		<-proc.Done()
+	}
+	if main, _ := os.ReadFile(p.CoreLog); string(main) != "ERROR the main core failed\n" {
+		t.Fatalf("the main core's log %q", main)
+	}
+	if _, err := os.Stat(p.CoreLog + ".prev"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a setup run sets the main log aside: %v", err)
+	}
+	if prev, _ := os.ReadFile(p.SetupLog + ".prev"); strings.Contains(string(prev), "old setup run") || !strings.Contains(string(prev), "sing-box started (0.01s)") {
+		t.Fatalf("the setup log of the run before %q", prev)
+	}
+	if d.Events(0).Started {
+		t.Fatal("the start line of a setup core is not one of the main core")
 	}
 }
 

@@ -120,6 +120,7 @@ type Paths struct {
 	RulesVPN    string
 	LogsDir     string
 	CoreLog     string
+	SetupLog    string // the setup mode's core (spec 7): its runs never set CoreLog aside
 	CoreStdout  string
 	StateDir    string
 	Config      string
@@ -135,6 +136,7 @@ func PathsFor(dataDir string) Paths {
 		RulesVPN:    filepath.Join(rulesDir, "lane-vpn.json"),
 		LogsDir:     logs,
 		CoreLog:     filepath.Join(logs, "core.log"),
+		SetupLog:    filepath.Join(logs, "core-setup.log"),
 		CoreStdout:  filepath.Join(logs, "core-stdout.log"),
 		StateDir:    filepath.Join(dataDir, "tailscale"),
 		Config:      filepath.Join(dataDir, "core-config.json"),

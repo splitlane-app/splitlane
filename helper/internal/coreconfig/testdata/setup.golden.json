@@ -5,7 +5,8 @@
         "tag": "dns-local",
         "type": "local"
       }
-    ]
+    ],
+    "strategy": "ipv4_only"
   },
   "endpoints": [
     {
@@ -17,7 +18,7 @@
   ],
   "log": {
     "level": "info",
-    "output": "C:/ProgramData/SplitLane/logs/core.log",
+    "output": "C:/ProgramData/SplitLane/logs/core-setup.log",
     "timestamp": true
   },
   "outbounds": [

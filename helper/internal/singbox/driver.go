@@ -26,6 +26,7 @@ import (
 	"splitlane/helper/internal/protocol"
 	"splitlane/helper/internal/rules"
 	"splitlane/helper/internal/store"
+	"splitlane/helper/internal/winhost"
 )
 
 // CoreVersion is the only core version the configs are built for (spec 6).
@@ -59,7 +60,7 @@ type Driver struct {
 	Exe     string
 	DataDir string
 	// Environ is the environment of the core, its check and its CLI: nil is the system's own
-	// (systemEnviron). Tests add the variable that makes the test binary play the core.
+	// (winhost.SystemEnviron). Tests add the variable that makes the test binary play the core.
 	Environ func() ([]string, error)
 }
 
@@ -69,7 +70,7 @@ func (d *Driver) environ() ([]string, error) {
 	if d.Environ != nil {
 		return d.Environ()
 	}
-	return systemEnviron()
+	return winhost.SystemEnviron()
 }
 
 // BuildConfig is the config of spec 6 for the options, with the files of the driver's data folder.
@@ -130,6 +131,22 @@ func (d *Driver) Check(ctx context.Context, configPath string) error {
 // hidden console, the system's environment and its output in core-stdout.log (spec 5.3 step 4,
 // 5.4 step 2).
 func (d *Driver) Start(configPath string) (engine.CoreProc, error) {
+	return d.start(configPath, coreconfig.PathsFor(d.DataDir).CoreLog)
+}
+
+// StartSetup is Start for the setup core (spec 7), whose config writes its own log: the log of a
+// main core that failed stays for diagnostics.export.
+func (d *Driver) StartSetup(configPath string) (engine.CoreProc, error) {
+	return d.start(configPath, coreconfig.PathsFor(d.DataDir).SetupLog)
+}
+
+// SetupStarted: the setup core's log has its start line.
+func (d *Driver) SetupStarted() bool {
+	return strings.Contains(readLog(coreconfig.PathsFor(d.DataDir).SetupLog, 0), coreconfig.StartLine)
+}
+
+// start sets log, the one the config names, aside and starts the core.
+func (d *Driver) start(configPath, log string) (engine.CoreProc, error) {
 	env, err := d.environ()
 	if err != nil {
 		return nil, fmt.Errorf("the system environment for the core: %w", err)
@@ -138,7 +155,7 @@ func (d *Driver) Start(configPath string) (engine.CoreProc, error) {
 	if err := os.MkdirAll(p.LogsDir, 0o755); err != nil {
 		return nil, err
 	}
-	if err := setAside(p.CoreLog); err != nil {
+	if err := setAside(log); err != nil {
 		return nil, err
 	}
 	out, err := os.OpenFile(p.CoreStdout, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -235,7 +252,12 @@ func (d *Driver) LogSize() int64 {
 
 // LogFrom is the text of the current core log after offset, at most 1 MiB.
 func (d *Driver) LogFrom(offset int64) string {
-	f, err := os.Open(coreconfig.PathsFor(d.DataDir).CoreLog)
+	return readLog(coreconfig.PathsFor(d.DataDir).CoreLog, offset)
+}
+
+// readLog is the text of a log after offset, at most 1 MiB.
+func readLog(path string, offset int64) string {
+	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}

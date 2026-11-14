@@ -129,6 +129,24 @@ func TestLoginStartsSetupMode(t *testing.T) {
 	}
 }
 
+// The setup core is started as one (StartSetup) and its start line read from its own log
+// (SetupStarted): the log of a main core that failed is not set aside by a setup run (spec 6.1;
+// review of plan 1B, final, minor 4).
+func TestSetupRunKeepsTheMainCoreLog(t *testing.T) {
+	h := newHarness(t)
+	h.load()
+	t.Cleanup(func() { shutdown(t, h) })
+	h.core.appendLog("ERROR the main core failed")
+	h.e.SetClients(1)
+	h.waitFor("the setup core's node read", func() bool { return backendIs(h, protocol.BackendRunning) })
+	if !h.core.last().setup {
+		t.Fatalf("the setup core is started as one: %v", h.rec.list())
+	}
+	if log := h.core.logFrom(0); log != "ERROR the main core failed\n" {
+		t.Fatalf("the main core's log after a setup run %q", log)
+	}
+}
+
 // Review Focus 5: tailscale.login again while the setup core runs and its link is there: no second
 // core, the same link, no error.
 func TestLoginTwiceKeepsOneSetupCore(t *testing.T) {

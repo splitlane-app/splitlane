@@ -5,8 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 // Shapes of the real output of Tailscale 1.104 (values replaced by documentation ones).
@@ -79,6 +82,30 @@ func TestExeIgnoresTheEnvironment(t *testing.T) {
 	// The real registry values (read only).
 	if exe := New().Exe; !filepath.IsAbs(exe) || strings.HasPrefix(strings.ToLower(exe), strings.ToLower(user)) {
 		t.Fatalf("the path follows %%ProgramFiles%%: %s", exe)
+	}
+}
+
+// tailscale.exe runs with the system's environment, never the user's (as the core, review F13-2;
+// review of plan 1B, final, minor 1): the elevated helper started as the user carries
+// HKCU\Environment, whose TS_* knobs, proxies or GODEBUG would steer the CLI. cmd /c set prints the
+// environment the child got.
+func TestRunGetsTheSystemEnvironment(t *testing.T) {
+	t.Setenv("TS_DEBUG_PLANTED", "user")
+	t.Setenv("SystemRoot", `X:\planted`)
+	windowsDir, err := windows.GetSystemWindowsDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := New().Run(context.Background(), filepath.Join(windowsDir, "System32", "cmd.exe"), "/c", "set")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n")
+	if slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "TS_DEBUG_PLANTED=") }) {
+		t.Fatal("the user's TS_* variable reached tailscale.exe")
+	}
+	if !slices.ContainsFunc(env, func(kv string) bool { return strings.EqualFold(kv, "SystemRoot="+windowsDir) }) {
+		t.Fatalf("SystemRoot is not the system's own: %q", env)
 	}
 }
 

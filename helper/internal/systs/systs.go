@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 
 	"splitlane/helper/internal/engine"
+	"splitlane/helper/internal/winhost"
 )
 
 // fallbackProgramFiles is used when the registry value cannot be read or is not a plain path.
@@ -104,11 +105,17 @@ type Client struct {
 
 var _ engine.SystemTailscale = (*Client)(nil)
 
-// New uses the default install path and runs tailscale.exe without a window.
+// New uses the default install path and runs tailscale.exe without a window, with the system's
+// environment (winhost.SystemEnviron).
 func New() *Client { return &Client{Exe: DefaultExe(), Run: run} }
 
 func run(ctx context.Context, exe string, args ...string) ([]byte, error) {
+	env, err := winhost.SystemEnviron()
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: the system environment: %w", filepath.Base(exe), strings.Join(args, " "), err)
+	}
 	cmd := exec.CommandContext(ctx, exe, args...)
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

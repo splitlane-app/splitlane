@@ -100,6 +100,7 @@ type fakeStore struct {
 	journalErr      error
 	onRules         func()               // runs after each write of the rule files
 	onSave          func(st store.State) // runs at each write of state.json, with what is written
+	onLoad          func(n int)          // runs at each read of state.json (the n-th), before its result
 	stateReadFails  int                  // so many next LoadState calls fail with a read error (store.ErrIO)
 	journalReadErrs []error              // the next LoadJournal calls fail with these, one by one
 	saveErr         error                // SaveState fails with it; state.json keeps what it had
@@ -123,8 +124,14 @@ func (s *fakeStore) calls() (stateReads, stateSaves, journalReads int) {
 
 func (s *fakeStore) LoadState() (store.State, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.stateReads++
+	n, hook := s.stateReads, s.onLoad
+	s.mu.Unlock()
+	if hook != nil {
+		hook(n) // outside s.mu: a test may hold a read here while the engine saves
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.stateReadFails > 0 {
 		s.stateReadFails--
 		return store.Defaults(), readErr("state.json")
@@ -268,17 +275,18 @@ type fakeCore struct {
 	checkErr   error
 	startErr   error
 	procs      []*fakeProc
-	log        string
-	silent     int  // so many next starts never write the start line
-	dieEarly   int  // so many next starts exit before the start line
-	needLogin  bool // the node asks for a login after start
+	log        string // the main core's log
+	setupLog   string // the setup core's log (StartSetup)
+	silent     int    // so many next starts never write the start line
+	dieEarly   int    // so many next starts exit before the start line
+	needLogin  bool   // the node asks for a login after start
 	leftover   *fakeProc
 	clash      *fakeClash
 	onStart    func(p *fakeProc)
 	opts       CoreOptions  // of the last BuildConfig
 	setupOpts  SetupOptions // of the last BuildSetupConfig
 	node       *fakeNode    // the API service of every run
-	setupNext  bool         // the last config built was the setup mode's: the next start is a setup core
+	setupNext  bool         // the last config built was the setup mode's (gateCore holds its check)
 	nodePort   int          // the port of the last call of Node
 	nodeSecret string       // the secret of the last call of Node
 }
@@ -319,21 +327,32 @@ func (c *fakeCore) Check(ctx context.Context, path string) error {
 	return c.checkErr
 }
 
-func (c *fakeCore) Start(path string) (CoreProc, error) {
+func (c *fakeCore) Start(path string) (CoreProc, error) { return c.start(false) }
+
+func (c *fakeCore) StartSetup(path string) (CoreProc, error) { return c.start(true) }
+
+func (c *fakeCore) SetupStarted() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Contains(c.setupLog, coreconfig.StartLine)
+}
+
+// start starts a main core or a setup core; each writes its own log.
+func (c *fakeCore) start(setup bool) (CoreProc, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.startErr != nil {
 		return nil, c.startErr
 	}
 	p := &fakeProc{rec: c.rec, id: store.CoreIdentity{PID: 1000 + len(c.procs), Created: int64(len(c.procs) + 1), Path: `C:\core\sing-box.exe`},
-		done: make(chan struct{}), setup: c.setupNext}
+		done: make(chan struct{}), setup: setup}
 	c.procs = append(c.procs, p)
 	if p.setup {
 		c.rec.add("core:start %d setup", p.id.PID)
 	} else {
 		c.rec.add("core:start %d", p.id.PID)
 	}
-	c.log = ""
+	log := ""
 	switch {
 	case c.dieEarly > 0:
 		c.dieEarly--
@@ -341,10 +360,15 @@ func (c *fakeCore) Start(path string) (CoreProc, error) {
 	case c.silent > 0:
 		c.silent--
 	default:
-		c.log = "INFO sing-box started (0.42s)\n"
+		log = "INFO sing-box started (0.42s)\n"
 		if c.needLogin {
-			c.log += "INFO endpoint/tailscale[vpn]: Waiting for authentication: https://login.example/x\n"
+			log += "INFO endpoint/tailscale[vpn]: Waiting for authentication: https://login.example/x\n"
 		}
+	}
+	if setup {
+		c.setupLog = log
+	} else {
+		c.log = log
 	}
 	if c.onStart != nil {
 		c.onStart(p)

@@ -1,4 +1,4 @@
-package singbox
+package winhost
 
 import (
 	"os"
@@ -8,14 +8,15 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// systemEnviron is the environment of the core, its check and its CLI (review F13-2). They run
+// SystemEnviron is the environment of the helper's children: the core, its check and its CLI, and
+// the system Tailscale's tailscale.exe (review F13-2; review of plan 1B, final, minor 1). They run
 // elevated, so they get the system's own variables (CreateEnvironmentBlock without a token) and
 // never the user's, whose TS_* knobs, proxies or GODEBUG would steer them. The block takes
 // SystemRoot and SystemDrive from the calling process, and the helper, a task started as the user,
 // takes them from HKCU\Environment too; they are set to the system's own first
 // (GetSystemWindowsDirectory), otherwise Path, TEMP and ComSpec of the block would point where the
 // user said.
-func systemEnviron() ([]string, error) {
+func SystemEnviron() ([]string, error) {
 	root, err := windows.GetSystemWindowsDirectory()
 	if err != nil {
 		return nil, err

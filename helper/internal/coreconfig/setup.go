@@ -22,7 +22,9 @@ type SetupOptions struct {
 // Tailscale would not let the core out through the physical adapter, so the node reaches the
 // control server by the ordinary route of the system. No probes and no Clash API either. The one
 // route rule is rule 0 of spec 6.2: without it the default outbound direct would carry a tailnet
-// peer's flow to 127.0.0.1 of the PC.
+// peer's flow to 127.0.0.1 of the PC. Names resolve to IPv4 only, as in the main config: a lost
+// A answer must not leave the node with IPv6 addresses only, which hold it for minutes when IPv6
+// leads nowhere (the system exit node without IPv6). The log is the setup core's own (Paths.SetupLog).
 func BuildSetup(o SetupOptions) ([]byte, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
@@ -33,8 +35,8 @@ func BuildSetup(o SetupOptions) ([]byte, error) {
 	}
 	p := PathsFor(o.DataDir)
 	config := obj{
-		"log": obj{"level": level, "timestamp": true, "output": filepath.ToSlash(p.CoreLog)},
-		"dns": obj{"servers": []any{obj{"type": "local", "tag": "dns-local"}}},
+		"log": obj{"level": level, "timestamp": true, "output": filepath.ToSlash(p.SetupLog)},
+		"dns": obj{"servers": []any{obj{"type": "local", "tag": "dns-local"}}, "strategy": "ipv4_only"},
 		"endpoints": []any{obj{
 			"type":            "tailscale",
 			"tag":             TagVPN,

@@ -211,12 +211,12 @@ func (d Dir) WriteConfig(config []byte) (string, error) {
 // folder that the user who set SplitLane up may read.
 func (d Dir) ExportDir() string { return filepath.Join(d.Path, "export") }
 
-// Logs are the logs that diagnostics.export takes (spec 5.1): the helper's and the core's in logs\,
-// each with the one of the run before (.prev).
+// Logs are the logs that diagnostics.export takes (spec 5.1): the helper's, the main core's and the
+// setup core's in logs\, each with the one of the run before (.prev).
 func (d Dir) Logs() []string {
 	p := coreconfig.PathsFor(d.Path)
 	helper := filepath.Join(p.LogsDir, "helper.log")
-	return []string{helper, helper + ".prev", p.CoreLog, p.CoreLog + ".prev"}
+	return []string{helper, helper + ".prev", p.CoreLog, p.CoreLog + ".prev", p.SetupLog, p.SetupLog + ".prev"}
 }
 
 func (d Dir) writeJSON(path string, v any) error {

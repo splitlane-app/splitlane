@@ -313,8 +313,8 @@ func TestNodeErrorIsReturned(t *testing.T) {
 	}
 }
 
-// The setup mode in the driver's data folder (spec 7): the same log and node state as the main
-// config, the API service of this run.
+// The setup mode in the driver's data folder (spec 7): the same node state as the main config, a log
+// of its own (StartSetup sets that one aside), the API service of this run.
 func TestDriverSetupConfig(t *testing.T) {
 	d := &Driver{Exe: `C:\core\sing-box.exe`, DataDir: t.TempDir()}
 	b, err := d.BuildSetupConfig(engine.SetupOptions{Hostname: "pc-splitlane", APIPort: 40004, APISecret: testAPISecret, LogLevel: "debug"})
@@ -322,7 +322,7 @@ func TestDriverSetupConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := coreconfig.PathsFor(d.DataDir)
-	for _, want := range []string{`"output": "` + filepath.ToSlash(p.CoreLog) + `"`, `"level": "debug"`,
+	for _, want := range []string{`"output": "` + filepath.ToSlash(p.SetupLog) + `"`, `"level": "debug"`,
 		`"state_directory": "` + filepath.ToSlash(p.StateDir) + `"`, `"hostname": "pc-splitlane"`, `"listen_port": 40004`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("setup config lacks %s", want)

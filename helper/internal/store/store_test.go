@@ -279,13 +279,15 @@ func TestRulesAndConfigFiles(t *testing.T) {
 }
 
 // diagnostics.export (spec 5.1, 4.2): the archives go into export\ of the data folder; the logs it takes are
-// the helper's and the core's in logs\, each with the one of the run before. Nothing is created.
+// the helper's, the main core's and the setup core's in logs\, each with the one of the run before.
+// Nothing is created.
 func TestExportPaths(t *testing.T) {
 	d := Dir{Path: `C:\data`}
 	if got := d.ExportDir(); got != `C:\data\export` {
 		t.Fatalf("export folder %q", got)
 	}
-	want := []string{`C:\data\logs\helper.log`, `C:\data\logs\helper.log.prev`, `C:\data\logs\core.log`, `C:\data\logs\core.log.prev`}
+	want := []string{`C:\data\logs\helper.log`, `C:\data\logs\helper.log.prev`, `C:\data\logs\core.log`, `C:\data\logs\core.log.prev`,
+		`C:\data\logs\core-setup.log`, `C:\data\logs\core-setup.log.prev`}
 	if got := d.Logs(); !slices.Equal(got, want) {
 		t.Fatalf("logs %q", got)
 	}

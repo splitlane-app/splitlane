@@ -15,6 +15,7 @@ import (
 
 	"splitlane/helper/internal/engine"
 	"splitlane/helper/internal/protocol"
+	"splitlane/helper/internal/winhost"
 )
 
 // Runner runs exe with args, with env added to the system's environment (never the user's, review
@@ -37,9 +38,9 @@ var _ engine.NodeAPI = (*Node)(nil)
 
 // NewNode talks to the API service on 127.0.0.1:port with the run's secret, through exe without a
 // window; every CLI child runs in the helper's job and ends with the helper (job.go), with the
-// system's environment (env.go).
+// system's environment (winhost.SystemEnviron).
 func NewNode(exe string, port int, secret string) *Node {
-	return &Node{Exe: exe, URL: fmt.Sprintf("127.0.0.1:%d", port), Secret: secret, Run: runIn(inHelperJob, systemEnviron)}
+	return &Node{Exe: exe, URL: fmt.Sprintf("127.0.0.1:%d", port), Secret: secret, Run: runIn(inHelperJob, winhost.SystemEnviron)}
 }
 
 // colorCode is an ANSI color sequence: the core colors its FATAL line on stderr.

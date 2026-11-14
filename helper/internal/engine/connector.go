@@ -222,7 +222,7 @@ func (e *Engine) runSetup(ctx context.Context, s *setupRun) {
 	if ctx.Err() != nil {
 		return
 	}
-	proc, err = e.d.Core.Start(path)
+	proc, err = e.d.Core.StartSetup(path)
 	if err != nil {
 		proc = nil
 		e.d.Log("setup mode: the core did not start: %v", err)
@@ -235,7 +235,7 @@ func (e *Engine) runSetup(ctx context.Context, s *setupRun) {
 	e.save()
 	e.mu.Unlock()
 	deadline := e.d.Clock.Now().Add(startWait)
-	for !e.d.Core.Events(0).Started {
+	for !e.d.Core.SetupStarted() {
 		switch {
 		case exited(proc):
 			e.d.Log("setup mode: the core exited before its start line")

@@ -88,6 +88,10 @@ type CoreDriver interface {
 	Check(ctx context.Context, configPath string) error
 	// Start sets the previous log aside and starts the core; the log then holds only this run.
 	Start(configPath string) (CoreProc, error)
+	// StartSetup starts the core of the setup mode (spec 7) as Start does, with a log of its own:
+	// a setup run never sets aside the log of a main core. SetupStarted tells that its start line came.
+	StartSetup(configPath string) (CoreProc, error)
+	SetupStarted() bool
 	// Find returns the helper's own core left from an earlier run, if it still runs (spec 5.7).
 	Find(id store.CoreIdentity) (CoreProc, bool)
 	// LogSize is the size of the current core log; Events reads the log after a byte offset.
