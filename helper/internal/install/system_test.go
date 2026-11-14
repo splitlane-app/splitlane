@@ -103,6 +103,45 @@ func TestApplyACLOnTempDir(t *testing.T) {
 	}
 }
 
+// The check of the data folder before its files are read (review F14-1) with the real API, on temporary
+// folders: a folder that is not there is no error; a plain folder of one of the owners passes; a folder
+// of another owner, a junction and a file are refused.
+func TestCheckDirOnTempDir(t *testing.T) {
+	u, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := []string{u.User.Sid.String(), "S-1-5-32-544"} // the user, or the administrators when the test runs elevated
+	root := t.TempDir()
+
+	if there, err := checkDir(filepath.Join(root, "missing"), owners); there || err != nil {
+		t.Fatalf("a folder that is not there: %v %v", there, err)
+	}
+	dir := filepath.Join(root, "dir")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if there, err := checkDir(dir, owners); !there || err != nil {
+		t.Fatalf("a folder of the owners: %v %v", there, err)
+	}
+	if there, err := checkDir(dir, []string{"S-1-5-18"}); !there || err == nil || !strings.Contains(err.Error(), "was not made by an administrator") {
+		t.Fatalf("a folder of another owner: %v %v", there, err)
+	}
+	link := filepath.Join(root, "link")
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, dir).CombinedOutput(); err != nil {
+		t.Fatalf("mklink: %v %s", err, out)
+	}
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{link, file} {
+		if _, err := checkDir(p, owners); err == nil || !strings.Contains(err.Error(), "is not a plain folder") {
+			t.Fatalf("%s: %v", p, err)
+		}
+	}
+}
+
 // The pipe client of install on a test pipe whose server is this process (the helper's process, which
 // never ends here). No pipe: no helper. A helper that answers helper.shutdown and stays is reported
 // after the wait with its process and the phase and reason of its last state event (restore_pending,

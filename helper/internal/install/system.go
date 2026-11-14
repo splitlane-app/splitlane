@@ -253,11 +253,29 @@ var adminOwners = []string{"S-1-5-32-544", "S-1-5-18"}
 // SecureDir: see secureDir; a folder that is there must belong to the administrators or to SYSTEM.
 func (*System) SecureDir(dir, sddl string) error { return secureDir(dir, sddl, adminOwners) }
 
+// CheckDir: see checkDir; a folder that is there must belong to the administrators or to SYSTEM.
+func (*System) CheckDir(dir string) (bool, error) { return checkDir(dir, adminOwners) }
+
+// checkDir tells whether the folder dir is there. One that is there must be a plain folder, not a link
+// or a junction (what is done in it would be done in its target), and belong to one of owners: a user
+// could have made it before the first install, with links and files of his own inside.
+func checkDir(dir string, owners []string) (bool, error) {
+	fi, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, err
+	case fi.Mode().Type() != fs.ModeDir:
+		return true, fmt.Errorf("%s is not a plain folder (a file, a link or a junction): it is not touched", dir)
+	}
+	return true, checkOwner(dir, owners)
+}
+
 // secureDir gives the folder dir the access list of sddl (spec 4.2). A folder that is not there is made
 // with it at once, so it never has another list: ProgramData lets users make folders. A folder that is
-// there must be a plain folder, not a link or a junction (the list would go to its target), and belong
-// to one of owners (a user could have made it before the first install, with links inside); it then
-// gets the list, protected, and Windows passes the inherited entries on to everything inside it.
+// there must pass checkDir (the list would go to the target of a link); it then gets the list,
+// protected, and Windows passes the inherited entries on to everything inside it.
 func secureDir(dir, sddl string, owners []string) error {
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
@@ -267,9 +285,11 @@ func secureDir(dir, sddl string, owners []string) error {
 	if err != nil {
 		return fmt.Errorf("the access list %q: %w", sddl, err)
 	}
-	fi, err := os.Lstat(dir)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	there, err := checkDir(dir, owners)
+	if err != nil {
+		return err
+	}
+	if !there {
 		p, err := windows.UTF16PtrFromString(dir)
 		if err != nil {
 			return err
@@ -277,14 +297,6 @@ func secureDir(dir, sddl string, owners []string) error {
 		sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
 		if err := windows.CreateDirectory(p, sa); err != nil {
 			return fmt.Errorf("make %s: %w", dir, err)
-		}
-	case err != nil:
-		return err
-	case fi.Mode().Type() != fs.ModeDir:
-		return fmt.Errorf("%s is not a plain folder (a file, a link or a junction): it is not touched", dir)
-	default:
-		if err := checkOwner(dir, owners); err != nil {
-			return err
 		}
 	}
 	err = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,

@@ -87,6 +87,9 @@ type Sys interface {
 	// FindCore opens the helper's core of an earlier run by its identity from state.json, only when
 	// its image is exe (singbox.Driver.Find, spec 5.7).
 	FindCore(exe string, id store.CoreIdentity) (engine.CoreProc, bool)
+	// CheckDir tells whether the folder dir is there; one that is there must be a plain folder, not a
+	// link or a junction, made by an administrator (as SecureDir requires), else the error says why.
+	CheckDir(dir string) (there bool, err error)
 	// After is time.After.
 	After(d time.Duration) <-chan time.Time
 	// WriteFile replaces path with data, making its folder when it is missing; a file in use is an error.
@@ -133,7 +136,9 @@ func finish(o Options, label string, err error) error {
 
 // Install is `install --user-sid <SID>` (spec 4.3 point 2 and the paragraph on a repeated install), in
 // this order: 1. this process is elevated and runs as the setup user; 2. the files of the folder of the
-// running exe are read, the core and its library checked by SHA-256; 3. the helper that runs is
+// running exe are read, the core and its library checked by SHA-256; 3. a data folder that is there
+// must be a plain folder made by an administrator (a user may have made it before the first install,
+// with a journal of his own in it; step 5 would refuse it anyway), then the helper that runs is
 // stopped, or without one what an abnormal end left is undone (stopOld); 4. the files go into the
 // program folder; 5. the data folder and export\ get their access lists; 6. setup.json (a product
 // helper without it exits with code 6); 7. the scheduled task. It prints INSTALL-OK, or
@@ -155,7 +160,11 @@ func install(o Options, s Sys, say sayFunc) error {
 	if err != nil {
 		return err
 	}
-	if err := stopOld(o, s, say); err != nil {
+	there, err := s.CheckDir(o.DataDir)
+	if err != nil {
+		return fmt.Errorf("the data folder: %w", err)
+	}
+	if err := stopOld(o, s, there, say); err != nil {
 		return err
 	}
 	for _, name := range Files {
@@ -232,12 +241,17 @@ func readSource(s Sys, src string) (map[string][]byte, error) {
 // work of 5.7 itself: the journal first (5.4 step 1), then the helper's own core left from an earlier
 // run, found by the identity in state.json and the image <ProgramDir>\sing-box.exe. "Was on" stays in
 // state.json: the next helper enables again after its start-up, as after any abnormal end (5.2).
-func stopOld(o Options, s Sys, say sayFunc) error {
+// read tells that the data folder is there and passed CheckDir: only then are its files read, with
+// administrator rights, and acted on.
+func stopOld(o Options, s Sys, read bool, say sayFunc) error {
 	if found, err := s.ShutdownHelper(helperWait); found {
 		if err != nil {
 			return fmt.Errorf("the helper that runs did not end: %v; nothing was changed: it ends once the system exit node is back (spec 5.4)", err)
 		}
 		say("the helper that ran has ended")
+		return nil
+	}
+	if !read {
 		return nil
 	}
 	d := store.Dir{Path: o.DataDir}
@@ -350,7 +364,8 @@ func ended(p engine.CoreProc) bool {
 }
 
 // Uninstall is `uninstall [--purge]` (spec 4.3 point 4), in this order: the same stop as step 3 of
-// install (refused while it is not confirmed); the task; the program folder; with Purge the data
+// install (refused while it is not confirmed; the files of a data folder that does not pass CheckDir
+// are not read, and the rest goes on); the task; the program folder; with Purge the data
 // folder, and a note that the embedded node stays a device of the Tailscale network. It runs from the
 // application's own copy: an exe inside the program folder is refused before anything, it would be
 // removed under itself. It prints UNINSTALL-OK, or UNINSTALL-REFUSED: <reason> and returns the error.
@@ -368,12 +383,17 @@ func uninstall(o Options, s Sys, say sayFunc) error {
 	case !elevated:
 		return errors.New("uninstall runs elevated: the window starts it with UAC (spec 4.3)")
 	}
-	if err := stopOld(o, s, say); err != nil {
+	read, err := s.CheckDir(o.DataDir)
+	if err != nil {
+		say("the data folder: %v; restore.json and state.json in it are not read", err)
+		read = false
+	}
+	if err := stopOld(o, s, read, say); err != nil {
 		return err
 	}
 	device := ""
 	if o.Purge {
-		device = deviceName(o)
+		device = deviceName(o, read)
 	}
 	if err := s.DeleteTask(); err != nil {
 		return fmt.Errorf("the task %s: %w", TaskName, err)
@@ -394,11 +414,13 @@ func uninstall(o Options, s Sys, say sayFunc) error {
 	return nil
 }
 
-// deviceName is the embedded node's device in the Tailscale network: the name state.json keeps, else
-// <Hostname>-splitlane, as the helper names it.
-func deviceName(o Options) string {
-	if st, err := (store.Dir{Path: o.DataDir}).LoadState(); err == nil && st.DeviceName != "" {
-		return st.DeviceName
+// deviceName is the embedded node's device in the Tailscale network: the name state.json keeps (read
+// only from a data folder that passed CheckDir), else <Hostname>-splitlane, as the helper names it.
+func deviceName(o Options, read bool) string {
+	if read {
+		if st, err := (store.Dir{Path: o.DataDir}).LoadState(); err == nil && st.DeviceName != "" {
+			return st.DeviceName
+		}
 	}
 	return o.Hostname + "-splitlane"
 }

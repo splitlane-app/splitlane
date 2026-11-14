@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -37,6 +38,7 @@ type fakeSys struct {
 	sys      engine.SysStatus  // the system Tailscale
 	setTakes bool              // SetExitNode turns the exit node on
 	core     *fakeCore         // the core of an earlier run that FindCore finds
+	dirOwner string            // the owner CheckDir finds for a folder that is there; "" is the administrators
 	inUse    string            // the name of a file that WriteFile cannot replace
 	written  map[string][]byte // what WriteFile wrote, by full path
 	xml      string            // the XML of the task registered
@@ -98,6 +100,18 @@ func (f *fakeSys) FindCore(exe string, id store.CoreIdentity) (engine.CoreProc, 
 		return nil, false
 	}
 	return f.core, true
+}
+
+// CheckDir finds the temporary folder as it is; one that is there belongs to dirOwner when it is set.
+func (f *fakeSys) CheckDir(dir string) (bool, error) {
+	f.add("stop check %s", dir)
+	if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if f.dirOwner != "" {
+		return true, fmt.Errorf("%s is there and belongs to %s: it was not made by an administrator; remove it first", dir, f.dirOwner)
+	}
+	return true, nil
 }
 
 // After fires at once: the tests do not wait.
@@ -444,6 +458,73 @@ func TestInstallWithoutPipeRestoresByJournal(t *testing.T) {
 	}
 }
 
+// ProgramData lets users make folders: a user can make the data folder before the first install, with
+// a restore.json and a state.json of his own in it (review F14-1). install and uninstall read them with
+// administrator rights, and act on them (tailscale set with the journal's exit node, the journal set
+// aside or deleted, the process of state.json stopped), only from a plain folder of the administrators
+// or SYSTEM, checked before the stop. install refuses such a folder before it stops anything (step 5
+// would refuse it anyway). uninstall stops the helper and removes the task and the program folder as
+// usual, without the journal, the core or the device name of that folder.
+func TestDataFolderOfAUserIsNotRead(t *testing.T) {
+	prepare := func() (*fakeSys, Options, *strings.Builder, string) {
+		f, o, out := setup(t)
+		d := store.Dir{Path: o.DataDir}
+		id := store.CoreIdentity{PID: 4242, Created: 134000000000000000, Path: filepath.Join(o.ProgramDir, "sing-box.exe")}
+		st := store.Defaults()
+		st.Core, st.DeviceName = &id, "planted-splitlane"
+		if err := d.SaveState(st); err != nil {
+			t.Fatal(err)
+		}
+		if err := d.SaveJournal(store.Journal{ExitNode: exitNode, AllowLAN: true}); err != nil {
+			t.Fatal(err)
+		}
+		f.core = &fakeCore{f: f, id: id, done: make(chan struct{}), graceful: true}
+		f.setTakes, f.dirOwner = true, otherSID
+		return f, o, out, filepath.Join(o.DataDir, "restore.json")
+	}
+	notRead := func(f *fakeSys, journal string) {
+		t.Helper()
+		for _, call := range []string{"stop status", "stop set ", "stop find ", "stop interrupt "} {
+			if n := count(f.log, call); n != 0 {
+				t.Errorf("%q %d times: the files of a user's folder were acted on; log:\n%s", call, n, strings.Join(f.log, "\n"))
+			}
+		}
+		if _, err := os.Stat(journal); err != nil {
+			t.Errorf("the planted journal: %v", err)
+		}
+	}
+
+	f, o, out, journal := prepare()
+	if err := Install(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()),
+		"INSTALL-REFUSED: the data folder: "+o.DataDir+" is there and belongs to "+otherSID+": it was not made by an administrator") {
+		t.Errorf("%v\n%s", err, out)
+	}
+	notRead(f, journal)
+	if got := steps(f.log); got != "sid,hash,stop" || count(f.log, "stop shutdown") != 0 || len(f.written) != 0 {
+		t.Errorf("steps %s, written %d; log:\n%s", got, len(f.written), strings.Join(f.log, "\n"))
+	}
+
+	f, o, out, journal = prepare()
+	o.Purge = true
+	if err := Uninstall(o, f); err != nil || !strings.Contains(out.String(), "restore.json and state.json in it are not read") ||
+		!strings.Contains(out.String(), "UNINSTALL-NOTE: the device testpc-splitlane stays") || lastLine(out.String()) != "UNINSTALL-OK" {
+		t.Errorf("%v\n%s", err, out)
+	}
+	notRead(f, journal)
+	if err := inOrder(f.log, []string{"stop check " + o.DataDir, "stop shutdown 2m0s", "task delete", "remove " + o.ProgramDir, "remove " + o.DataDir}); err != nil {
+		t.Error(err)
+	}
+
+	// The folder missing: nothing to read, install goes on and makes it.
+	f, o, out = setup(t)
+	if err := Install(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if err := inOrder(f.log, []string{"stop check " + o.DataDir, "stop shutdown 2m0s", "copy " + filepath.Join(o.ProgramDir, Files[0])}); err != nil {
+		t.Error(err)
+	}
+}
+
 // uninstall (spec 4.3 point 4) stops first, as install does: a helper on the pipe gets helper.shutdown
 // and must end; one that does not refuses the uninstall, and nothing is removed. Without a helper on the
 // pipe the core left by one that ended abnormally is stopped, by force when the signal is not enough.
@@ -455,7 +536,7 @@ func TestUninstallStopsFirst(t *testing.T) {
 	if err := Uninstall(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got := strings.Join(f.log, ","); got != "sid token,stop shutdown 2m0s,task delete,remove "+o.ProgramDir {
+	if got := strings.Join(f.log, ","); got != "sid token,stop check "+o.DataDir+",stop shutdown 2m0s,task delete,remove "+o.ProgramDir {
 		t.Fatalf("log %s", got)
 	}
 	if lastLine(out.String()) != "UNINSTALL-OK" {
@@ -467,7 +548,7 @@ func TestUninstallStopsFirst(t *testing.T) {
 	if err := Uninstall(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()), "UNINSTALL-REFUSED: the helper that runs did not end: ") {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got := strings.Join(f.log, ","); got != "sid token,stop shutdown 2m0s" {
+	if got := strings.Join(f.log, ","); got != "sid token,stop check "+o.DataDir+",stop shutdown 2m0s" {
 		t.Fatalf("log %s", got)
 	}
 
@@ -510,7 +591,7 @@ func TestUninstallPurge(t *testing.T) {
 	if err := Uninstall(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got := strings.Join(f.log, ","); got != "sid token,stop shutdown 2m0s,task delete,remove "+o.ProgramDir+",remove "+o.DataDir {
+	if got := strings.Join(f.log, ","); got != "sid token,stop check "+o.DataDir+",stop shutdown 2m0s,task delete,remove "+o.ProgramDir+",remove "+o.DataDir {
 		t.Fatalf("log %s", got)
 	}
 	if !strings.HasSuffix(out.String(), fmt.Sprintf(note, "desk-7-splitlane")) {
