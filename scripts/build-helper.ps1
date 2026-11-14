@@ -1,6 +1,7 @@
 # SplitLane: build dist\helper\, the files that install copies into %ProgramFiles%\SplitLane (spec 4.2, 4.3,
 # 14): splitlane-helper.exe without a console window, the unchanged sing-box.exe and libcronet.dll of the
-# core, the core's licence as sing-box-LICENSE, LICENSE and THIRD-PARTY.md of SplitLane. The window runs
+# core, the core's licence as sing-box-LICENSE, LICENSE and THIRD-PARTY.md of SplitLane (it also carries
+# the licence text of libcronet.dll, BSD-3-Clause of Chromium, that its binary form needs). The window runs
 # dist\helper\splitlane-helper.exe install --user-sid <SID> with UAC. The test tools slctl and slguard are
 # not part of it. The SHA-256 of sing-box.exe and libcronet.dll are checked against scripts\core.sha256
 # before they are copied.
