@@ -1,8 +1,378 @@
-import { join } from 'node:path'
-import { app, BrowserWindow, Menu } from 'electron'
+import { execFile } from 'node:child_process'
+import type { Dirent } from 'node:fs'
+import { access, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, join, win32 } from 'node:path'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { IPC, type InstallState, type Snapshot } from '../shared/ipc'
+import type { Program } from '../shared/programs'
+import { PIPE_NAME, type HelperError, type HelperState } from '../shared/protocol'
+import { DEFAULT_SETTINGS, type WindowSettings } from '../shared/settings'
+import type { InstallOutcome, LinkStatus } from '../shared/status'
+import { AutoEnable } from './autoEnable'
+import { IconCache, type IconFs } from './icons'
+import { exportPath, mergePrograms, registerIpc, runCommand, toHelperError } from './ipc'
+import { HelperLink, SHUTDOWN_TIMEOUT_MS } from './link'
+import { dialPipe } from './pipe'
+import { installedPrograms, resolveDropped, startMenuDirs, type ProgramsFs } from './programs'
+import { SettingsFile } from './settingsFile'
+import { encodePowerShell, helperSourceDir, installHelper } from './setup'
+import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
+import { runTask, taskRegistered, type Exec } from './task'
+import { AppTray, MAIN_TEXT } from './tray'
+
+/** schtasks and whoami answer at once; the Store listing takes about a second. */
+const QUICK_EXEC_TIMEOUT_MS = 30_000
+const STORE_APPS_TIMEOUT_MS = 60_000
+/** diagnostics.export writes the archive before it answers. */
+const EXPORT_TIMEOUT_MS = 120_000
+const MAX_OUTPUT_BYTES = 64 * 1024 * 1024
+const START_MENU_DEPTH = 8
+
+// ---- small system helpers ----
+
+function log(message: string): void {
+  console.log(`${new Date().toISOString()} ${message}`)
+}
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
+function stripBom(s: string): string {
+  return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s
+}
+
+function utf8Text(b: Buffer | string | null | undefined): string {
+  if (b === null || b === undefined) return ''
+  return typeof b === 'string' ? b : b.toString('utf8')
+}
+
+/** Runs a program without a shell and without a console window; a non-zero exit code is a result. */
+function execText(timeoutMs = 0): Exec {
+  return (file, args) =>
+    new Promise((resolve, reject) => {
+      execFile(
+        file,
+        args,
+        { windowsHide: true, encoding: 'buffer', maxBuffer: MAX_OUTPUT_BYTES, timeout: timeoutMs },
+        (err, stdout, stderr) => {
+          const out = { stdout: utf8Text(stdout), stderr: utf8Text(stderr) }
+          if (err === null) resolve({ code: 0, ...out })
+          else if (typeof err.code === 'number') resolve({ code: err.code, ...out })
+          else reject(err) // not started, killed by the timeout or too much output
+        }
+      )
+    })
+}
+
+async function exists(p: string): Promise<boolean> {
+  try {
+    await access(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Files under a folder, recursively; unreadable folders are skipped. */
+async function listFiles(dir: string): Promise<string[]> {
+  const out: string[] = []
+  const walk = async (d: string, depth: number): Promise<void> => {
+    let entries: Dirent[]
+    try {
+      entries = await readdir(d, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      const p = join(d, e.name)
+      if (e.isDirectory()) {
+        if (depth < START_MENU_DEPTH) await walk(p, depth + 1)
+      } else if (e.isFile()) {
+        out.push(p)
+      }
+    }
+  }
+  await walk(dir, 0)
+  return out
+}
+
+function describeLink(s: LinkStatus): string {
+  switch (s.kind) {
+    case 'ready':
+      return `ready (helper ${s.hello.helper}, core ${s.hello.core})`
+    case 'restarting':
+      return `restarting, attempt ${s.attempt}`
+    case 'helper-older':
+    case 'helper-newer':
+      return `${s.kind} (protocol ${s.helperProtocol})`
+    default:
+      return s.kind
+  }
+}
+
+// ---- the app: one instance, %AppData%\SplitLane ----
+
+app.setName('SplitLane')
+app.setPath('userData', join(app.getPath('appData'), 'SplitLane'))
+app.setAppUserModelId('SplitLane')
+
+const startHidden = process.argv.includes('--hidden')
+const exec = execText(QUICK_EXEC_TIMEOUT_MS)
+
+let win: BrowserWindow | null = null
+let tray: AppTray | null = null
+/** Set by before-quit or the end of the Windows session: the window closes instead of hiding. */
+let allowClose = false
+/** "Выход" in progress. */
+let exiting = false
+
+let settings: WindowSettings = { ...DEFAULT_SETTINGS }
+let install: InstallState = { kind: 'idle' }
+let installing: Promise<void> | null = null
+let lastPhase: string | null = null
+let firstReady = true
+
+const settingsFile = new SettingsFile(join(app.getPath('userData'), 'settings.json'))
+let saving: Promise<void> = Promise.resolve()
+
+const link = new HelperLink({
+  dial: () => dialPipe(PIPE_NAME),
+  taskRegistered: () => taskRegistered(exec),
+  runTask: () => runTask(exec),
+  sleep: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+  log
+})
+
+const autoEnable = new AutoEnable({
+  enable: async () => {
+    const r = await runCommand(link, { method: 'routing.enable' })
+    if (!r.ok) {
+      log(`auto-enable: routing.enable: ${r.error.code}`)
+      throw new Error(r.error.code)
+    }
+  },
+  setTimer: (fn, ms) => {
+    const t = setTimeout(fn, ms)
+    return () => clearTimeout(t)
+  },
+  now: () => Date.now()
+})
+
+const programsFs: ProgramsFs = {
+  listFiles,
+  readShortcut: (lnk) => ({ target: shell.readShortcutLink(lnk).target })
+}
+
+/** Store apps once per run; the script prints UTF-8 so that Cyrillic names survive (no progress records). */
+const storeApps = new StoreAppsCache(async () => {
+  const script = [
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+    "$ProgressPreference = 'SilentlyContinue'",
+    STORE_APPS_SCRIPT
+  ].join('\r\n')
+  try {
+    const r = await execText(STORE_APPS_TIMEOUT_MS)('powershell.exe', encodePowerShell(script))
+    if (r.code !== 0) throw new Error(`powershell failed with code ${r.code}`)
+    return stripBom(r.stdout)
+  } catch (e) {
+    log(`programs: Store apps: ${errText(e)}`)
+    throw e
+  }
+})
+
+const iconFs: IconFs = {
+  stat: async (p) => {
+    try {
+      return { mtimeMs: (await stat(p)).mtimeMs }
+    } catch {
+      return null
+    }
+  },
+  read: async (p) => {
+    try {
+      return await readFile(p)
+    } catch {
+      return null
+    }
+  },
+  write: async (p, b) => {
+    await mkdir(dirname(p), { recursive: true })
+    await writeFile(p, b)
+  }
+}
+
+const icons = new IconCache(
+  join(app.getPath('userData'), 'icons'),
+  async (exe) => {
+    const img = await app.getFileIcon(exe, { size: 'normal' })
+    if (img.isEmpty()) return null
+    const png = img.toPNG()
+    return png.length === 0 ? null : { png }
+  },
+  iconFs
+)
+
+// ---- snapshot ----
+
+function snapshot(): Snapshot {
+  return { link: link.status(), state: link.state(), settings, install }
+}
+
+function send(channel: string, data: unknown): void {
+  if (win !== null && !win.isDestroyed()) win.webContents.send(channel, data)
+}
+
+function pushSnapshot(): void {
+  send(IPC.snapshotChanged, snapshot())
+}
+
+link.on('status', (s) => {
+  log(`link: ${describeLink(s)}`)
+  if (s.kind === 'ready' && firstReady) {
+    const state = link.state()
+    if (state !== null) {
+      firstReady = false
+      autoEnable.onReady(state, settings.enableOnStart)
+    }
+  }
+  tray?.update(s, link.state())
+  pushSnapshot()
+})
+
+link.on('state', (state: HelperState) => {
+  if (state.phase !== lastPhase) {
+    lastPhase = state.phase
+    log(`state: ${state.phase}${state.reason === null ? '' : ` (${state.reason.code})`}`)
+  }
+  autoEnable.onState(state)
+  tray?.update(link.status(), state)
+  pushSnapshot()
+})
+
+link.on('activity', (a) => send(IPC.activity, a))
+
+// ---- settings: saves run one after another on a chain ----
+
+function saveSettings(s: WindowSettings): Promise<void> {
+  saving = saving
+    .then(() => settingsFile.save(s))
+    .catch((e: unknown) => log(`settings: cannot save: ${errText(e)}`))
+  return saving
+}
+
+function applyOpenAtLogin(openAtLogin: boolean): void {
+  if (!app.isPackaged) {
+    log('settings: open at login is applied only in the built app')
+    return
+  }
+  app.setLoginItemSettings({ openAtLogin, path: process.execPath, args: ['--hidden'] })
+}
+
+async function setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings> {
+  settings = { ...settings, ...patch }
+  if (patch.openAtLogin !== undefined) applyOpenAtLogin(settings.openAtLogin)
+  pushSnapshot()
+  await saveSettings(settings)
+  return settings
+}
+
+// ---- install (spec 4.3) ----
+
+async function runInstall(): Promise<void> {
+  install = { kind: 'running' }
+  pushSnapshot()
+  let outcome: InstallOutcome
+  try {
+    outcome = await installHelper({
+      exec: execText(), // waits for the UAC prompt as long as the user takes
+      sourceDir: helperSourceDir({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        appPath: app.getAppPath()
+      }),
+      tempDir: app.getPath('temp'),
+      readText: async (p) => stripBom(await readFile(p, 'utf8')),
+      exists,
+      remove: (p) => rm(p, { force: true })
+    })
+  } catch (e) {
+    outcome = { kind: 'failed', detail: errText(e) }
+  }
+  log(`setup: install ${outcome.kind}`)
+  install = { kind: 'done', outcome }
+  pushSnapshot()
+  if (outcome.kind !== 'ok') return
+  try {
+    await runTask(exec)
+  } catch (e) {
+    log(`setup: ${errText(e)}`) // the link runs the task again when the pipe does not show up
+  }
+  link.retry()
+}
+
+function startInstall(): Promise<void> {
+  installing ??= runInstall().finally(() => {
+    installing = null
+  })
+  return installing
+}
+
+// ---- dialogs ----
+
+async function pickProgram(): Promise<Program | null> {
+  const options = {
+    properties: ['openFile' as const],
+    filters: [{ name: MAIN_TEXT.programsFilter, extensions: ['exe'] }]
+  }
+  const r = win !== null ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+  if (r.canceled || r.filePaths.length === 0) return null
+  const [first] = resolveDropped([r.filePaths[0]], programsFs.readShortcut)
+  return first !== undefined && first.kind === 'program' ? first.program : null
+}
+
+async function saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError }> {
+  let archive: string
+  try {
+    archive = exportPath(await link.call<unknown>('diagnostics.export', undefined, EXPORT_TIMEOUT_MS))
+  } catch (e) {
+    return { saved: false, error: toHelperError(e) }
+  }
+  const options = {
+    defaultPath: join(app.getPath('downloads'), win32.basename(archive)),
+    filters: [{ name: MAIN_TEXT.zipFilter, extensions: ['zip'] }]
+  }
+  const r = win !== null ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+  if (r.canceled || !r.filePath) return { saved: false }
+  try {
+    await copyFile(archive, r.filePath)
+    return { saved: true }
+  } catch (e) {
+    return { saved: false, error: { code: 'internal', message: errText(e) } }
+  }
+}
+
+// ---- window and quit ----
+
+function showWindow(): void {
+  if (win === null || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+}
+
+/** "Выход": helper.shutdown (it disables splitting and exits), up to 30 s for its answer, then quit. */
+async function quit(): Promise<void> {
+  if (exiting) return
+  exiting = true
+  autoEnable.stop()
+  log('quit: sending helper.shutdown')
+  await link.shutdown(SHUTDOWN_TIMEOUT_MS)
+  app.quit()
+}
 
 function createWindow(): void {
-  const win = new BrowserWindow({
+  const w = new BrowserWindow({
     width: 1100,
     height: 720,
     minWidth: 860,
@@ -17,26 +387,94 @@ function createWindow(): void {
       nodeIntegration: false
     }
   })
+  win = w
 
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  win.webContents.on('will-navigate', (event) => event.preventDefault())
-  win.once('ready-to-show', () => win.show())
+  w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  w.webContents.on('will-navigate', (event) => event.preventDefault())
+  w.once('ready-to-show', () => {
+    if (!startHidden) w.show()
+  })
+  // closing hides to the tray; the helper and splitting go on (spec 10)
+  w.on('close', (event) => {
+    if (allowClose) return
+    event.preventDefault()
+    w.hide()
+  })
+  w.on('session-end', () => {
+    allowClose = true
+  })
+  w.on('closed', () => {
+    if (win === w) win = null
+  })
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (!app.isPackaged && devUrl) {
-    void win.loadURL(devUrl)
+    void w.loadURL(devUrl)
   } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'))
+    void w.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
 
-Menu.setApplicationMenu(null)
-
-void app.whenReady().then(() => {
-  createWindow()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+async function main(): Promise<void> {
+  settings = await settingsFile.load()
+  registerIpc({
+    ipc: ipcMain,
+    accept: (e) => win !== null && !win.isDestroyed() && e.sender === win.webContents,
+    link,
+    snapshot,
+    userCommand: () => autoEnable.stop(),
+    installHelper: startInstall,
+    setSettings,
+    installedPrograms: async () => {
+      const [start, store] = await Promise.all([
+        installedPrograms(programsFs, startMenuDirs(process.env)),
+        storeApps.get()
+      ])
+      return mergePrograms(start, store)
+    },
+    pickProgram,
+    resolveDropped: (paths) => resolveDropped(paths, programsFs.readShortcut),
+    icon: (exe) => icons.get(exe),
+    openExternal: (url) => shell.openExternal(url),
+    saveDiagnostics,
+    quit,
+    log
   })
-})
+  tray = new AppTray({
+    open: showWindow,
+    toggle: (to) => {
+      autoEnable.stop()
+      void runCommand(link, { method: to === 'enable' ? 'routing.enable' : 'routing.disable' }).then((r) => {
+        if (!r.ok) log(`tray: ${to}: ${r.error.code}`)
+      })
+    },
+    quit: () => void quit()
+  })
+  tray.update(link.status(), link.state())
+  createWindow()
+  log(`window started${startHidden ? ' hidden' : ''}`)
+  link.start()
+}
 
-app.on('window-all-closed', () => app.quit())
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  Menu.setApplicationMenu(null)
+  app.on('second-instance', () => showWindow())
+  app.on('before-quit', () => {
+    allowClose = true
+  })
+  // the window only hides; it closes for good when the app quits
+  app.on('window-all-closed', () => {
+    if (allowClose) app.quit()
+  })
+  app.on('will-quit', () => {
+    link.stop()
+    tray?.destroy()
+    tray = null
+  })
+  void app.whenReady().then(main).catch((e: unknown) => {
+    log(`startup failed: ${errText(e)}`)
+    app.quit()
+  })
+}

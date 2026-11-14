@@ -433,6 +433,68 @@ test('a failing runTask counts as a failed attempt', async () => {
   expect(t.deps.log.mock.calls.filter(([m]) => m.includes('schtasks /run failed')).length).toBe(5)
 })
 
+test('shutdown closes without a restart', async () => {
+  // the helper answers helper.shutdown, then exits: the pipe closing is not a loss
+  const t = harness()
+  const c = new FakeConn((m) => (m === 'helper.shutdown' ? { result: {} } : helperAnswer(m)))
+  t.deps.dial.mockResolvedValueOnce(c)
+  t.link.start()
+  await settle()
+  expect(t.link.status().kind).toBe('ready')
+
+  await t.link.shutdown()
+  expect(c.calls().slice(3)).toEqual([['helper.shutdown', undefined]])
+  expect(c.ended).toBe(true)
+  c.drop()
+  await settle()
+  expect(t.deps.taskRegistered).not.toHaveBeenCalled()
+  expect(t.deps.runTask).not.toHaveBeenCalled()
+  expect(t.deps.dial).toHaveBeenCalledTimes(1)
+  expect(t.statuses).toEqual([{ kind: 'ready', hello: HELLO }])
+  await expect(t.link.call('state.get')).rejects.toBeInstanceOf(ConnectionClosedError)
+
+  // the helper closes the pipe before its answer arrives: no restart either
+  const u = harness()
+  const d = new FakeConn((m) => (m === 'helper.shutdown' ? null : helperAnswer(m)))
+  u.deps.dial.mockResolvedValueOnce(d)
+  u.link.start()
+  await settle()
+  const p = u.link.shutdown()
+  expect(d.calls().slice(3)).toEqual([['helper.shutdown', undefined]])
+  d.drop()
+  await p
+  await settle()
+  expect(u.deps.runTask).not.toHaveBeenCalled()
+  expect(u.statuses).toEqual([{ kind: 'ready', hello: HELLO }])
+
+  // no answer in time: shutdown resolves anyway and closes the pipe
+  const v = harness()
+  const e = new FakeConn((m) => (m === 'helper.shutdown' ? null : helperAnswer(m)))
+  v.deps.dial.mockResolvedValueOnce(e)
+  v.link.start()
+  await settle()
+  await v.link.shutdown(20)
+  expect(e.ended).toBe(true)
+  e.drop()
+  await settle()
+  expect(v.deps.runTask).not.toHaveBeenCalled()
+  expect(v.deps.log.mock.calls.some(([m]) => m.includes('helper.shutdown'))).toBe(true)
+
+  // not ready: nothing is sent and a restart loop in progress stops
+  const w = harness()
+  const held: (() => void)[] = []
+  w.deps.sleep.mockImplementation(() => new Promise<void>((r) => held.push(r)))
+  w.link.start()
+  await settle()
+  expect(w.link.status()).toEqual({ kind: 'restarting', attempt: 1 })
+  await w.link.shutdown()
+  for (const r of held.splice(0)) r()
+  await settle()
+  expect(w.deps.runTask).toHaveBeenCalledTimes(1)
+  expect(w.deps.dial).toHaveBeenCalledTimes(1)
+  expect(w.link.status()).toEqual({ kind: 'restarting', attempt: 1 })
+})
+
 test('stop cancels the link and closes the connection', async () => {
   const t = harness()
   const c = new FakeConn()

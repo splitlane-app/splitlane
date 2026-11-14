@@ -20,6 +20,8 @@ export const RESTART_WAIT_MS = 2000
 export const DIAL_POLL_MS = 200
 /** hello, state.get and activity.subscribe are answered at once on a fresh connection. */
 export const HANDSHAKE_TIMEOUT_MS = 10_000
+/** "Выход": how long the window waits for the answer to helper.shutdown before it quits anyway. */
+export const SHUTDOWN_TIMEOUT_MS = 30_000
 
 export interface LinkDeps {
   dial(): Promise<Conn>
@@ -90,6 +92,27 @@ export class HelperLink {
   stop(): void {
     this.generation++
     this.dropRpc()
+  }
+
+  /**
+   * "Выход": sends helper.shutdown and closes the link for good. The pipe closing after it is expected,
+   * so nothing restarts the helper. Without a ready link nothing is sent (a connect or restart in progress
+   * stops). Resolves once the helper answered, the pipe closed or `timeoutMs` passed; never throws.
+   */
+  async shutdown(timeoutMs = SHUTDOWN_TIMEOUT_MS): Promise<void> {
+    this.generation++
+    const rpc = this.rpc
+    const ready = this.current.kind === 'ready'
+    this.rpc = null // its close is intended now: onClosed and onEvent ignore it
+    if (rpc === null) return
+    try {
+      if (ready) await rpc.call('helper.shutdown', undefined, timeoutMs)
+    } catch (e) {
+      // a closed pipe means the helper is on its way out already
+      if (!(e instanceof ConnectionClosedError)) this.deps.log(`link: helper.shutdown: ${errText(e)}`)
+    } finally {
+      this.closeRpc(rpc)
+    }
   }
 
   status(): LinkStatus {
@@ -299,6 +322,10 @@ export class HelperLink {
     const rpc = this.rpc
     if (rpc === null) return
     this.rpc = null
+    this.closeRpc(rpc)
+  }
+
+  private closeRpc(rpc: RpcClient): void {
     try {
       rpc.close()
     } catch (e) {
