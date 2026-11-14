@@ -19506,7 +19506,7 @@ cd C:\code\router\helper; $env:Path = "$env:LOCALAPPDATA\Programs\go\bin;$env:Pa
 cd C:\code\router\helper; $env:Path = "$env:LOCALAPPDATA\Programs\go\bin;$env:Path"; $env:CGO_ENABLED='0'; $env:SPLITLANE_CONSOLE_TEST='1'; go test -count=1 -v -run TestInterruptStopsTheCore ./internal/singbox/ | Select-String -Pattern '^(--- |ok|FAIL)'; $env:SPLITLANE_CONSOLE_TEST=''; $env:SPLITLANE_LIVE_READONLY='1'; go test -count=1 -v -run 'TestLive' ./internal/winhost/ | Select-String -CaseSensitive -Pattern 'LIVE |^(--- |ok|FAIL)'; $env:SPLITLANE_LIVE_READONLY=''; Set-Location C:\code\router; node --test scripts/scenario.test.mjs 2>&1 | Select-String -Pattern '^. (pass|fail) '
 ```
 
-Ожидается: `--- PASS: TestInterruptStopsTheCore`; строка `LIVE default route true, physical forwarding false, NRPT catch-all false, sing-box running false, adapter false`, строки `LIVE wintun ...` (устройство системного Tailscale `present=true`; устройство `SplitLane` — только если оно осталось, тогда `present=false`), `--- PASS` у `TestLiveReadOnly`, `TestLiveWintunListReadOnly`, `TestLiveRouteWatchReadOnly`; `pass 11`, `fail 0`. `physical forwarding true` или `NRPT catch-all true` — задачу 16 не начинать (как в плане 1A, задача 22, шаг 2).
+Ожидается: `--- PASS: TestInterruptStopsTheCore`; строка `LIVE default route true, physical forwarding false, NRPT catch-all false, sing-box running false, adapter false`, строки `LIVE wintun ...` (устройство системного Tailscale `present=true`; устройство `SplitLane` — только если оно осталось, тогда `present=false`), `--- PASS` у `TestLiveReadOnly`, `TestLiveWintunListReadOnly`, `TestLiveRouteWatchReadOnly`, `TestLiveRouteIfaceReadOnly`; `pass 15`, `fail 0`. `physical forwarding true` или `NRPT catch-all true` — задачу 16 не начинать (как в плане 1A, задача 22, шаг 2).
 
 - [ ] **Step 8: Служебный процесс без прав администратора: фаза `off`, архив, активность**
 
@@ -19532,10 +19532,10 @@ helper running: False; core running: False
 
 - [ ] **Step 9: Режим настройки без прав администратора на данных разработки**
 
-Ядро режима настройки работает без адаптера и без прав администратора (раздел 7); узел в `C:\code\router\.dev\data` уже вошёл в сеть (`loggedIn: true` с плана 1A). Подключение `slctl` — это подключение окна: служебный процесс сам запускает режим настройки. Выход из сети (`slctl logout`) здесь НЕ выполняется: он требует нового входа в браузере (задача 16).
+Ядро режима настройки работает без адаптера и без прав администратора (раздел 7); узел в `C:\code\router\.dev\data` уже вошёл в сеть (`loggedIn: true` с плана 1A). Подключение `slctl` — это подключение окна: служебный процесс сам запускает режим настройки. Выход из сети (`slctl logout`) здесь НЕ выполняется: он требует нового входа в браузере (задача 16). Флаг `-timeout` у `login` стоит после команды: общий `-timeout` перед командой ограничивает только подключение к каналу. Инструмент PowerShell, тайм-аут 600000 мс.
 
 ```powershell
-$B = 'C:\code\router\helper\bin'; if (Get-Process -Name splitlane-helper, sing-box -ErrorAction SilentlyContinue) { 'REFUSED: a helper or core runs'; return }; Start-Process -FilePath "$B\splitlane-helper.exe" -ArgumentList '--dev', '--dev-pin', '--data-dir', 'C:\code\router\.dev\data', '--core', 'C:\code\router\.cache\core\sing-box-1.14.4-windows-amd64\sing-box.exe'; & "$B\slctl.exe" -timeout 120s login | Select-Object -Last 2; "login exit=$LASTEXITCODE"; & "$B\slctl.exe" -timeout 10s state | Select-Object -Last 1; "setup core running: $([bool](Get-Process sing-box -ErrorAction SilentlyContinue))"; & "$B\slctl.exe" -timeout 30s shutdown | Select-Object -Last 1; Start-Sleep -Seconds 2; "left: [$(@(Get-Process -Name splitlane-helper, sing-box -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ',')]"; Get-Content C:\code\router\.dev\data\logs\helper.log | Select-Object -Last 12 | ForEach-Object { $_ -replace '\b\d{1,3}(\.\d{1,3}){3}\b', '<ip>' }
+$B = 'C:\code\router\helper\bin'; if (Get-Process -Name splitlane-helper, sing-box -ErrorAction SilentlyContinue) { 'REFUSED: a helper or core runs'; return }; Start-Process -FilePath "$B\splitlane-helper.exe" -ArgumentList '--dev', '--dev-pin', '--data-dir', 'C:\code\router\.dev\data', '--core', 'C:\code\router\.cache\core\sing-box-1.14.4-windows-amd64\sing-box.exe'; & "$B\slctl.exe" login -timeout 60s | Select-Object -Last 2; "login exit=$LASTEXITCODE"; & "$B\slctl.exe" -timeout 10s state | Select-Object -Last 1; "setup core running: $([bool](Get-Process sing-box -ErrorAction SilentlyContinue))"; & "$B\slctl.exe" -timeout 30s shutdown | Select-Object -Last 1; Start-Sleep -Seconds 2; "left: [$(@(Get-Process -Name splitlane-helper, sing-box -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ',')]"; Get-Content C:\code\router\.dev\data\logs\helper.log | Select-Object -Last 12 | ForEach-Object { $_ -replace '\b\d{1,3}(\.\d{1,3}){3}\b', '<ip>' }
 ```
 
 Ожидается: `slctl login` печатает `SLCTL: backend=starting` или `backend=running` и выходит с `login exit=0` без ссылки для входа (узел уже вошёл); в `state` — `phase=off ... backend=starting` или `running`, `path=null`, `exitNodes=` больше нуля; `setup core running: True`; после `shutdown` — `left: []`. Системный exit node всё время включён; при включённом системном exit node узел режима настройки остаётся в `starting` (приложение A, (д)). `SLCTL: open this link to log in:` — узел потерял вход: задачу 16 начинать с шага входа (шаг 10 задачи 16).
@@ -19632,10 +19632,10 @@ $t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::Pa
 - [ ] **Step 2: Готовность (только чтение)**
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; Test-P1Ready; Get-P1Guard; Test-P1SystemRestored; (Get-Content "$P1Data\state.json" -Raw | ConvertFrom-Json) | Select-Object loggedIn, wasOn, defaultLane
+. C:\code\router\spike\plan1\p1lib.ps1; Test-P1Ready; Get-P1Guard; Test-P1SystemRestored; (Get-Content "$P1Data\state.json" -Raw | ConvertFrom-Json) | Select-Object loggedIn, wasOn, defaultLane; $built = [DateTimeOffset]::FromUnixTimeSeconds([int64](git -C C:\code\router log -1 --format=%ct)).LocalDateTime; "fresh: kill-core=$([bool](Select-String -Path C:\code\router\spike\plan1\p1lib.ps1 -SimpleMatch "'kill-core'")) export=$([bool]((& "$P1Bin\slctl.exe" 2>&1 | Out-String) -match 'export')) bins-newer=$((Get-Item "$P1Bin\splitlane-helper.exe").LastWriteTime -gt $built)"
 ```
 
-Ожидается `P1-READY`, `P1-GUARD: state=finished ...`, `SYSTEM-RESTORED`, `loggedIn True`, `wasOn False`, `defaultLane vpn`. `P1-NOT-READY` с `development data left by a tripped run` — сброс, как в задаче 23 плана 1A, шаг 1.
+Ожидается `P1-READY`, `P1-GUARD: state=finished ...`, `SYSTEM-RESTORED`, `loggedIn True`, `wasOn False`, `defaultLane vpn` и `fresh: kill-core=True export=True bins-newer=True`. `P1-NOT-READY` с `development data left by a tripped run` — сброс, как в задаче 23 плана 1A, шаг 1. Любой `False` в `fresh:` — программы или `p1lib.ps1` старые: сначала шаги 5–9 задачи 15 на последнем коммите.
 
 - [ ] **Step 3: Согласие пользователя и запуск сторожа (нужен пользователь: UAC)**
 
@@ -19651,15 +19651,21 @@ $t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::Pa
 . C:\code\router\spike\plan1\p1lib.ps1; Start-P1Guard
 ```
 
-Ожидается `P1-READY`, `P1-RESULT: state=armed ...` и перед ним строка `SLCTL: phase=off ...` (с `backend=starting` или `running`: подключение `slctl` запустило режим настройки). `UAC-CANCELLED` — без согласия пользователя не повторять.
+Ожидается `P1-READY`, `P1-RESULT: state=armed ...` и перед ним строка `SLCTL: phase=off ... backend=stopped ...`: подключение `slctl` запустило режим настройки, но его ядро ещё поднимается. `UAC-CANCELLED` — без согласия пользователя не повторять. Затем — ожидание узла режима настройки:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $s = ''; for ($i = 0; $i -lt 15 -and $s -notmatch ' backend=(starting|running) '; $i++) { Start-Sleep -Seconds 2; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; $s
+```
+
+Ожидается не позже чем через 30 секунд строка `SLCTL: phase=off ... backend=starting` или `running` `... exitNodes=<n>` с `n` больше нуля.
 
 - [ ] **Step 4: Включение, вид соединения и список exit node**
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" lanes C:\code\router\spike\plan1\lanes-1.json | Select-Object -Last 1; $t0 = Get-Date; & "$P1Bin\slctl.exe" -timeout 240s enable | Select-Object -Last 1; "SLCTL-EXIT $LASTEXITCODE seconds=$([int]((Get-Date) - $t0).TotalSeconds)"; Set-P1Heartbeat; $s = ''; for ($i = 0; $i -lt 16 -and $s -notmatch ' path=direct '; $i++) { Start-Sleep -Seconds 5; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; $s; Set-P1Heartbeat; $min = (1..6 | ForEach-Object { Start-Sleep -Seconds 1; @(Get-Process sing-box -ErrorAction SilentlyContinue).Count } | Measure-Object -Minimum).Minimum; "setup core gone: $($min -eq 1)"
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" lanes C:\code\router\spike\plan1\lanes-1.json | Select-Object -Last 1; $t0 = Get-Date; & "$P1Bin\slctl.exe" -timeout 240s enable | Select-Object -Last 1; "SLCTL-EXIT $LASTEXITCODE seconds=$([int]((Get-Date) - $t0).TotalSeconds)"; Set-P1Heartbeat; $s = ''; for ($i = 0; $i -lt 16 -and $s -notmatch ' path=direct '; $i++) { Start-Sleep -Seconds 5; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; $s; Set-P1Heartbeat; $min = (1..15 | ForEach-Object { Start-Sleep -Seconds 1; @(Get-Process sing-box -ErrorAction SilentlyContinue).Count } | Measure-Object -Minimum).Minimum; "setup core gone: $($min -eq 1)"
 ```
 
-Ожидается `RESULT {}`, `SLCTL: phase=on ... backend=running path=... exitNodes=<n>` и `SLCTL-EXIT 0`, затем строка состояния с `path=direct` и `exitNodes` больше нуля (не позже чем через 80 секунд: путь читается сразу после `on` и раз в 60 секунд), `setup core gone: True` (работает одно ядро — рабочее; ядро режима настройки остановлено первым действием включения; каждый вызов службы API — короткий отдельный процесс `sing-box.exe api ...`, поэтому берётся наименьшее из шести чисел за 6 секунд). `phase=error` — шаг «Если что-то пошло не так» и разбор; `reason=tunnel_not_proven` после повтора (задача 7) — сохранить `core.log`, собранный с `--core-log-level debug` нельзя: этот запуск шёл на `info`.
+Ожидается `RESULT {}`, `SLCTL: phase=on ... backend=running path=... exitNodes=<n>` и `SLCTL-EXIT 0`, затем строка состояния с `path=direct` и `exitNodes` больше нуля (не позже чем через 80 секунд: путь читается сразу после `on` и раз в 60 секунд), `setup core gone: True` (работает одно ядро — рабочее; ядро режима настройки остановлено первым действием включения; каждый вызов службы API — короткий отдельный процесс `sing-box.exe api ...`, поэтому берётся наименьшее из пятнадцати чисел за 15 секунд). `phase=error` — шаг «Если что-то пошло не так» и разбор; `reason=tunnel_not_proven` после повтора (задача 7) — сохранить `core.log`, собранный с `--core-log-level debug` нельзя: этот запуск шёл на `info`.
 
 - [ ] **Step 5: Живая активность**
 
@@ -19677,59 +19683,83 @@ $t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::Pa
 . C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $e = & "$P1Bin\slctl.exe" export | Select-Object -Last 1; $e; $zip = ($e -replace '^SLCTL: export written: ', ''); Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [IO.Compression.ZipFile]::OpenRead($zip); "entries: $(($z.Entries | ForEach-Object { $_.FullName }) -join ',')"; $text = ($z.Entries | ForEach-Object { $r = New-Object IO.StreamReader($_.Open()); $r.ReadToEnd(); $r.Dispose() }) -join "`n"; $z.Dispose(); "login link inside: $($text -match 'login\.tailscale\.com/a/')"; "secret-looking keys inside: $($text -match '\"secret\"')"
 ```
 
-Ожидается `SLCTL: export written: C:\code\router\.dev\data\export\splitlane-diagnostics-...zip`, в `entries` — `logs/helper.log`, `logs/core.log` (и `.prev`, если есть), `state.json`, `meta.txt` и ничего больше; `login link inside: False`, `secret-looking keys inside: False`.
+Ожидается `SLCTL: export written: C:\code\router\.dev\data\export\splitlane-diagnostics-...zip`, в `entries` — `logs/helper.log`, `logs/helper.log.prev` (журнал прошлого запуска: он откладывается при каждом старте), `logs/core.log` (и `logs/core.log.prev`, если есть), `state.json`, `meta.txt` и ничего больше; `login link inside: False`, `secret-looking keys inside: False`.
 
 - [ ] **Step 7: Падение ядра: возврат системного exit node и удаление оставшегося устройства**
 
 Сторож принудительно завершает ядро (как «Снять задачу» в диспетчере): поток надзора служебного процесса сразу возвращает системный exit node (5.5), затем перезапуск по 5.3; принудительно завершённое ядро оставило неподключённое устройство Wintun, и перед запуском нового ядра служебный процесс его удаляет (задача 2).
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $n0 = @(Get-Content "$P1Data\logs\helper.log").Count; $t0 = Get-Date; Send-P1Guard -Action kill-core; $back = $null; for ($i = 0; $i -lt 100; $i++) { if ((Get-P1SystemExitNode).On) { $back = [int]((Get-Date) - $t0).TotalMilliseconds; break }; Start-Sleep -Milliseconds 200 }; "system exit node back after ms: $back (including the guard's command pickup)"; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 240s wait on,error | Select-Object -Last 1; "seconds to on: $([int]((Get-Date) - $t0).TotalSeconds)"; Set-P1Heartbeat; $new = @(Get-Content "$P1Data\logs\helper.log" | Select-Object -Skip $n0); "removed stale device: $(@($new | Select-String -SimpleMatch 'removed the stale Wintun device of the adapter').Count)"; "early exits: $(@($new | Select-String -SimpleMatch 'core exited before its start line').Count)"; & "$P1Bin\slctl.exe" expect-lanes C:\code\router\spike\plan1\bin\vpn\curl-vpn.exe=vpn C:\code\router\spike\plan1\bin\direct\curl-direct.exe=direct | Select-String -Pattern '^LANE'
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $n0 = @(Get-Content "$P1Data\logs\helper.log").Count; Send-P1Guard -Action kill-core; $tOn = $null; for ($i = 0; $i -lt 150; $i++) { if ((Get-P1SystemExitNode).On) { $tOn = Get-Date; break }; Start-Sleep -Milliseconds 200 }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 30s wait starting,error | Select-Object -Last 1; & "$P1Bin\slctl.exe" -timeout 240s wait on,error | Select-Object -Last 1; Set-P1Heartbeat; $new = @(Get-Content "$P1Data\logs\helper.log" | Select-Object -Skip $n0); $fmt = 'yyyy/MM/dd HH:mm:ss.ffffff'; $crash = @($new | Select-String -SimpleMatch 'core exited unexpectedly')[0].Line; $tExit = [datetime]::ParseExact($crash.Substring(0, 26), $fmt, $null); $onLine = @($new | Select-String -SimpleMatch 'state: phase=on')[-1].Line; "system exit node back after ms: $(if ($tOn) { [int]($tOn - $tExit).TotalMilliseconds } else { 'never' }) (from the helper's crash line; read every 200 ms)"; "seconds from the crash to on: $([int](([datetime]::ParseExact($onLine.Substring(0, 26), $fmt, $null)) - $tExit).TotalSeconds)"; "removed stale device: $(@($new | Select-String -SimpleMatch 'removed the stale Wintun device of the adapter').Count)"; "early exits: $(@($new | Select-String -SimpleMatch 'core exited before its start line').Count)"; & "$P1Bin\slctl.exe" expect-lanes C:\code\router\spike\plan1\bin\vpn\curl-vpn.exe=vpn C:\code\router\spike\plan1\bin\direct\curl-direct.exe=direct | Select-String -Pattern '^LANE'
 ```
 
-Ожидается `P1-RESULT: state=armed ... result=core processes ended: 1`, `system exit node back after ms:` — число до 3000 (в нём и до секунды на то, чтобы сторож прочёл команду), `SLCTL: phase=on ...`, `removed stale device: 1`, `early exits: 0`, два `LANE-OK`. `removed stale device: 0` и `early exits: 1` — удаление устройства не сработало (запись `stale Wintun device of the adapter not removed: ...` в журнале): записать в приложение A и разобрать после сеанса; деление при этом должно было включиться повтором.
+Ожидается `P1-RESULT: state=armed ... result=core processes ended: <n>` с `n` не меньше 1 (вместе с ядром сторож завершает и короткие вызовы `sing-box.exe api ...` служебного процесса), `system exit node back after ms:` — число от строки сбоя в журнале служебного процесса до чтения включённого exit node (обычно меньше 2000; чтение — раз в 200 мс), `SLCTL: phase=starting ...`, затем `SLCTL: phase=on ...`, `seconds from the crash to on:`, `removed stale device: 1`, `early exits: 0`, два `LANE-OK`. `removed stale device: 0` и `early exits: 1` — удаление устройства не сработало (запись `stale Wintun device of the adapter not removed: ...` в журнале): записать в приложение A и разобрать после сеанса; деление при этом должно было включиться повтором.
 
 - [ ] **Step 8: Кабель: перезапуск ядра по `relay` (нужен пользователь)**
 
-Скажите пользователю: «Выньте сетевой кабель сейчас, через 20–30 секунд вставьте обратно и ждите: наблюдение идёт 5 минут, результат я покажу сам». Сразу после этого — один вызов:
+Перезапуск по `relay` срабатывает, только если до события путь был прямым, а шаг 7 только что заменил ядро. Сначала дождитесь прямого пути:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $s = ''; for ($i = 0; $i -lt 16 -and $s -notmatch ' path=direct '; $i++) { Start-Sleep -Seconds 5; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; Set-P1Heartbeat; "path before the cable: $(if ($s -match ' path=(\S+) ') { $Matches[1] } else { 'unknown' })"
+```
+
+Ожидается `path before the cable: direct`. Иначе — записать в приложение A «перезапуск по relay: не проверялся (до отключения путь не был прямым)» и перейти к шагу 9. Затем скажите пользователю: «Выньте сетевой кабель сейчас, через 20–30 секунд вставьте обратно и ждите: наблюдение идёт 5 минут, результат я покажу сам». Сразу после этого — один вызов:
 
 ```powershell
 . C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; $n0 = @(Get-Content "$P1Data\logs\helper.log").Count; powershell -NoProfile -ExecutionPolicy Bypass -File C:\code\router\spike\plan1b\net-observe.ps1 -Seconds 300 -Every 10 -Label cable; Set-P1Heartbeat; Get-Content "$P1Data\logs\helper.log" | Select-Object -Skip $n0 | Where-Object { $_ -notmatch 'state: phase' } | ForEach-Object { $_ -replace '\b\d{1,3}(\.\d{1,3}){3}\b', '<ip>' }
 ```
 
-Ожидается: пока кабеля нет — фаза `on` (отсутствие сети не сбой), номер процесса ядра не меняется; после возврата сети — `path=relay`; не позже чем через 2 минуты после возврата сети в журнале `the path to the exit node stayed relay after the network change; restarting the core`, номер процесса ядра один раз меняется, затем `path=direct` и два `LANE-OK`. Если узел сам вернулся на `direct` до 60 секунд — перезапуска нет, это тоже верно (записать). Без кабеля сеанс исполнителя тоже теряет связь: вызов продолжает работать локально, результат придёт после возврата сети.
+Ожидается: пока кабеля нет — фаза `on` (отсутствие сети не сбой), номер процесса ядра не меняется (номер ядра — первый в поле `core=`; номера через `+` после него — короткие вызовы службы API); после возврата сети — `path=relay`; не позже чем через 2 минуты после возврата сети в журнале `the path to the exit node stayed relay after the network change; restarting the core`, номер процесса ядра один раз меняется, затем `path=direct` и два `LANE-OK`. Если узел сам вернулся на `direct` до 60 секунд — перезапуска нет, это тоже верно (записать). Без кабеля сеанс исполнителя тоже теряет связь: вызов продолжает работать локально, результат придёт после возврата сети.
 
 - [ ] **Step 9: Сценарная проверка раздела 12**
 
-Сценарий сам включает и выключает деление и временно заменяет раскладку; перед ним деление выключено.
+Сценарий сам включает и выключает деление и временно заменяет раскладку; перед ним деление выключено — отдельным вызовом, потому что у сценария свой предел времени (480 секунд) внутри 600-секундного вызова:
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 200s disable | Select-Object -Last 1; Set-P1Heartbeat; node C:\code\router\scripts\scenario.mjs --heartbeat C:\code\router\spike\plan1\guard\deadline.txt; "scenario exit=$LASTEXITCODE"; Set-P1Heartbeat; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 200s disable | Select-Object -Last 1
 ```
 
-Ожидается `SLCTL: phase=off ...`, затем `SCENARIO-PREP ...`, строки `SCENARIO 1 PASS` … `SCENARIO 8 PASS`, `SCENARIO-RESTORE ...`, `SCENARIO-DONE pass=8 fail=0`, `scenario exit=0` и итоговая фаза `off`. Сценарий длится несколько минут и сам обновляет отметку сторожа (`--heartbeat`). Любой `FAIL` — записать номер шага и текст в приложение A; `FAIL` шага 7 (контроль утечки) — блок «Если что-то пошло не так» немедленно.
+Ожидается `SLCTL: phase=off ...`. Затем:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; node C:\code\router\scripts\scenario.mjs --heartbeat C:\code\router\spike\plan1\guard\deadline.txt; "scenario exit=$LASTEXITCODE"; Set-P1Heartbeat; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
+```
+
+Ожидается `SCENARIO-PREP ...`, строки `SCENARIO 1 PASS` … `SCENARIO 8 PASS`, `SCENARIO-RESTORE ...`, `SCENARIO-DONE pass=8 fail=0`, `scenario exit=0` и итоговая фаза `off`. Сценарий длится несколько минут и сам обновляет отметку сторожа (`--heartbeat`). Любой `FAIL` — записать номер шага и текст в приложение A; `FAIL` шага 7 (контроль утечки) — блок «Если что-то пошло не так» немедленно.
 
 - [ ] **Step 10: Выход из сети и повторный вход (нужен пользователь: браузер)**
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 60s logout | Select-Object -Last 1; "logout exit=$LASTEXITCODE"; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" logout -timeout 60s | Select-String -Pattern '^SLCTL: backend='; "logout exit=$LASTEXITCODE"; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
 ```
 
-Ожидается `SLCTL: backend=needs_login`, `logout exit=0`, в состоянии `phase=off ... backend=needs_login`. Затем скажите пользователю: «Сейчас я покажу ссылку для входа в Tailscale. Откройте её в браузере, войдите той же учётной записью и подтвердите устройство; в консоли Tailscale это то же устройство `<имя ПК>-splitlane`». Один вызов:
+Ожидается `SLCTL: backend=needs_login`, `logout exit=0`, в состоянии `phase=off ... backend=needs_login`. Затем скажите пользователю: «Сейчас я покажу ссылку для входа в Tailscale. Откройте её в браузере, войдите той же учётной записью и подтвердите устройство; в консоли Tailscale это то же устройство `<имя ПК>-splitlane`». Ссылку исполнитель видит только после конца вызова, поэтому вызовов два. Первый — короткий, он только получает ссылку (ядро режима настройки её держит):
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $job = Start-Job -ScriptBlock { for ($i = 0; $i -lt 9; $i++) { Start-Sleep -Seconds 30; . C:\code\router\spike\plan1\p1lib.ps1; Set-P1Heartbeat } }; & "$P1Bin\slctl.exe" -timeout 300s login; "login exit=$LASTEXITCODE"; $job | Stop-Job -PassThru | Remove-Job; Set-P1Heartbeat; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" login -timeout 20s | Select-String -Pattern '^SLCTL: (backend=|open this link)'; "login exit=$LASTEXITCODE"
 ```
 
-`slctl login` печатает `SLCTL: open this link to log in: <ссылка>` — эту строку передайте пользователю в ответе (ссылка только в разговоре, не в отчётах и не в приложении A). Ожидается затем `SLCTL: backend=starting` или `running`, `login exit=0`, в состоянии `exitNodes` больше нуля. Если пользователь не успел за 300 секунд (`login exit=3`) — повторить этот вызов.
+Ожидается строка `SLCTL: open this link to log in: <ссылка>` и `login exit=3` (вход ещё не выполнен). Передайте ссылку пользователю в ответе (она только в разговоре, не в отчётах и не в приложении A) и сразу — второй вызов, который ждёт входа:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $job = Start-Job -ScriptBlock { for ($i = 0; $i -lt 9; $i++) { Start-Sleep -Seconds 30; . C:\code\router\spike\plan1\p1lib.ps1; Set-P1Heartbeat } }; & "$P1Bin\slctl.exe" login -timeout 300s | Select-String -Pattern '^SLCTL: backend='; "login exit=$LASTEXITCODE"; $job | Stop-Job -PassThru | Remove-Job; Set-P1Heartbeat; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
+```
+
+Ожидается `SLCTL: backend=starting` или `running`, `login exit=0`, в состоянии `exitNodes` больше нуля. Если пользователь не успел за 300 секунд (`login exit=3`) — повторить второй вызов: ссылка та же.
 
 - [ ] **Step 11: Включение после входа, выключение и конец сеанса**
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 240s enable | Select-Object -Last 1; Set-P1Heartbeat; & "$P1Bin\slctl.exe" expect-lanes C:\code\router\spike\plan1\bin\vpn\curl-vpn.exe=vpn C:\code\router\spike\plan1\bin\direct\curl-direct.exe=direct | Select-String -Pattern '^LANE'; Set-P1Heartbeat; $d = & "$P1Bin\slctl.exe" -timeout 200s disable | Select-Object -Last 1; $d; if ($d -notmatch '^SLCTL: phase=off ') { 'STEP-STOPPED: disable did not reach off; shutdown and finish not sent'; return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 30s shutdown | Select-Object -Last 1; Start-Sleep -Seconds 2; Set-P1Heartbeat; Send-P1Guard -Action finish; Test-P1SystemRestored
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 240s enable | Select-Object -Last 1; Set-P1Heartbeat; & "$P1Bin\slctl.exe" expect-lanes C:\code\router\spike\plan1\bin\vpn\curl-vpn.exe=vpn C:\code\router\spike\plan1\bin\direct\curl-direct.exe=direct | Select-String -Pattern '^LANE'
 ```
 
-Ожидается `SLCTL: phase=on ...`, два `LANE-OK`, `SLCTL: phase=off ... systemExitNode=true ...`, `SLCTL: the helper closed the pipe`, `P1-RESULT: state=finished ... system_ok=True`, `SYSTEM-RESTORED`.
+Ожидается `SLCTL: phase=on ...` и два `LANE-OK`. Затем — отдельным вызовом:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $d = & "$P1Bin\slctl.exe" -timeout 200s disable | Select-Object -Last 1; $d; if ($d -notmatch '^SLCTL: phase=off ') { 'STEP-STOPPED: disable did not reach off; shutdown and finish not sent'; return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 30s shutdown | Select-Object -Last 1; Start-Sleep -Seconds 2; Set-P1Heartbeat; Send-P1Guard -Action finish; Test-P1SystemRestored
+```
+
+Ожидается `SLCTL: phase=off ... systemExitNode=true ...`, `SLCTL: the helper closed the pipe`, `P1-RESULT: state=finished ... system_ok=True`, `SYSTEM-RESTORED`.
 
 - [ ] **Step 12: Записать итог в приложение A и закоммитить**
 
@@ -19739,7 +19769,7 @@ $t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::Pa
 - План 1B, служебный процесс под сторожем: вид соединения с exit node и список exit node от службы API ядра в состоянии: <подтверждено>.
 - План 1B: живая активность (событие activity, скорости обеих дорожек, подробности программы): <подтверждено>.
 - План 1B: архив diagnostics.export без конфига ядра, состояния узла, ссылок для входа и секретов: <подтверждено>.
-- План 1B: принудительное завершение ядра при работающем служебном процессе: системный exit node возвращён через <N> мс (с задержкой сторожа до секунды), деление включено заново за <N> секунд; оставшееся устройство Wintun удалено перед перезапуском: <подтверждено>.
+- План 1B: принудительное завершение ядра при работающем служебном процессе: системный exit node возвращён через <N> мс от строки сбоя в журнале служебного процесса, деление включено заново за <N> секунд от неё же; оставшееся устройство Wintun удалено перед перезапуском: <подтверждено>.
 - План 1B: отключение кабеля: перезапуск ядра по виду соединения «через ретранслятор» вернул прямое соединение: <подтверждено | не понадобился — узел вернулся сам>.
 - План 1B: сценарная проверка раздела 12 (scripts/scenario.mjs), восемь шагов: <подтверждено | НЕ подтверждено: шаг N — текст>.
 - План 1B: выход встроенного узла из сети и повторный вход по ссылке из состояния: <подтверждено>.
@@ -19747,11 +19777,12 @@ $t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::Pa
 
 ```powershell
 git -C C:\code\router diff -- docs | Select-String -Pattern '\b\d{1,3}(\.\d{1,3}){3}\b' | Where-Object { $_.Line -notmatch '100\.64\.0\.0/10|160\.79\.104\.0/23|1\.1\.1\.1|127\.0\.0\.1' }
+git -C C:\code\router diff -- docs | Select-String -Pattern 'login\.tailscale\.com|fd7a:[0-9a-f]|\.ts\.net|[A-Za-z0-9]-splitlane'
 git -C C:\code\router add docs/superpowers/specs/2026-11-13-splitlane-stage1-design.md
 git -C C:\code\router commit -m "docs: record the live checks of plan 1B in Appendix A" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Первая команда должна вывести пустоту.
+Первые две команды должны вывести пустоту.
 
 ---
 
@@ -19819,15 +19850,15 @@ if (Get-Process -Name splitlane-helper, sing-box -ErrorAction SilentlyContinue) 
 - [ ] **Step 6: Сторож без служебного процесса и запуск задачи (нужен пользователь: UAC)**
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; Start-P1Guard -NoHelper; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; schtasks /run /tn "SplitLane Helper" | Out-Null; "schtasks exit=$LASTEXITCODE"; & "$P1Bin\slctl.exe" -timeout 60s state | Select-Object -Last 1; $h = Get-Process splitlane-helper -ErrorAction SilentlyContinue | Select-Object -First 1; "helper path: $($h.Path)"
+. C:\code\router\spike\plan1\p1lib.ps1; Start-P1Guard -NoHelper; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; schtasks /run /tn "SplitLane Helper" | Out-Null; "schtasks exit=$LASTEXITCODE"; & "$P1Bin\slctl.exe" -timeout 60s state | Select-Object -Last 1; $s = ''; for ($i = 0; $i -lt 15 -and $s -notmatch ' backend=(starting|running) '; $i++) { Start-Sleep -Seconds 2; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; $s
 ```
 
-Ожидается `P1-RESULT: state=armed ...`, `schtasks exit=0`, `SLCTL: phase=off ... backend=starting` или `running` `... exitNodes=<n>` (окно — здесь `slctl` — подключилось, вход сохранён, служебный процесс запустил режим настройки), `helper path: C:\Program Files\SplitLane\splitlane-helper.exe`. Задача запущена из процесса без прав администратора без UAC (проверка (е)).
+Ожидается `P1-RESULT: state=armed ...`, `schtasks exit=0`, `SLCTL: phase=off ... backend=stopped ...` и не позже чем через 30 секунд `SLCTL: phase=off ... backend=starting` или `running` `... exitNodes=<n>` (окно — здесь `slctl` — подключилось, вход сохранён, служебный процесс запустил режим настройки). Путь служебного процесса не читается из обычной оболочки (процесс с повышенными правами), но режим продукта сам отказывается работать не из `C:\Program Files\SplitLane\splitlane-helper.exe` (задача 13): ответ канала это и подтверждает. Задача запущена из процесса без прав администратора без UAC (проверка (е)).
 
 - [ ] **Step 7: Включение и выключение установленным продуктом**
 
 ```powershell
-. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" lanes C:\code\router\spike\plan1\lanes-1.json | Select-Object -Last 1; & "$P1Bin\slctl.exe" -timeout 240s enable | Select-Object -Last 1; Set-P1Heartbeat; & "$P1Bin\slctl.exe" expect-lanes C:\code\router\spike\plan1\bin\vpn\curl-vpn.exe=vpn C:\code\router\spike\plan1\bin\direct\curl-direct.exe=direct | Select-String -Pattern '^LANE'; $core = Get-Process sing-box -ErrorAction SilentlyContinue | Select-Object -First 1; "core path: $($core.Path)"; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 200s disable | Select-Object -Last 1; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 240s enable | Select-Object -Last 1
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" lanes C:\code\router\spike\plan1\lanes-1.json | Select-Object -Last 1; & "$P1Bin\slctl.exe" -timeout 240s enable | Select-Object -Last 1; Set-P1Heartbeat; & "$P1Bin\slctl.exe" expect-lanes C:\code\router\spike\plan1\bin\vpn\curl-vpn.exe=vpn C:\code\router\spike\plan1\bin\direct\curl-direct.exe=direct | Select-String -Pattern '^LANE'; $e = & "$P1Bin\slctl.exe" export | Select-Object -Last 1; $zip = ($e -replace '^SLCTL: export written: ', ''); Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [IO.Compression.ZipFile]::OpenRead($zip); $r = New-Object IO.StreamReader(($z.Entries | Where-Object FullName -eq 'state.json').Open()); $st = $r.ReadToEnd() | ConvertFrom-Json; $r.Dispose(); $z.Dispose(); "core path: $($st.core.path)"; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 200s disable | Select-Object -Last 1; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 240s enable | Select-Object -Last 1
 ```
 
 Ожидается `RESULT {}`, `SLCTL: phase=on ...`, два `LANE-OK`, `core path: C:\Program Files\SplitLane\sing-box.exe`, `SLCTL: phase=off ... systemExitNode=true ...`, снова `SLCTL: phase=on ...`. Деление оставлено включённым для перезагрузки.
@@ -19840,7 +19871,7 @@ if (Get-Process -Name splitlane-helper, sing-box -ErrorAction SilentlyContinue) 
 . C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
 ```
 
-Ожидается `SLCTL: phase=on ...`. Передайте пользователю: «Перезагрузите компьютер сейчас: Пуск → Выключение → Перезагрузка. После входа в Windows подождите две минуты, затем откройте терминал в C:\code\router, запустите `claude --continue` и напишите «продолжай задачу 17, шаг 9». Если после входа интернет не работает — значок Tailscale в трее, Exit Nodes, выбрать прежний exit node.»
+Ожидается `SLCTL: phase=on ...`. Передайте пользователю: «Перезагрузите компьютер сейчас, не позже чем через 5 минут (иначе сработает сторож и проверку придётся повторить): Пуск → Выключение → Перезагрузка. После входа в Windows подождите две минуты, затем откройте терминал в C:\code\router, запустите `claude --continue` и напишите «продолжай задачу 17, шаг 9». Если после входа интернет не работает — значок Tailscale в трее, Exit Nodes, выбрать прежний exit node.»
 
 Сторож при перезагрузке завершается вместе с сеансом; если пользователь задержится с перезагрузкой больше чем на 7 минут, сторож сработает сам (вернёт exit node, завершит процессы) — тогда шаг 9 покажет фазу `off` без перезагрузки, и перезагрузку нужно повторить по новому согласию с шага 6.
 
@@ -19874,11 +19905,12 @@ $B = 'C:\code\router\helper\bin'; schtasks /run /tn "SplitLane Helper" | Out-Nul
 
 ```powershell
 git -C C:\code\router diff -- docs | Select-String -Pattern '\b\d{1,3}(\.\d{1,3}){3}\b' | Where-Object { $_.Line -notmatch '100\.64\.0\.0/10|160\.79\.104\.0/23|1\.1\.1\.1|127\.0\.0\.1' }
+git -C C:\code\router diff -- docs | Select-String -Pattern 'login\.tailscale\.com|fd7a:[0-9a-f]|\.ts\.net|[A-Za-z0-9]-splitlane'
 git -C C:\code\router add docs/superpowers/specs/2026-11-13-splitlane-stage1-design.md
 git -C C:\code\router commit -m "docs: record the product install, reboot and uninstall of plan 1B in Appendix A" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Первая команда должна вывести пустоту.
+Первые две команды должны вывести пустоту.
 
 ---
 
