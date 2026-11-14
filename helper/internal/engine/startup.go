@@ -20,13 +20,21 @@ func (e *Engine) Start() {
 // startup is 5.7: the journal first (phase stopping, step 1 of 5.4, whether a core is left or
 // not; a journal that could not be read is read again until it reads), then the helper's own core
 // left from an earlier run is stopped, the main core or the setup mode's (spec 7: both record their
-// identity in state.json); a foreign sing-box.exe is never touched. If "was on" is still set, the
-// previous helper ended abnormally: enable again. A routing.disable in phase stopping without
-// restore_pending clears it (cmdDisable, 5.1): the start-up then ends in off.
+// identity in state.json; a state.json that could not be read is read again first, readState); a
+// foreign sing-box.exe is never touched. If "was on" is still set, the previous helper ended
+// abnormally: enable again. A routing.disable in phase stopping without restore_pending clears it
+// (cmdDisable, 5.1): the start-up then ends in off.
 func (e *Engine) startup(ctx context.Context) {
 	e.readJournal()
 	e.mu.Lock()
-	j, s := e.journal, e.saved
+	if e.journal != nil {
+		e.setPhase(protocol.PhaseStopping, nil)
+	}
+	e.mu.Unlock()
+	e.restoreSystem() // nothing to do without a journal
+	e.readState(ctx)
+	e.mu.Lock()
+	s := e.saved
 	e.mu.Unlock()
 	var left CoreProc
 	if s.Core != nil {
@@ -34,20 +42,17 @@ func (e *Engine) startup(ctx context.Context) {
 			left = p
 		}
 	}
-	if j != nil || left != nil {
+	if left != nil {
 		e.mu.Lock()
 		e.setPhase(protocol.PhaseStopping, nil)
 		e.mu.Unlock()
-		e.restoreSystem()
-		if left != nil {
-			e.d.Log("stopping the core left from the previous run")
-			e.stopProc(left)
-			if !e.waitAdapterGone() {
-				e.mu.Lock()
-				e.finish(protocol.PhaseError, reason(protocol.ReasonAdapterLeft))
-				e.mu.Unlock()
-				return
-			}
+		e.d.Log("stopping the core left from the previous run")
+		e.stopProc(left)
+		if !e.waitAdapterGone() {
+			e.mu.Lock()
+			e.finish(protocol.PhaseError, reason(protocol.ReasonAdapterLeft))
+			e.mu.Unlock()
+			return
 		}
 	}
 	e.mu.Lock()

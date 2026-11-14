@@ -30,10 +30,13 @@ const (
 )
 
 // A state.json that cannot be read at start (an antivirus or a backup holds it for a moment) is read
-// again so many times, this far apart, before the helper goes on with the defaults.
+// again so many times, this far apart, before the helper goes on with the defaults. The start-up of
+// 5.7 reads it again for up to stateWait more (every restoreEvery) before it looks for the core left
+// from the previous run: the file names that core.
 const (
 	stateRetries = 3
 	stateEvery   = 200 * time.Millisecond
+	stateWait    = 30 * time.Second
 )
 
 // restartPauses: at most three restarts with a growing pause (5.5).
@@ -216,6 +219,50 @@ func (e *Engine) readJournal() {
 	e.setPhase(protocol.PhaseStopping, nil)
 }
 
+// readState is the step of the start-up (5.7) before the core left from the previous run is looked
+// for, when state.json could not be read (load): the file names that core and holds "was on". The
+// phase is stopping, and the file is read again now, then every 5 s for at most 30 s; once it reads,
+// its settings replace the defaults. If it still cannot be read, or the start-up is cancelled, the
+// start-up goes on with the defaults: no core of the previous run is known, none is stopped, and the
+// first save that reads the file keeps the identity it holds (save).
+func (e *Engine) readState(ctx context.Context) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stateErr == nil {
+		return
+	}
+	e.setPhase(protocol.PhaseStopping, nil)
+	deadline := e.d.Clock.Now().Add(stateWait)
+	for {
+		e.mu.Unlock()
+		s, err := e.d.Store.LoadState()
+		e.mu.Lock()
+		switch {
+		case e.stateErr == nil:
+			return // a save has read it meanwhile and taken its settings over
+		case !errors.Is(err, store.ErrIO):
+			if err != nil {
+				e.d.Log("state.json: %v", err)
+			}
+			e.d.Log("state.json can be read now: its settings are back")
+			e.saved, e.stateErr = s, nil
+			e.publish()
+			return
+		}
+		e.stateErr = err
+		if !e.d.Clock.Now().Before(deadline) {
+			e.d.Log("state.json still cannot be read after %s: no core of the previous run is looked for", stateWait)
+			return
+		}
+		e.mu.Unlock()
+		ok := e.sleep(ctx, restoreEvery)
+		e.mu.Lock()
+		if !ok {
+			return
+		}
+	}
+}
+
 // State is a copy of the current state (5.2).
 func (e *Engine) State() protocol.State {
 	e.mu.Lock()
@@ -307,8 +354,10 @@ func (e *Engine) hostname() string {
 // save writes state.json; e.mu must be held. A failed write leaves the engine's copy as it is, and
 // the next save writes all of it again, "was on" and the core identity with it. While state.json
 // could not be read (load), nothing is written over it: each save reads it again first. Once it
-// reads, the settings it holds are taken over, "was on" and the core identity stay those of this
-// run, and save returns errStateLate: the change being saved has given way to the file.
+// reads, the settings it holds are taken over, "was on" stays that of this run, and so does the core
+// identity once this run has started a core; until then the file's stays: the core it names may still
+// run, and the next start must find it (5.7). save then returns errStateLate: the change being saved
+// has given way to the file.
 func (e *Engine) save() error {
 	late := false
 	if e.stateErr != nil {
@@ -322,7 +371,10 @@ func (e *Engine) save() error {
 			e.d.Log("state.json: %v", err)
 		}
 		e.d.Log("state.json can be read now: its settings are back")
-		s.WasOn, s.Core = e.saved.WasOn, e.saved.Core
+		s.WasOn = e.saved.WasOn
+		if e.saved.Core != nil {
+			s.Core = e.saved.Core
+		}
 		e.saved, e.stateErr, late = s, nil, true
 	}
 	err := e.d.Store.SaveState(e.saved)

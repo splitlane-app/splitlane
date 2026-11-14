@@ -124,6 +124,59 @@ func TestStateReadErrorIsNeverOverwritten(t *testing.T) {
 	}
 }
 
+// Review of task 1: a state.json that the start cannot read names the core left from the previous run
+// and holds "was on". The start-up reads it again before it looks for that core (5.7): once it reads,
+// the old core is stopped after the restore and routing comes back on. Before, the defaults hid the
+// core: it ran on without an owner, and the first save that could read the file wrote its identity
+// away. While the file cannot be read at all, the save that reads it at last keeps the identity it
+// holds as long as this run has started no core of its own: the next start still finds that core.
+func TestStartWithUnreadStateStopsTheLeftCore(t *testing.T) {
+	h := newHarness(t)
+	old := leftover(h)
+	h.store.journal = &store.Journal{ExitNode: exitNode, AllowLAN: true}
+	h.store.state.WasOn = true
+	h.store.stateReadFails = 1 + stateRetries // every read of load fails, the next one reads
+	h.sys.set(func(s *fakeSys) { s.on = false })
+	erased := false
+	h.store.onSave = func(s store.State) {
+		if old.alive() && (s.Core == nil || *s.Core != old.id) {
+			erased = true
+		}
+	}
+	h.e.Start()
+	h.e.Wait()
+	if got := strings.Join(h.phases(), ","); got != "stopping,starting,on" || old.alive() {
+		t.Fatalf("the old core must be stopped and routing come back on: phases %s, old alive %v, events %v", got, old.alive(), h.rec.list())
+	}
+	set, stop, start := h.rec.index("sys:set 100.64.0.1 true"), h.rec.index("core:interrupt 777"), h.rec.index("core:start")
+	if set < 0 || stop < set || start < stop {
+		t.Fatalf("restore, then the old core stopped, then the new one started: %v", h.rec.list())
+	}
+	h.store.mu.Lock()
+	gone := erased
+	h.store.mu.Unlock()
+	if gone {
+		t.Fatal("the identity of the old core was written away while it ran")
+	}
+
+	h = newHarness(t)
+	old = leftover(h)
+	h.store.stateReadFails = 1000
+	h.e.Start()
+	h.waitPhase(protocol.PhaseOff)
+	if !old.alive() {
+		t.Fatal("setup: while state.json cannot be read no core of the previous run is known")
+	}
+	h.store.mu.Lock()
+	h.store.stateReadFails = 0
+	h.store.mu.Unlock()
+	lanes := protocol.LanesSetParams{DefaultLane: protocol.LaneDirect, Apps: []protocol.AppRule{fileRule(idB, curlB, protocol.LaneDirect)}}
+	wantCode(t, call(h, protocol.MethodLanesSet, lanes), protocol.CodeApplyFailed)
+	if c := h.store.saved().Core; c == nil || *c != old.id {
+		t.Fatalf("the identity of the old core must stay in state.json while it runs: %+v", c)
+	}
+}
+
 // 8.3 step 3: lanes.set answers after the layout is in state.json. A write that fails is apply_failed;
 // as on the other apply_failed paths the previous rule files and mode come back, and the layout in
 // memory stays the previous one. What a failed save did not write goes with the next save.

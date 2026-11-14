@@ -98,14 +98,15 @@ type fakeStore struct {
 	config          []byte
 	rulesErr        error
 	journalErr      error
-	onRules         func()  // runs after each write of the rule files
-	stateReadFails  int     // so many next LoadState calls fail with a read error (store.ErrIO)
-	journalReadErrs []error // the next LoadJournal calls fail with these, one by one
-	saveErr         error   // SaveState fails with it; state.json keeps what it had
-	stateReads      int     // calls of LoadState
-	stateSaves      int     // calls of SaveState
-	journalReads    int     // calls of LoadJournal
-	dataDir         string  // a real folder for diagnostics.export (exportData); "" in the other tests
+	onRules         func()               // runs after each write of the rule files
+	onSave          func(st store.State) // runs at each write of state.json, with what is written
+	stateReadFails  int                  // so many next LoadState calls fail with a read error (store.ErrIO)
+	journalReadErrs []error              // the next LoadJournal calls fail with these, one by one
+	saveErr         error                // SaveState fails with it; state.json keeps what it had
+	stateReads      int                  // calls of LoadState
+	stateSaves      int                  // calls of SaveState
+	journalReads    int                  // calls of LoadJournal
+	dataDir         string               // a real folder for diagnostics.export (exportData); "" in the other tests
 }
 
 // readErr is how the store reports a file that is there but could not be read (store.ErrIO).
@@ -139,6 +140,9 @@ func (s *fakeStore) SaveState(st store.State) error {
 		return s.saveErr
 	}
 	s.state = st
+	if s.onSave != nil {
+		s.onSave(st)
+	}
 	return nil
 }
 
