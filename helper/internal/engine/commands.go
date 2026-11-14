@@ -30,7 +30,8 @@ func (e *Engine) Handle(ctx context.Context, method string, params json.RawMessa
 		// from Activity. It never reaches the engine.
 		return nil, protocol.Errorf(protocol.CodeBadRequest, "activity.subscribe is answered by the pipe")
 	case protocol.MethodDiagnosticsExport:
-		return nil, protocol.Errorf(protocol.CodeInternal, "%s is not available in this build (Plan 1B)", method)
+		// Any phase, outside the queue: the archive only reads the state; the answer comes when it is written.
+		return e.cmdExport(params)
 	}
 	e.queue.Lock()
 	keep := false // true when a background job took over the queue and unlocks it when done

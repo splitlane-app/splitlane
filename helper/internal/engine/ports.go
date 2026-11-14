@@ -29,6 +29,8 @@ type Store interface {
 	DeleteJournal() error
 	WriteRules(direct, vpn []byte) error
 	WriteConfig(config []byte) (string, error)
+	ExportDir() string // the folder of the diagnostics archives (spec 4.2)
+	Logs() []string    // the logs that diagnostics.export takes, full paths (spec 5.1)
 }
 
 // CoreProc is one running core process.

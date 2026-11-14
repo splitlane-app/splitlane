@@ -265,6 +265,11 @@ type HelloResult struct {
 	Core     string `json:"core"`
 }
 
+// ExportResult is the answer of diagnostics.export: the full path of the archive.
+type ExportResult struct {
+	Path string `json:"path"`
+}
+
 type DisableParams struct {
 	SkipRestore bool `json:"skipRestore"`
 }
