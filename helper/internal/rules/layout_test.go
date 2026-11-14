@@ -202,3 +202,41 @@ func TestNestingChainAndLaneOf(t *testing.T) {
 		t.Error("a path outside every rule has no lane")
 	}
 }
+
+func TestRuleOfPrecedence(t *testing.T) {
+	apps := checked(t,
+		rule("steam", protocol.LaneDirect, protocol.KindFolder, `C:\Games\Steam\steam.exe`),
+		rule("game", protocol.LaneVPN, protocol.KindFile, `C:\Games\Steam\steamapps\common\Game\game.exe`),
+		rule("tools", protocol.LaneVPN, protocol.KindFolder, `C:\Games\Steam\tools\t.exe`))
+	set, err := Compile(apps, testEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		`C:\Games\Steam\steam.exe`:                          "steam",
+		`C:\Games\Steam\steamapps\common\Game\launcher.exe`: "steam",
+		`C:\Games\Steam\steamapps\common\Game\game.exe`:     "game",
+		`c:\games\steam\STEAMAPPS\common\game\GAME.EXE`:     "game",
+		`C:\Games\Steam\tools\sub\helper.exe`:               "tools",
+	}
+	for path, want := range cases {
+		r, ok := set.RuleOf(path)
+		if !ok || r.ID != want {
+			t.Errorf("%s: got %q %v, want %s", path, r.ID, ok, want)
+			continue
+		}
+		if lane, _ := set.LaneOf(path); lane != r.Lane {
+			t.Errorf("%s: RuleOf gives lane %s, LaneOf %s", path, r.Lane, lane)
+		}
+	}
+	if r, _ := set.RuleOf(`C:\Games\Steam\steamapps\common\Game\game.exe`); r != apps[1] {
+		t.Errorf("RuleOf must return the normalized rule, got %+v", r)
+	}
+	if r, ok := set.RuleOf(`C:\Elsewhere\x.exe`); ok || r.ID != "" {
+		t.Errorf("a path outside every rule has no rule, got %+v", r)
+	}
+	var none *Set
+	if _, ok := none.RuleOf(`C:\Games\Steam\steam.exe`); ok {
+		t.Error("a nil set has no rules")
+	}
+}
