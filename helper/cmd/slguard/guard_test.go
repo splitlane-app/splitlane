@@ -455,3 +455,75 @@ func TestLogMasksAddresses(t *testing.T) {
 		t.Fatalf("log:\n%s", b)
 	}
 }
+
+// holdOpen opens the file the way PowerShell's Get-Content does: the rename of another file over
+// it then fails with "Access is denied" until the handle is closed.
+func holdOpen(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// A reader that has status.json open at that moment must not lose the write: the guard tries
+// again, as Write-P1Atomic does (the terminal state is what Stop-P1Guard and Send-P1Guard wait for).
+func TestStatusWriteRetriesWhileAReaderHoldsTheFile(t *testing.T) {
+	g := newGuard(t, &fakeSystem{}, nil)
+	g.status("armed", nil)
+	held := holdOpen(t, filepath.Join(g.Dir, "status.json"))
+	sleeps := 0
+	old := retrySleep
+	retrySleep = func(time.Duration) {
+		if sleeps++; sleeps == 3 {
+			held.Close() // the reader is done after the third failed attempt
+		}
+	}
+	t.Cleanup(func() { retrySleep = old })
+
+	g.status("tripped", map[string]any{"reason": "test", "system_ok": true})
+
+	if s := lastStatus(t, g); s["state"] != "tripped" || s["system_ok"] != true {
+		t.Fatalf("status.json after the retries: %v", s)
+	}
+	if sleeps != 3 {
+		t.Fatalf("slept %d times between attempts, want 3", sleeps)
+	}
+	if _, err := os.Stat(filepath.Join(g.Dir, "status.json.tmp")); err == nil {
+		t.Fatal("the temp file is left behind")
+	}
+	b, _ := os.ReadFile(filepath.Join(g.Dir, "guard.log"))
+	if strings.Contains(string(b), "not written") || !strings.Contains(string(b), `"state":"tripped"`) {
+		t.Fatalf("log:\n%s", b)
+	}
+}
+
+// When every attempt fails the guard says so and does not log the state as if it were written.
+func TestStatusWriteFailureIsLoggedHonestly(t *testing.T) {
+	g := newGuard(t, &fakeSystem{}, nil)
+	g.status("armed", nil)
+	holdOpen(t, filepath.Join(g.Dir, "status.json"))
+	sleeps := 0
+	old := retrySleep
+	retrySleep = func(time.Duration) { sleeps++ }
+	t.Cleanup(func() { retrySleep = old })
+
+	g.status("tripped", map[string]any{"reason": "test", "system_ok": true})
+
+	if s := lastStatus(t, g); s["state"] != "armed" {
+		t.Fatalf("status.json changed although the rename never worked: %v", s)
+	}
+	if sleeps != writeAttempts-1 {
+		t.Fatalf("slept %d times, want %d (%d attempts)", sleeps, writeAttempts-1, writeAttempts)
+	}
+	if _, err := os.Stat(filepath.Join(g.Dir, "status.json.tmp")); err == nil {
+		t.Fatal("the temp file is left behind")
+	}
+	b, _ := os.ReadFile(filepath.Join(g.Dir, "guard.log"))
+	if !strings.Contains(string(b), "status not written") || !strings.Contains(string(b), "tripped") ||
+		strings.Contains(string(b), `"state":"tripped"`) {
+		t.Fatalf("log:\n%s", b)
+	}
+}

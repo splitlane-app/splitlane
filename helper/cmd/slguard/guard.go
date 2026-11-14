@@ -81,13 +81,34 @@ func (g *Guard) logf(format string, args ...any) {
 	fmt.Fprintf(f, "%s %s\n", g.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
 }
 
+// A reader that has the target open (PowerShell polls status.json every 500 ms) makes the rename
+// fail with "Access is denied" until it lets go. So a write is tried again: writeAttempts times,
+// retrySleep apart (a variable so that the tests do not wait), like Write-P1Atomic in p1lib.ps1.
+const (
+	writeAttempts   = 20
+	writeRetryEvery = 100 * time.Millisecond
+)
+
+var retrySleep = time.Sleep
+
 // writeAtomic: temp file in the same folder, then rename (the reader never sees half a file).
+// Every attempt writes the temp file anew; the last error comes back and no temp file stays.
 func writeAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
+	var err error
+	for attempt := 1; attempt <= writeAttempts; attempt++ {
+		if attempt > 1 {
+			retrySleep(writeRetryEvery)
+		}
+		if err = os.WriteFile(tmp, data, 0o644); err != nil {
+			continue
+		}
+		if err = os.Rename(tmp, path); err == nil {
+			return nil
+		}
 	}
-	return os.Rename(tmp, path)
+	os.Remove(tmp)
+	return fmt.Errorf("%w (%d attempts)", err, writeAttempts)
 }
 
 func (g *Guard) status(state string, fields map[string]any) {
@@ -98,7 +119,8 @@ func (g *Guard) status(state string, fields map[string]any) {
 	}
 	b, _ := json.Marshal(s)
 	if err := writeAtomic(g.path("status.json"), b); err != nil {
-		g.logf("status not written: %v", err)
+		g.logf("status not written (state %s, seq %d): %v", state, g.seq, maskIP(err.Error()))
+		return
 	}
 	g.logf("status %s", maskIP(string(b)))
 }
