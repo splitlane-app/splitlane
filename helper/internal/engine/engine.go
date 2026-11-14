@@ -60,6 +60,7 @@ type Engine struct {
 	saved        store.State
 	journal      *store.Journal
 	stateErr     error // state.json could not be read (store.ErrIO): nothing is written over it until it reads
+	relayout     bool  // a save read state.json only now while a core ran: the core is to be given its layout (save)
 	journalErr   error // restore.json could not be read (store.ErrIO): the start-up reads it again first
 	run          *coreRun
 	op           *op
@@ -356,8 +357,10 @@ func (e *Engine) hostname() string {
 // could not be read (load), nothing is written over it: each save reads it again first. Once it
 // reads, the settings it holds are taken over, "was on" stays that of this run, and so does the core
 // identity once this run has started a core; until then the file's stays: the core it names may still
-// run, and the next start must find it (5.7). save then returns errStateLate: the change being saved
-// has given way to the file.
+// run, and the next start must find it (5.7). While a core runs, the exit node it was built with and
+// this run's "logged in" stay too, and the core is to be given the layout of the file (relayout:
+// lanes.set at once, otherwise the next round of 5.5). save then returns errStateLate: the change
+// being saved has given way to the file.
 func (e *Engine) save() error {
 	late := false
 	if e.stateErr != nil {
@@ -374,6 +377,10 @@ func (e *Engine) save() error {
 		s.WasOn = e.saved.WasOn
 		if e.saved.Core != nil {
 			s.Core = e.saved.Core
+		}
+		if e.run != nil {
+			s.SelectedExitNode, s.LoggedIn = e.saved.SelectedExitNode, e.saved.LoggedIn
+			e.relayout = true
 		}
 		e.saved, e.stateErr, late = s, nil, true
 	}

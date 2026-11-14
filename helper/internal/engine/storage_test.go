@@ -1,12 +1,15 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/protocol"
+	"splitlane/helper/internal/rules"
 	"splitlane/helper/internal/store"
 )
 
@@ -220,5 +223,120 @@ func TestLanesSetSaveFailureIsApplyFailed(t *testing.T) {
 	}
 	if got := h.store.saved(); got.WasOn || got.DefaultLane != protocol.LaneDirect || len(got.Apps) != 1 {
 		t.Fatalf("the next save writes the whole state: %+v", got)
+	}
+}
+
+// unreadState is a helper whose start could not read state.json: the defaults are in memory, and the
+// file holds curl-a on the direct lane with the main lane direct, the exit node exitNode, "logged in".
+// This run has logged in through the setup mode and selected the exit node selected, and could save
+// neither: the file still cannot be read.
+func unreadState(t *testing.T, selected string) *harness {
+	t.Helper()
+	h := newHarness(t)
+	h.store.state.Apps = checkedApps(t, fileRule(idA, curlA, protocol.LaneDirect))
+	h.store.state.DefaultLane = protocol.LaneDirect
+	h.store.stateReadFails = 1000
+	h.load()
+	h.e.mu.Lock()
+	h.e.saved.LoggedIn, h.e.saved.SelectedExitNode = true, selected
+	h.e.mu.Unlock()
+	return h
+}
+
+// strOf is the text of a nullable string of the state, "" for null.
+func strOf(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// readable: state.json can be read from now on.
+func readable(h *harness) {
+	h.store.mu.Lock()
+	h.store.stateReadFails = 0
+	h.store.mu.Unlock()
+}
+
+// enableNow enables (5.3) and waits for phase on and the look at the path that follows it.
+func enableNow(h *harness) {
+	h.t.Helper()
+	startEnable(h)
+	h.waitPhase(protocol.PhaseOn)
+	h.waitFor("the path read after phase on", func() bool { return h.e.State().Tailscale.Path != nil })
+}
+
+// coreHasLayout: the rule files, the mode of the core and what the engine knows of its run are those
+// of the layout that the state s shows.
+func coreHasLayout(t *testing.T, h *harness, s protocol.State) {
+	t.Helper()
+	direct, vpn, err := rules.Files(s.Apps, testRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := coreconfig.ModeFor(s.DefaultLane, s.AllDirect, false)
+	h.store.mu.Lock()
+	gotDirect, gotVPN := string(h.store.direct), string(h.store.vpn)
+	h.store.mu.Unlock()
+	h.e.mu.Lock()
+	runDirect, runMode := string(h.e.run.direct), h.e.run.mode
+	h.e.mu.Unlock()
+	if gotDirect != string(direct) || gotVPN != string(vpn) || runDirect != string(direct) || h.clash.currentMode() != mode || runMode != mode {
+		t.Fatalf("the core must run the layout the state shows (%s, %d rules): mode %s (run %s), want %s; direct file:\n%s",
+			s.DefaultLane, len(s.Apps), h.clash.currentMode(), runMode, mode, gotDirect)
+	}
+}
+
+// Review of task 1: lanes.set while the core runs meets state.json readable only now (errStateLate):
+// the layout of the file comes back and is published, and the core is given that layout (8.3). Before,
+// the core went back to the layout from before the call, which neither the state nor the file showed.
+func TestLateStateReadDuringLanesSetAppliesTheFileLayout(t *testing.T) {
+	h := unreadState(t, exitNode)
+	enableNow(h)
+	if s := h.e.State(); len(s.Apps) != 0 || s.DefaultLane != protocol.LaneVPN {
+		t.Fatalf("setup: the defaults: %+v", s)
+	}
+	readable(h)
+	lanes := protocol.LanesSetParams{DefaultLane: protocol.LaneVPN, Apps: []protocol.AppRule{fileRule(idB, curlB, protocol.LaneDirect)}}
+	wantCode(t, call(h, protocol.MethodLanesSet, lanes), protocol.CodeApplyFailed)
+	s := h.e.State()
+	if len(s.Apps) != 1 || s.Apps[0].ID != idA || s.DefaultLane != protocol.LaneDirect {
+		t.Fatalf("the layout of state.json is published: %+v", s)
+	}
+	if got := h.store.saved(); len(got.Apps) != 1 || got.Apps[0].ID != idA || !got.WasOn {
+		t.Fatalf("state.json keeps its layout: %+v", got)
+	}
+	coreHasLayout(t, h, s)
+}
+
+// Review of task 1: the other saves that meet state.json readable only now while the core runs keep
+// what the core was built from and what this run knows of its node: the exit node selected in this run
+// stays (the core runs with it) and an expired login stays cleared. The layout of the file comes back,
+// and the next round of 5.5 gives it to the core (8.3). Before, the file's exit node and "logged in"
+// replaced them, and the core kept the layout of the defaults under the file's in the state.
+func TestLateStateReadWhileOnKeepsTheRunsChoices(t *testing.T) {
+	const selected = "100.64.0.2"
+	h := unreadState(t, selected)
+	readable(h) // the first save of the enable, the identity of its core, reads the file
+	enableNow(h)
+	s := h.e.State()
+	if s.Tailscale.SelectedExitNode == nil || *s.Tailscale.SelectedExitNode != selected ||
+		h.core.options().ExitNode != selected || h.store.saved().SelectedExitNode != selected {
+		t.Fatalf("the exit node the core runs with stays, in the state and in state.json: %q, saved %q",
+			strOf(s.Tailscale.SelectedExitNode), h.store.saved().SelectedExitNode)
+	}
+	if len(s.Apps) != 1 || s.Apps[0].ID != idA || s.DefaultLane != protocol.LaneDirect {
+		t.Fatalf("the layout of state.json is published: %+v", s)
+	}
+	rounds(h, 1)
+	coreHasLayout(t, h, h.e.State())
+
+	h = unreadState(t, exitNode)
+	enableNow(h)
+	readable(h)
+	h.core.node.set(func(n *fakeNode) { n.state = NodeState{Backend: protocol.BackendNeedsLogin, AuthURL: loginURL} })
+	h.e.checkNode(context.Background())
+	if s := h.e.State(); s.Phase != protocol.PhaseDegraded || h.store.saved().LoggedIn {
+		t.Fatalf("the expired login stays cleared in state.json: phase %s, saved %+v", s.Phase, h.store.saved())
 	}
 }

@@ -42,7 +42,9 @@ func (e *Engine) every(ctx context.Context, d time.Duration, fn func(context.Con
 // a new address of the provider (DHCP, CGNAT, another network) does not hide a leak.
 // After a network change (section 10, netRound) the round also looks at the default route while the
 // checks have not passed, and reads the path to the exit node once they have; until they pass, the
-// failures count for nothing (no degraded, no restart), and a leak still rolls back.
+// failures count for nothing (no degraded, no restart), and a leak still rolls back. A layout that a
+// late read of state.json brought back while the core ran (save: relayout) is given to the core at the
+// end of the round, until it takes it.
 func (e *Engine) checkHealth(ctx context.Context) {
 	e.mu.Lock()
 	r, phase, url, w := e.run, e.st.Phase, e.saved.ProbeURL, e.net
@@ -139,6 +141,14 @@ func (e *Engine) checkHealth(ctx context.Context) {
 	mode, current := e.d.Core.Mode(e.saved.DefaultLane, e.st.AllDirect, now), r.mode
 	if dirty {
 		e.refreshLive()
+	}
+	// A save read state.json only now while this core ran (save): the core is given the layout of the
+	// file, its mode with it, as lanes.set gives one: an operation, with the queue held.
+	if e.relayout && e.startOp("lanes", func(ctx context.Context) { e.applySavedLayout(ctx) }) {
+		o := e.op
+		e.mu.Unlock()
+		<-o.done
+		return
 	}
 	e.mu.Unlock()
 	// The mode follows the state, not the transition: every round tries again until the core matches.

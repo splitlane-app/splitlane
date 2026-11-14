@@ -246,7 +246,9 @@ func (e *Engine) cmdLanesSet(params json.RawMessage) *protocol.Error {
 // setLanes is steps 2 and 3 of 8.3 for a checked layout: with apply (the core runs) the files and the
 // mode first, with the reconciliation; then the layout goes into state.json. The answer comes only
 // after the layout is in state.json. A write that fails is apply_failed: the previous layout stays,
-// and the core gets its previous files and mode back.
+// and the core gets its previous files and mode back. A save that finds state.json readable only now
+// (errStateLate) is apply_failed too: the layout of the file comes back and is published, and the core
+// is given that layout (applySavedLayout); only if that fails does it get its previous files and mode.
 func (e *Engine) setLanes(ctx context.Context, apps []protocol.AppRule, defaultLane string, apply bool) *protocol.Error {
 	var undo func()
 	if apply {
@@ -267,12 +269,36 @@ func (e *Engine) setLanes(ctx context.Context, apps []protocol.AppRule, defaultL
 	}
 	e.mu.Unlock()
 	if saveErr != nil {
-		if undo != nil {
+		switch {
+		case undo == nil:
+		case errors.Is(saveErr, errStateLate):
+			if !e.applySavedLayout(ctx) {
+				undo()
+			}
+		default:
 			undo()
 		}
 		return protocol.Errorf(protocol.CodeApplyFailed, "layout not saved: %v", saveErr)
 	}
 	return nil
+}
+
+// applySavedLayout gives the running core the layout that state.json holds, as lanes.set does (8.3):
+// the files and the mode, then the reconciliation. It follows a save that read the file only now
+// while the core ran (save: relayout). False when the apply failed: the core keeps the layout it had,
+// and relayout stays set for the next round of 5.5 (checkHealth).
+func (e *Engine) applySavedLayout(ctx context.Context) bool {
+	e.mu.Lock()
+	apps, lane := e.saved.Apps, e.saved.DefaultLane
+	e.mu.Unlock()
+	if _, aerr := e.applyLanes(ctx, apps, lane); aerr != nil {
+		e.d.Log("the layout of state.json not given to the core: %s", aerr.Message)
+		return false
+	}
+	e.mu.Lock()
+	e.relayout = false
+	e.mu.Unlock()
+	return true
 }
 
 // applyLanes writes the rule files and switches the mode, then reconciles for 3 s (8.3).

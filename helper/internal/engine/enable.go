@@ -198,6 +198,7 @@ func (e *Engine) startAndProve(ctx context.Context) (*coreRun, string, *protocol
 func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, bool) {
 	e.mu.Lock()
 	s := e.saved
+	e.relayout = false // the core is built from the layout in memory
 	e.mu.Unlock()
 	invalid := func(err error) (*coreRun, *protocol.Reason, bool) {
 		return nil, reason(protocol.ReasonConfigInvalid, protocol.ParamError, err.Error()), false
