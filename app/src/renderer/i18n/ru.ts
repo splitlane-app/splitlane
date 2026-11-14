@@ -181,6 +181,11 @@ export const ru = {
   'screen.updateApp': 'Обновите приложение',
   'screen.updateAppLead': 'Служебный процесс новее этого окна. Обновите SplitLane, чтобы они снова работали вместе',
 
+  // an error while drawing the window (the error boundary of the page)
+  'crash.title': 'Сбой окна',
+  'crash.lead': 'В окне произошла ошибка. Деление и служебный процесс работают как прежде',
+  'crash.reload': 'Перезапустить окно',
+
   // setup and update of the helper (spec 4.3, 5.1)
   'setup.title': 'Настройка',
   'setup.lead': 'SplitLane нужен служебный процесс. Он ставится один раз, Windows попросит подтвердить',
@@ -231,6 +236,7 @@ export const ru = {
   'connection.openAtLogin': 'Запускать при входе в Windows',
   'connection.enableOnStart': 'Включать деление при запуске',
   'connection.settings': 'Настройки',
+  'connection.saveFailed': 'Не удалось сохранить настройку',
   'screen.back': 'Назад к дорожкам',
 } as const
 

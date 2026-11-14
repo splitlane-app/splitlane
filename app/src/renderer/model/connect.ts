@@ -13,11 +13,17 @@ export type ScreenName =
   | 'connection'
   | 'board'
 
-/** Where the user is on the way to the first connection (spec 9.5, 7). */
+/**
+ * Where the user is on the way to the first connection (spec 9.5, 7). After a failed or cancelled enable no core
+ * runs (the helper starts its setup core again only on a login, a window connect or a logout) and the backend is
+ * `stopped`: the login stays done unless the reason says it is gone. With nothing chosen and no exit node list
+ * yet (the first run) a stopped backend is a login still to do.
+ */
 export function connectStep(state: HelperState): ConnectStep {
-  const { authUrl, backend, selectedExitNode } = state.tailscale
+  const { authUrl, backend, exitNodes, selectedExitNode } = state.tailscale
   if (authUrl !== null) return 'waitLogin'
   if (backend === 'needs_approval') return 'approval'
+  const next: ConnectStep = selectedExitNode === null ? 'exitNode' : 'enable'
   const live =
     backend === 'starting' ||
     backend === 'running' ||
@@ -25,7 +31,12 @@ export function connectStep(state: HelperState): ConnectStep {
     state.phase === 'degraded' ||
     state.phase === 'blocked' ||
     state.phase === 'starting'
-  if (live) return selectedExitNode === null ? 'exitNode' : 'enable'
+  if (live) return next
+  const code = state.reason?.code
+  const loginGone = code === 'not_logged_in' || code === 'login_expired'
+  const afterEnable = state.phase === 'off' || state.phase === 'error' || state.phase === 'stopping'
+  const known = selectedExitNode !== null || exitNodes.length > 0
+  if (afterEnable && backend === 'stopped' && !loginGone && known) return next
   return 'login'
 }
 

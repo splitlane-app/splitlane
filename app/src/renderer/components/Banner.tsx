@@ -50,13 +50,17 @@ async function perform(services: Services, action: BannerAction, phase: Phase | 
   if (c !== null) await sendCommand(services, c)
 }
 
-/** The state banner over the lanes (spec 9.5); nothing when the state needs none. */
-export function Banner(): React.JSX.Element | null {
+/**
+ * The state banner over the lanes and on the connect screens (spec 9.5); nothing when the state needs none.
+ * withoutOff: no banner for the phase off (the connect screen has its own enable button).
+ */
+export function Banner({ withoutOff = false }: { withoutOff?: boolean }): React.JSX.Element | null {
   const services = useServices()
   const link = useApp((s) => s.snapshot?.link ?? null)
   const state = useApp((s) => s.snapshot?.state ?? null)
   const [busy, setBusy] = useState<BannerAction | null>(null)
   if (link === null) return null
+  if (withoutOff && link.kind === 'ready' && state?.phase === 'off') return null
   const banner = bannerFor(link, state)
   if (banner === null) return null
 

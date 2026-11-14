@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Command } from '../../shared/ipc'
 import type { ExitNode, HelperState } from '../../shared/protocol'
 import type { WindowSettings } from '../../shared/settings'
+import { Banner } from '../components/Banner'
 import { ScreenFrame } from '../components/ScreenFrame'
 import { Toggle } from '../components/Toggle'
 import { t } from '../i18n/t'
@@ -52,8 +53,8 @@ export function ConnectScreen(): React.JSX.Element | null {
   const { bridge, store } = services
   const state = useApp((s) => s.snapshot?.state ?? null)
   const connectedOnce = useApp((s) => s.snapshot?.settings.connectedOnce ?? false)
+  const loginRequested = useApp((s) => s.loginRequested)
   const [busy, setBusy] = useState(false)
-  const opened = useRef<string | null>(null)
   const recorded = useRef(false)
   const authUrl = state?.tailscale.authUrl ?? null
   const phase = state?.phase ?? null
@@ -68,10 +69,11 @@ export function ConnectScreen(): React.JSX.Element | null {
       .catch(failed)
   }
 
-  // the login link goes to the browser once per distinct link
+  // the link of a login this page sent goes to the browser by itself, once; any other link (the one the helper
+  // keeps after a logout) waits for «Открыть ссылку снова». The request is taken from the store, so a second run
+  // of the effect does not open it twice.
   useEffect(() => {
-    if (authUrl === null || opened.current === authUrl) return
-    opened.current = authUrl
+    if (authUrl === null || !loginRequested || !store.getState().takeLoginRequest()) return
     const failed = (): void => store.getState().showNotice(t('connect.openFailed'))
     bridge
       .openLogin(authUrl)
@@ -79,7 +81,7 @@ export function ConnectScreen(): React.JSX.Element | null {
         if (!ok) failed()
       })
       .catch(failed)
-  }, [authUrl, bridge, store])
+  }, [authUrl, loginRequested, bridge, store])
 
   // the first time routing is on, the screen has done its job
   useEffect(() => {
@@ -105,6 +107,7 @@ export function ConnectScreen(): React.JSX.Element | null {
 
   return (
     <ScreenFrame title={t('connect.title')} wide>
+      <Banner withoutOff />
       <p className={styles.lead}>{t('connect.lead')}</p>
       <ul className={styles.tiles} aria-label={t('connect.methods')}>
         <li className={styles.tile} data-active="true">
@@ -203,14 +206,15 @@ export function ConnectionScreen(): React.JSX.Element | null {
   if (state === null || settings === null) return null
 
   const save = (patch: Partial<WindowSettings>): void => {
-    bridge.setSettings(patch).catch((e: unknown) => {
-      store.getState().showNotice(e instanceof Error ? e.message : String(e))
+    bridge.setSettings(patch).catch(() => {
+      store.getState().showNotice(t('connection.saveFailed'))
     })
   }
   const canLogout = !live(state.phase)
 
   return (
     <ScreenFrame title={t('connection.title')} wide>
+      <Banner />
       <div className={styles.row}>
         <span className={styles.label}>{t('connection.device')}</span>
         <span className={styles.value}>{state.tailscale.deviceName}</span>

@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import { connectBridge, IconCache } from './bridge'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { ServicesContext, type Services } from './services'
 import { useAppStore } from './store/appStore'
 import './styles/theme.css'
@@ -17,8 +18,10 @@ connectBridge(bridge, useAppStore)
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
-    <ServicesContext value={services}>
-      <App />
-    </ServicesContext>
+    <ErrorBoundary>
+      <ServicesContext value={services}>
+        <App />
+      </ServicesContext>
+    </ErrorBoundary>
   </StrictMode>
 )

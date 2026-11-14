@@ -12,7 +12,8 @@ const ts = (over: Partial<HelperState['tailscale']>, phase: HelperState['phase']
 
 test('connectStep walks login, approval, exit node, enable', () => {
   expect(connectStep(ts({ backend: 'needs_login' }))).toBe('login')
-  expect(connectStep(ts({ backend: 'stopped' }))).toBe('login')
+  // the first run: no core, nothing chosen and no exit node list yet
+  expect(connectStep(ts({ backend: 'stopped', exitNodes: [], selectedExitNode: null }))).toBe('login')
   expect(connectStep(ts({ backend: 'expired' }))).toBe('login')
   expect(connectStep(ts({ backend: 'needs_login', authUrl: 'https://login.example/a' }))).toBe('waitLogin')
   expect(connectStep(ts({ backend: 'needs_approval' }))).toBe('approval')
@@ -20,6 +21,42 @@ test('connectStep walks login, approval, exit node, enable', () => {
   expect(connectStep(ts({ backend: 'starting', selectedExitNode: null }))).toBe('exitNode')
   expect(connectStep(ts({ backend: 'running' }))).toBe('enable')
   expect(connectStep(ts({ backend: 'running' }, 'starting'))).toBe('enable')
+})
+
+const withReason = (s: HelperState, code: NonNullable<HelperState['reason']>['code']): HelperState => ({
+  ...s,
+  reason: { code, params: {} }
+})
+
+test('connectStep stays past the login after a failed or cancelled first enable', () => {
+  // the helper restarts its setup core only on a login, a window connect or a logout: no core runs here
+  const stopped = (phase: HelperState['phase'], over: Partial<HelperState['tailscale']> = {}): HelperState =>
+    ts({ backend: 'stopped', ...over }, phase)
+  for (const code of ['same_address', 'system_dns_override', 'tunnel_not_proven', 'ip_forwarding'] as const) {
+    expect(connectStep(withReason(stopped('error'), code)), code).toBe('enable')
+  }
+  expect(connectStep(stopped('error'))).toBe('enable')
+  expect(connectStep(stopped('off'))).toBe('enable') // cancelled
+  expect(connectStep(stopped('stopping'))).toBe('enable') // on the way to off or error
+  expect(connectStep(withReason(stopped('stopping'), 'restore_pending'))).toBe('enable')
+  expect(connectStep(stopped('off', { selectedExitNode: null }))).toBe('exitNode')
+  expect(connectStep(withReason(stopped('error', { selectedExitNode: null }), 'no_exit_node'))).toBe('exitNode')
+
+  // the login is gone: back to the login step
+  expect(connectStep(withReason(stopped('error'), 'not_logged_in'))).toBe('login')
+  expect(connectStep(withReason(stopped('error'), 'login_expired'))).toBe('login')
+  expect(connectStep(withReason(stopped('off'), 'not_logged_in'))).toBe('login')
+  expect(connectStep(ts({ backend: 'needs_login' }, 'error'))).toBe('login')
+  expect(connectStep(ts({ backend: 'expired' }, 'error'))).toBe('login')
+})
+
+test('connectStep in the live phases does not depend on the backend', () => {
+  for (const phase of ['on', 'degraded', 'blocked'] as const) {
+    for (const backend of ['stopped', 'needs_login', 'expired'] as const) {
+      expect(connectStep(ts({ backend }, phase)), `${phase} ${backend}`).toBe('enable')
+      expect(connectStep(ts({ backend, selectedExitNode: null }, phase)), `${phase} ${backend}`).toBe('exitNode')
+    }
+  }
 })
 
 const withSettings = (s: Snapshot, connectedOnce: boolean): Snapshot => ({

@@ -41,6 +41,11 @@ export interface AppState {
   notice: string | null
   /** The layout changes shown on screen and not answered by the helper yet, in order. */
   pending: readonly LayoutOp[]
+  /**
+   * This page sent tailscale.login and the link of that login has not been opened yet: only then the connect
+   * screen opens the link in the browser by itself (not the link the helper keeps after a logout).
+   */
+  loginRequested: boolean
   setSnapshot(s: Snapshot): void
   setActivity(a: Activity | null): void
   setSearch(search: string): void
@@ -49,6 +54,9 @@ export interface AppState {
   showConnection(show: boolean): void
   showNotice(text: string): void
   dismissNotice(): void
+  requestLogin(requested: boolean): void
+  /** Clears loginRequested; true when it was set (the caller opens the link). */
+  takeLoginRequest(): boolean
   /** Shows the change at once and sends it; resolves when its lanes.set is answered (or dropped). */
   change(op: LayoutChange): Promise<void>
 }
@@ -158,6 +166,7 @@ export function createAppStore(deps: AppStoreDeps): UseBoundStore<StoreApi<AppSt
       ui: { addOpen: false, cardKey: null, screen: 'board' },
       notice: null,
       pending: [],
+      loginRequested: false,
 
       setSnapshot(s) {
         const live = s.state !== null && LIVE_PHASES.has(s.state.phase)
@@ -191,6 +200,14 @@ export function createAppStore(deps: AppStoreDeps): UseBoundStore<StoreApi<AppSt
       },
       dismissNotice() {
         set({ notice: null })
+      },
+      requestLogin(loginRequested) {
+        if (get().loginRequested !== loginRequested) set({ loginRequested })
+      },
+      takeLoginRequest() {
+        if (!get().loginRequested) return false
+        set({ loginRequested: false })
+        return true
       },
 
       async change(op) {

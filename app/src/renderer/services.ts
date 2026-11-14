@@ -31,8 +31,13 @@ const thrown = (e: unknown): HelperError => ({
   message: e instanceof Error ? e.message : String(e)
 })
 
-/** Sends a command of the page; a failure (an error answer or a throw of the bridge) shows its notice. */
+/**
+ * Sends a command of the page; a failure (an error answer or a throw of the bridge) shows its notice. A login
+ * marks its link to be opened by the connect screen (a failed one does not); a logout drops that mark.
+ */
 export async function sendCommand({ bridge, store }: Services, c: Command): Promise<boolean> {
+  const login = c.method === 'tailscale.login'
+  if (login || c.method === 'tailscale.logout') store.getState().requestLogin(login)
   let error: HelperError | undefined
   try {
     const r = await bridge.command(c)
@@ -40,7 +45,10 @@ export async function sendCommand({ bridge, store }: Services, c: Command): Prom
   } catch (e) {
     error = thrown(e)
   }
-  if (error !== undefined) store.getState().showNotice(errorText(error))
+  if (error !== undefined) {
+    if (login) store.getState().requestLogin(false)
+    store.getState().showNotice(errorText(error))
+  }
   return error === undefined
 }
 

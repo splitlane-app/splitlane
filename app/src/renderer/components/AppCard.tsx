@@ -9,6 +9,7 @@ import { pin, unpin } from '../model/layout'
 import { useApp, useIcon, useServices } from '../services'
 import { ActivityBars } from './ActivityBars'
 import styles from './AppCard.module.css'
+import { cardTarget, focusCard } from './cardFocus'
 import { ContextMenu, menuOps, type MenuAnchor } from './ContextMenu'
 
 const NO_POINTS: readonly number[] = []
@@ -25,19 +26,6 @@ function CardIcon({ card }: { card: CardVM }): React.JSX.Element {
       <Builtin />
     </span>
   )
-}
-
-/**
- * Focuses the card of key: el when it is still on the page, else — after the next render has moved the card to
- * its new place — the card of the same key there.
- */
-function focusCard(el: HTMLElement | null, key: string): void {
-  el?.focus()
-  requestAnimationFrame(() => {
-    if (el?.isConnected === true) return
-    const card = Array.from(document.querySelectorAll<HTMLElement>('[data-card]')).find((c) => c.dataset.card === key)
-    card?.querySelector<HTMLElement>('[data-card-main]')?.focus()
-  })
 }
 
 /**
@@ -72,20 +60,22 @@ export function AppCard({ card, onOpen }: { card: CardVM; onOpen(key: string): v
     },
     [handleRef, movable]
   )
-  const key = card.key
+  const { key, exe, kind } = card
+  // a pin or an unpin moves the card under another key: the focus finds it by its program (cardFocus.ts)
   const closeMenu = useCallback(
     (returnFocus: boolean) => {
       setMenu(null)
-      if (returnFocus) focusCard(main.current, key)
+      if (returnFocus) focusCard(main.current, { key, exe, kind })
     },
-    [key]
+    [key, exe, kind]
   )
   const openMenu = (at: MenuAnchor): void => {
     if (menuOps(card).length > 0) setMenu(at)
   }
 
-  const togglePin = (): void => {
+  const togglePin = (e: MouseEvent<HTMLButtonElement>): void => {
     void store.getState().change((l, newId) => (card.ruleId !== null ? unpin(l, card.ruleId) : pin(l, card, newId)))
+    focusCard(e.currentTarget, cardTarget(card), 'pin')
   }
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     // a key that ended a keyboard drag (dnd-kit prevents it) is not a key of the card
@@ -114,6 +104,8 @@ export function AppCard({ card, onOpen }: { card: CardVM; onOpen(key: string): v
         ref={movable ? ref : undefined}
         className={styles.card}
         data-card={card.key}
+        data-exe={card.exe}
+        data-kind={card.kind}
         data-name={card.name}
         data-pinned={card.pinned}
         onContextMenu={onContextMenu}
@@ -141,6 +133,7 @@ export function AppCard({ card, onOpen }: { card: CardVM; onOpen(key: string): v
           <button
             type="button"
             className={styles.pin}
+            data-card-pin=""
             aria-label={t(card.pinned ? 'unpin' : 'pin')}
             title={t(card.pinned ? 'unpin' : 'pin')}
             onClick={togglePin}

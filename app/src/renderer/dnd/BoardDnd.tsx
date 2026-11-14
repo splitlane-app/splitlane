@@ -17,6 +17,7 @@ import { useMemo, type ReactNode } from 'react'
 import type { StoreApi } from 'zustand'
 import type { Program } from '../../shared/programs'
 import type { Lane } from '../../shared/protocol'
+import { cardTarget, focusCard } from '../components/cardFocus'
 import { t } from '../i18n/t'
 import { addRowDrop } from '../model/addRows'
 import type { CardVM } from '../model/board'
@@ -146,7 +147,13 @@ export function BoardDnd({ children }: { children: ReactNode }): React.JSX.Eleme
     const moves = change !== null && layout !== null && change(layout, () => PROBE_ID) !== layout
     const feedback = manager.registry.plugins.get(Feedback)
     if (feedback !== undefined) feedback.dropAnimation = moves ? STAY_WHERE_DROPPED : undefined
-    if (moves && change !== null) void store.getState().change(change)
+    if (!moves || change === null) return
+    void store.getState().change(change)
+    // dnd-kit gives the focus of a keyboard drag back to the draggable of the same id; a pin or an unpin has given
+    // the card another one, so it is found again by its program
+    if (drop?.op != null && event.operation.activatorEvent instanceof KeyboardEvent) {
+      focusCard(null, cardTarget(drop.card))
+    }
   }
 
   return (
