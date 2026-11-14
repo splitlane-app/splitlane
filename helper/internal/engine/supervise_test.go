@@ -198,6 +198,20 @@ func TestAdapterFailuresNeedAWorkingVPN(t *testing.T) {
 	}
 }
 
+// 5.6: the first window reads the system client at once, not 3 s later: until then the state says
+// "no exit node" in off while the system exit node is on (task 16 of plan 1B). No Run here: only the
+// window's own read can bring it.
+func TestFirstWindowReadsSystemAtOnce(t *testing.T) {
+	h := newHarness(t)
+	h.load()
+	t.Cleanup(func() { shutdown(t, h) })
+	if h.e.State().SystemTailscale.ExitNodeOn {
+		t.Fatal("before any read the state says no exit node")
+	}
+	h.e.SetClients(1)
+	h.waitFor("the system exit node read for the window", func() bool { return h.e.State().SystemTailscale.ExitNodeOn })
+}
+
 // Section 10 row 8 and 5.6: the user selects an exit node again: blocked; cleared: back.
 // With both blocked and degraded the phase is blocked. In blocked the adapter path is not checked.
 func TestBlockedPhase(t *testing.T) {

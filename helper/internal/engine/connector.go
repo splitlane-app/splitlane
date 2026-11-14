@@ -86,13 +86,15 @@ func (e *Engine) cmdLogout(params json.RawMessage) *protocol.Error {
 }
 
 // windowCame: a window connected while none was (SetClients). With "logged in" saved the setup mode
-// starts, to show the state of the node and its exit nodes (spec 7).
+// starts, to show the state of the node and its exit nodes (spec 7); the system client is read at once
+// (5.6), not at the next of the 3 s rounds: the window's first state would say "no exit node" in off.
 func (e *Engine) windowCame() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.clients.Load() > 0 && e.saved.LoggedIn {
 		e.startSetupLocked()
 	}
+	e.mu.Unlock()
+	e.pollSystem(context.Background())
 }
 
 // startSetupLocked starts the setup mode unless it runs (spec 7): only in off and error, never after
