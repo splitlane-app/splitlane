@@ -527,3 +527,27 @@ func TestStatusWriteFailureIsLoggedHonestly(t *testing.T) {
 		t.Fatalf("log:\n%s", b)
 	}
 }
+
+func TestKillCoreCommand(t *testing.T) {
+	sys := &fakeSystem{exitOn: true, exitIP: "100.64.0.1"}
+	var result any
+	g := newGuard(t, sys, func(g *Guard, tick int) {
+		switch tick {
+		case 1:
+			sys.mu.Lock()
+			sys.cores, sys.adapter = 1, true
+			sys.mu.Unlock()
+			command(g, "kill-core")
+		case 3:
+			result = lastStatus(t, g)["result"]
+			os.WriteFile(filepath.Join(g.Dir, "stop.flag"), nil, 0o644)
+		}
+	})
+	g.Run()
+	if result != "core processes ended: 1" {
+		t.Fatalf("result %v, events %s", result, sys.list())
+	}
+	if !strings.HasPrefix(sys.list(), "kill sing-box.exe|") {
+		t.Fatalf("events %s", sys.list())
+	}
+}

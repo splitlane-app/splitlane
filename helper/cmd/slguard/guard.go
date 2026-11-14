@@ -247,6 +247,10 @@ func (g *Guard) command() string {
 	case "kill-helper":
 		n := len(g.Sys.Kill(HelperImage))
 		g.status("armed", map[string]any{"cmd_id": cmd.ID, "result": fmt.Sprintf("helper processes ended: %d", n)})
+	case "kill-core":
+		// A crash of the core while the helper runs (spec 5.5, 12): the helper gives the exit node back and restarts.
+		n := len(g.Sys.Kill(CoreImage))
+		g.status("armed", map[string]any{"cmd_id": cmd.ID, "result": fmt.Sprintf("core processes ended: %d", n)})
 	case "launch-helper":
 		result := "helper launched"
 		if len(g.Launch) == 0 {
