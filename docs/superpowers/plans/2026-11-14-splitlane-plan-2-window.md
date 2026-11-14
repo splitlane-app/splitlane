@@ -365,9 +365,131 @@
 - [ ] **Step 2:** запуск `app\release\win-unpacked\SplitLane.exe` без прав администратора: окно открывается; без установленного продукта — экран «Настройка» (если продукт установлен — доска); закрытие прячет в трей; второй запуск показывает первое окно; «Выход» в трее завершает приложение.
 - [ ] **Step 3:** коммит `build(app): unpacked Windows build with the helper as resources`.
 
-### Task 15: Живая проверка окна (нужен пользователь: UAC, браузер)
+### Task 15: Живая проверка окна (нужен пользователь: UAC, мышь, Проводник, трей)
 
-Основной сеанс, под сторожем `Start-P1Guard -NoHelper`. Проверяется: первая настройка из окна (установка с UAC, задача, канал), экран «Подключите VPN» с уже выполненным входом, включение и выключение из окна, перенос копий `curl-*.exe` между дорожками мышью и из Проводника с проверкой `slctl expect-lanes`, смена основной дорожки, «всё напрямую», плашки `blocked` (exit node включает пользователь в трее Tailscale) и возврат, трей (значки и меню), закрытие в трей и повторный запуск, `--hidden` и автозапуск, завершение служебного процесса через `schtasks /end` — окно перезапускает его, завершение окна через диспетчер — деление продолжает работать, «Выход» из трея при включённом делении — системный exit node возвращён (`Test-P1SystemRestored`). Шаги и ожидаемые строки исполнитель вписывает в план после задачи 14, до начала задачи 15 (они зависят от собранного приложения), по образцу задачи 16 плана 1B (одна команда PowerShell на шаг, `Assert-P1Armed` и `Set-P1Heartbeat` в начале). Итог — абзац «Проверки плана 2» в приложении A спецификации и коммит `docs: record the live checks of plan 2 in Appendix A`.
+Основной сеанс, под сторожем `Start-P1Guard -NoHelper` (служебный процесс ставит и запускает само окно). Приложение — `C:\code\router\app\release\win-unpacked\SplitLane.exe` (задача 14). Продукт к началу не установлен (план 1B, задача 17, удаление), а `C:\ProgramData\SplitLane` с состоянием узла (вход выполнен, exit node выбран, раскладка из двух правил для `curl-vpn.exe` и `curl-direct.exe`) остался. Каждый шаг, после которого системный exit node может оказаться выключен, — один вызов PowerShell с тайм-аутом 600000 мс, начинается с `. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat`; между вызовами не больше 400 секунд. Сеанс исполнителя работает только через дорожку VPN: пока основная дорожка «Напрямую», исполнитель не делает запросов — смена основной дорожки проверяется одним вызовом, который сам дожидается и смены, и возврата. Режим «всё напрямую» (доступен только из плашки `degraded`) и фаза `blocked` в этой проверке не вызываются: их проверил сценарий плана 1B на уровне служебного процесса (`scripts/scenario.mjs`, шаги 5 и 8, и тесты автомата). После проверки продукт остаётся установленным, деление выключено.
+
+**Если что-то пошло не так** — блок восстановления задачи 23 плана 1A; при `SYSTEM-WRONG`, `NO-TERMINAL-STATE`, `state=restore_blocked` или `no status` — показать пользователю ручное восстановление.
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-11-13-splitlane-stage1-design.md` (приложение A)
+
+- [ ] **Step 1: Готовность (только чтение)**
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; Test-P1Ready; Test-P1SystemRestored; schtasks /query /tn "SplitLane Helper" 2>$null | Out-Null; "task exists: $($LASTEXITCODE -eq 0)"; "program dir: $(Test-Path 'C:\Program Files\SplitLane'); data dir: $(Test-Path 'C:\ProgramData\SplitLane'); window running: $([bool](Get-Process SplitLane -ErrorAction SilentlyContinue)); settings file: $(Test-Path "$env:APPDATA\SplitLane\settings.json")"; $b = (Get-Item C:\code\router\app\release\win-unpacked\SplitLane.exe).LastWriteTime; $c = [DateTimeOffset]::FromUnixTimeSeconds([int64](git -C C:\code\router log -1 --format=%ct -- app helper)).LocalDateTime; "build newer than the code: $($b -gt $c)"
+```
+
+Ожидается `P1-READY`, `SYSTEM-RESTORED`, `task exists: False`, `program dir: False; data dir: True; window running: False; settings file: False`, `build newer than the code: True`. Иначе: `False` у сборки — сначала `scripts\build-app.ps1` (`BUILD-OK`); `settings file: True` — переименовать файл в `settings.json.bak` (первый запуск должен быть первым).
+
+- [ ] **Step 2: Согласие пользователя**
+
+Передайте пользователю текст ручного восстановления (Global Constraints плана 1A) и затем:
+
+```text
+Сейчас проверка самого окна SplitLane, около 30 минут, под сторожем. Понадобятся ваши руки: принять UAC от slguard.exe; в окне нажать «Настроить» и принять UAC установки; нажать «Включить деление»; перетащить карточку мышью туда и обратно; перетащить файл из Проводника; сменить основную дорожку и сразу вернуть; закрыть окно крестиком и открыть из трея; включить и выключить автозапуск; в конце выйти через значок в трее. Связь у программ будет пропадать на 5–25 секунд при включении, выключении и перезапуске. В значке Tailscale ничего не переключайте. Я буду говорить, что делать, перед каждым шагом.
+```
+
+- [ ] **Step 3: Сторож (нужен пользователь: UAC)**
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; Start-P1Guard -NoHelper
+```
+
+Ожидается `P1-READY` и `P1-RESULT: state=armed ...`. `UAC-CANCELLED` — без согласия пользователя не повторять.
+
+- [ ] **Step 4: Первая настройка из окна (нужен пользователь: «Настроить», UAC)**
+
+Скажите пользователю: «Сейчас откроется окно SplitLane с экраном «Настройка». Нажмите «Настроить» и подтвердите запрос Windows». Сразу после этого:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; Start-Process C:\code\router\app\release\win-unpacked\SplitLane.exe; $t0 = Get-Date; $ok = $false; while (((Get-Date) - $t0).TotalSeconds -lt 300) { Start-Sleep -Seconds 5; Set-P1Heartbeat; if (Get-ChildItem \\.\pipe\ | Where-Object Name -eq 'SplitLane.Helper') { $ok = $true; break } }; "pipe after setup: $ok seconds=$([int]((Get-Date) - $t0).TotalSeconds)"; schtasks /query /tn "SplitLane Helper" 2>$null | Out-Null; "task exists: $($LASTEXITCODE -eq 0)"; Start-Sleep -Seconds 10; & "$P1Bin\slctl.exe" -timeout 30s state | Select-Object -Last 1
+```
+
+Ожидается `pipe after setup: True`, `task exists: True`, `SLCTL: phase=off ... backend=starting` или `running` `... exitNodes=<n>` с `n` больше нуля (окно подключилось, вход сохранён — служебный процесс запустил режим настройки). Пользователь видит экран «Подключите VPN» на шаге «Включить» с предупреждением про exit node в приложении Tailscale.
+
+- [ ] **Step 5: Включение из окна (нужен пользователь: «Включить деление»)**
+
+Скажите пользователю: «Нажмите «Включить деление»». Сразу после этого:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; & "$P1Bin\slctl.exe" -timeout 300s wait on,error | Select-Object -Last 1; Set-P1Heartbeat; & "$P1Bin\slctl.exe" expect-lanes C:\code\router\spike\plan1\bin\vpn\curl-vpn.exe=vpn C:\code\router\spike\plan1\bin\direct\curl-direct.exe=direct | Select-String -Pattern '^LANE'; Start-Sleep -Seconds 3; "connectedOnce: $((Get-Content "$env:APPDATA\SplitLane\settings.json" -Raw | ConvertFrom-Json).connectedOnce)"
+```
+
+Ожидается `SLCTL: phase=on ...`, два `LANE-OK`, `connectedOnce: True`. Пользователь видит доску: в «Через VPN» — карточка `curl-vpn`, в «Напрямую» — `curl-direct`, строки «Сайты видят …» с адресами, плашка подключения «Tailscale · <exit node> · …»; значок в трее — цвет VPN.
+
+- [ ] **Step 6: Перенос мышью (нужен пользователь)**
+
+Скажите пользователю: «Перетащите карточку curl-direct из «Напрямую» в «Через VPN»; через несколько секунд перетащите её обратно». Сразу после этого:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $d = 'C:\code\router\spike\plan1\bin\direct\curl-direct.exe'; $t0 = Get-Date; $there = $false; while (((Get-Date) - $t0).TotalSeconds -lt 240 -and -not $there) { Start-Sleep -Seconds 3; Set-P1Heartbeat; $there = [bool](& "$P1Bin\slctl.exe" expect-lanes "$d=vpn" | Select-String -Pattern '^LANE-OK') }; "moved to vpn: $there"; $back = $false; while (((Get-Date) - $t0).TotalSeconds -lt 360 -and -not $back) { Start-Sleep -Seconds 3; Set-P1Heartbeat; $back = [bool](& "$P1Bin\slctl.exe" expect-lanes "$d=direct" | Select-String -Pattern '^LANE-OK') }; "moved back to direct: $back"
+```
+
+Ожидается `moved to vpn: True`, `moved back to direct: True`.
+
+- [ ] **Step 7: Файл из Проводника и «Открепить» (нужен пользователь)**
+
+Откройте пользователю папку: `Start-Process explorer.exe C:\code\router\spike\plan1\bin\free`. Скажите: «Перетащите файл curl-free.exe из Проводника на дорожку «Напрямую». Потом правой кнопкой на его карточке выберите «Открепить»». Сразу после этого:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $f = 'C:\code\router\spike\plan1\bin\free\curl-free.exe'; $t0 = Get-Date; $in = $false; while (((Get-Date) - $t0).TotalSeconds -lt 240 -and -not $in) { Start-Sleep -Seconds 3; Set-P1Heartbeat; $in = [bool](& "$P1Bin\slctl.exe" expect-lanes "$f=direct" | Select-String -Pattern '^LANE-OK') }; "dropped onto direct: $in"; $out = $false; while (((Get-Date) - $t0).TotalSeconds -lt 360 -and -not $out) { Start-Sleep -Seconds 3; Set-P1Heartbeat; $out = [bool](& "$P1Bin\slctl.exe" expect-lanes "$f=vpn" | Select-String -Pattern '^LANE-OK') }; "unpinned, by the main lane: $out"; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
+```
+
+Ожидается `dropped onto direct: True`, `unpinned, by the main lane: True`, в состоянии `apps=2`.
+
+- [ ] **Step 8: Смена основной дорожки и возврат (нужен пользователь)**
+
+Скажите пользователю: «Нажмите «сделать основной» у дорожки «Напрямую», дождитесь, пока незакреплённые программы переедут туда, и сразу нажмите «сделать основной» у «Через VPN». Пока основная — «Напрямую», я не смогу отвечать». Сразу после этого:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $f = 'C:\code\router\spike\plan1\bin\free\curl-free.exe'; $t0 = Get-Date; $s = ''; while (((Get-Date) - $t0).TotalSeconds -lt 240 -and $s -notmatch ' defaultLane=direct ') { Start-Sleep -Seconds 2; Set-P1Heartbeat; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; "main lane direct: $($s -match ' defaultLane=direct ')"; "free copy goes direct: $([bool](& "$P1Bin\slctl.exe" expect-lanes "$f=direct" | Select-String -Pattern '^LANE-OK'))"; while (((Get-Date) - $t0).TotalSeconds -lt 480 -and $s -notmatch ' defaultLane=vpn ') { Start-Sleep -Seconds 2; Set-P1Heartbeat; $s = & "$P1Bin\slctl.exe" state | Select-Object -Last 1 }; "main lane back to vpn: $($s -match ' defaultLane=vpn ')"; & "$P1Bin\slctl.exe" expect-lanes C:\code\router\spike\plan1\bin\vpn\curl-vpn.exe=vpn "$f=vpn" | Select-String -Pattern '^LANE'
+```
+
+Ожидается `main lane direct: True`, `free copy goes direct: True`, `main lane back to vpn: True`, два `LANE-OK`.
+
+- [ ] **Step 9: Сбой служебного процесса: окно запускает его снова**
+
+Скажите пользователю: «Сейчас я аварийно завершу служебный процесс; в окне появится плашка «Служебный процесс перезапускается», через полминуты-минуту деление включится снова». Затем:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $p0 = @(Get-Process splitlane-helper -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }); Send-P1Guard -Action kill-helper; $t0 = Get-Date; $p1 = @(); while (((Get-Date) - $t0).TotalSeconds -lt 120) { Start-Sleep -Seconds 2; Set-P1Heartbeat; $p1 = @(Get-Process splitlane-helper -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }); if ($p1.Count -gt 0 -and -not ($p1 | Where-Object { $p0 -contains $_ })) { break } }; "helper restarted by the window: $($p1.Count -gt 0 -and -not ($p1 | Where-Object { $p0 -contains $_ })) seconds=$([int]((Get-Date) - $t0).TotalSeconds)"; & "$P1Bin\slctl.exe" -timeout 240s wait on,error | Select-Object -Last 1; Set-P1Heartbeat; & "$P1Bin\slctl.exe" expect-lanes C:\code\router\spike\plan1\bin\vpn\curl-vpn.exe=vpn C:\code\router\spike\plan1\bin\direct\curl-direct.exe=direct | Select-String -Pattern '^LANE'
+```
+
+Ожидается `P1-RESULT: ... result=...` сторожа, `helper restarted by the window: True`, `SLCTL: phase=on ...` (по журналу возврата: `stopping`, затем «было включено» — `starting`, `on`), два `LANE-OK`.
+
+- [ ] **Step 10: Закрытие в трей, второй запуск, автозапуск (нужен пользователь)**
+
+Скажите пользователю: «Закройте окно крестиком; потом откройте его щелчком по значку SplitLane в трее; на экране «Подключение» (нажмите плашку Tailscale в шапке) включите «Запускать при входе в Windows»». Затем:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $main = { @(Get-CimInstance Win32_Process -Filter "Name='SplitLane.exe'" | Where-Object { $_.CommandLine -notmatch '--type=' }).Count }; "main processes before: $(& $main)"; Start-Process C:\code\router\app\release\win-unpacked\SplitLane.exe; Start-Sleep -Seconds 5; "main processes after a second start: $(& $main)"; $t0 = Get-Date; $run = $null; while (((Get-Date) - $t0).TotalSeconds -lt 300 -and -not $run) { Start-Sleep -Seconds 3; Set-P1Heartbeat; $run = (Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -ErrorAction SilentlyContinue).PSObject.Properties | Where-Object { "$($_.Value)" -match 'SplitLane\.exe' } | Select-Object -First 1 }; "autostart entry: $([bool]$run) hidden flag: $("$($run.Value)" -match '--hidden')"; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
+```
+
+Ожидается `main processes before: 1`, `main processes after a second start: 1` (второй запуск показал первое окно), `autostart entry: True hidden flag: True`, фаза `on`. Скажите пользователю выключить «Запускать при входе в Windows» и проверьте: `(Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run).PSObject.Properties | Where-Object { "$($_.Value)" -match 'SplitLane\.exe' }` — пусто.
+
+- [ ] **Step 11: «Выход» из трея при включённом делении (нужен пользователь)**
+
+Скажите пользователю: «Правой кнопкой на значке SplitLane в трее выберите «Выход»». Затем:
+
+```powershell
+. C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $t0 = Get-Date; while (((Get-Date) - $t0).TotalSeconds -lt 240 -and (Get-Process SplitLane, splitlane-helper -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 2; Set-P1Heartbeat }; "left: [$(@(Get-Process SplitLane, splitlane-helper, sing-box -ErrorAction SilentlyContinue | ForEach-Object { $_.Name } | Sort-Object -Unique) -join ',')] seconds=$([int]((Get-Date) - $t0).TotalSeconds)"; Test-P1SystemRestored; Send-P1Guard -Action finish; Test-P1SystemRestored
+```
+
+Ожидается `left: []`, `SYSTEM-RESTORED`, `P1-RESULT: state=finished ... system_ok=True`, `SYSTEM-RESTORED`.
+
+- [ ] **Step 12: Записать итог в приложение A и закоммитить**
+
+В абзац «Проверки плана 1B» приложения A (после него — новый абзац «Проверки плана 2 (окно)») добавьте по строке на шаги 4–11 с итогом «подтверждено» или «НЕ подтверждено: …» и числами (секунды установки, включения, перезапуска служебного процесса). Затем:
+
+```powershell
+git -C C:\code\router diff -- docs | Select-String -Pattern '\b\d{1,3}(\.\d{1,3}){3}\b' | Where-Object { $_.Line -notmatch '100\.64\.0\.0/10|160\.79\.104\.0/23|1\.1\.1\.1|127\.0\.0\.1' }
+git -C C:\code\router diff -- docs | Select-String -Pattern 'login\.tailscale\.com|fd7a:[0-9a-f]|\.ts\.net' | Where-Object { $_.Line -notmatch '\*\.ts\.net' }
+git -C C:\code\router add docs/superpowers/specs/2026-11-13-splitlane-stage1-design.md
+git -C C:\code\router commit -m "docs: record the live checks of plan 2 in Appendix A" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+Первые две команды должны вывести пустоту.
 
 ---
 
