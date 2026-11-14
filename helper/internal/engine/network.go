@@ -122,8 +122,10 @@ func (e *Engine) netRound(w *netWatch, route, passed, online bool, path string) 
 
 // netRestartLocked is the restart after a network change (5.5: 5.4, then 5.3), logged with its cause;
 // e.mu must be held. There is none in blocked: step 6 of the enable would switch off the exit node the
-// user selected (5.7); and none with the login expired: no enable passes before the login (spec 7). The
-// rounds of 5.5 then go on as they do without a network change.
+// user selected (5.7); none with the login expired: no enable passes before the login (spec 7); and none
+// in degraded: the core is not stopped while the VPN server does not answer (5.5), no new core would
+// prove its tunnel, and each teardown would hand the system exit node back. The rounds of 5.5 then go on
+// as they do without a network change.
 func (e *Engine) netRestartLocked(cause string) bool {
 	switch {
 	case e.st.Phase == protocol.PhaseBlocked:
@@ -131,6 +133,9 @@ func (e *Engine) netRestartLocked(cause string) bool {
 		return false
 	case e.loginExpired():
 		e.d.Log("%s; no restart while the login is expired", cause)
+		return false
+	case e.degraded:
+		e.d.Log("%s; no restart in degraded: the core stays while the VPN server does not answer", cause)
 		return false
 	}
 	e.d.Log("%s; restarting the core", cause)

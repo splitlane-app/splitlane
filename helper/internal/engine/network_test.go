@@ -164,6 +164,37 @@ func TestFlappingNetworkWaitsAgain(t *testing.T) {
 	restartedAfter(t, h, old, mark, logChecksFailed)
 }
 
+// 5.5 "при degraded ядро не останавливается": a network change while the VPN server does not answer
+// (sleep and wake, WSL, Docker or Hyper-V, route updates of tailscaled) restarts no core at 60 s: probe-vpn
+// would stay silent through every attempt, each teardown would hand the system exit node back and the
+// last one end in error. The sequence ends at 60 s and the rounds go on as without a change: the core
+// stays in degraded, and probe-vpn back returns to on.
+func TestDegradedBeforeTheChangeKeepsTheCore(t *testing.T) {
+	h := netOn(t)
+	core := h.core.last()
+	h.probe.script([]ProbeResult{noAnswer}, []ProbeResult{atDirect}, []ProbeResult{noAnswer})
+	ticks(h, 3)
+	if s := h.e.State(); s.Phase != protocol.PhaseDegraded {
+		t.Fatalf("setup: degraded before the change: %+v", s)
+	}
+	mark := len(h.rec.list())
+	h.e.NetworkChanged("route")
+	ticks(h, 9)
+	h.e.Wait()
+	if s := h.e.State(); s.Phase != protocol.PhaseDegraded || !core.alive() || following(h) ||
+		countSince(h, mark, "core:") != 0 || countSince(h, mark, "sys:") != 0 {
+		t.Fatalf("degraded: the core stays: phase %s, events %v", s.Phase, h.rec.list()[mark:])
+	}
+	if countSince(h, mark, "log:network changed and the checks did not pass in 60 s; no restart in degraded") != 1 {
+		t.Fatalf("the restart that did not come is logged once: %v", h.rec.list()[mark:])
+	}
+	h.probe.script([]ProbeResult{atVPN}, nil, []ProbeResult{atVPN})
+	ticks(h, 1)
+	if s := h.e.State(); s.Phase != protocol.PhaseOn || h.rec.count("core:start") != 1 {
+		t.Fatalf("probe-vpn back: on with the same core: %+v %v", s, h.rec.list()[mark:])
+	}
+}
+
 // The decision of plan 1B (appendix A, checks of plan 1B, (и): after a cable change the embedded node
 // stays on a relay, while a new core gets the direct path at once). Once the checks pass after a
 // network change, a path to the exit node that was direct before it is read every 10 s: direct again
