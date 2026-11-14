@@ -106,6 +106,44 @@ func TestRouteChangedSkipsOwnAdapters(t *testing.T) {
 	}
 }
 
+// The callback of NotifyIpInterfaceChange wakes the watchers by the same filter: a cable pulled out or
+// plugged in changes the interface (connected), not a route (task 16 of plan 1B), while the TUN and the
+// system Tailscale change interfaces of their own with the helper's steps.
+func TestIfaceChangedSkipsOwnAdapters(t *testing.T) {
+	ifaces := map[uint64]Iface{
+		1: {LUID: 1, Alias: coreconfig.AdapterName, Type: 53},
+		2: {LUID: 2, Alias: "Tailscale", Type: 53},
+		3: {LUID: 3, Alias: "Ethernet", Type: windows.IF_TYPE_ETHERNET_CSMACD},
+	}
+	old := routeIface
+	routeIface = func(luid uint64) (Iface, error) {
+		if i, ok := ifaces[luid]; ok {
+			return i, nil
+		}
+		return Iface{}, errors.New("The system cannot find the file specified.")
+	}
+	defer func() { routeIface = old }()
+	w := &routeWatch{kicks: make(chan struct{}, 1), done: make(chan struct{})}
+	routeWatchers.Store(w, struct{}{})
+	defer routeWatchers.Delete(w)
+	for _, c := range []struct {
+		luid  uint64
+		wakes bool
+	}{{1, false}, {2, false}, {3, true}, {1, false}, {9, true}} {
+		row := windows.MibIpInterfaceRow{InterfaceLuid: c.luid}
+		ifaceChanged(0, &row, 0)
+		woke := false
+		select {
+		case <-w.kicks:
+			woke = true
+		default:
+		}
+		if woke != c.wakes {
+			t.Fatalf("a change of the interface LUID %d (%q): woke the watchers %v, want %v", c.luid, ifaces[c.luid].Alias, woke, c.wakes)
+		}
+	}
+}
+
 // TestLiveRouteIfaceReadOnly reads every interface of Windows by its LUID as the callback does: the alias
 // and the type are those of the adapter list. It changes nothing. It runs with SPLITLANE_LIVE_READONLY=1.
 func TestLiveRouteIfaceReadOnly(t *testing.T) {
@@ -125,28 +163,28 @@ func TestLiveRouteIfaceReadOnly(t *testing.T) {
 	t.Logf("LIVE %d interfaces read by LUID", len(list))
 }
 
-// TestLiveRouteWatchReadOnly registers the route notification of Windows and cancels it, twice; it
-// changes nothing. It runs with SPLITLANE_LIVE_READONLY=1.
+// TestLiveRouteWatchReadOnly registers the route and interface notifications of Windows and cancels
+// them, twice; it changes nothing. It runs with SPLITLANE_LIVE_READONLY=1.
 func TestLiveRouteWatchReadOnly(t *testing.T) {
 	if os.Getenv("SPLITLANE_LIVE_READONLY") != "1" {
 		t.Skip("SPLITLANE_LIVE_READONLY is not set")
 	}
 	for i := 0; i < 2; i++ {
-		stop, err := WatchRoutes(func() { t.Log("LIVE routes changed") }, t.Logf)
+		stop, err := WatchRoutes(func() { t.Log("LIVE routes or interfaces changed") }, t.Logf)
 		if err != nil {
 			t.Fatalf("watch %d: %v", i, err)
 		}
 		routeMu.Lock()
-		registered := routeHandle != 0 && routeCount == 1
+		registered := routeHandle != 0 && ifaceHandle != 0 && routeCount == 1
 		routeMu.Unlock()
 		stop()
 		stop()
 		routeMu.Lock()
-		cancelled := routeHandle == 0 && routeCount == 0
+		cancelled := routeHandle == 0 && ifaceHandle == 0 && routeCount == 0
 		routeMu.Unlock()
 		if !registered || !cancelled {
 			t.Fatalf("watch %d: registered %v, cancelled %v", i, registered, cancelled)
 		}
 	}
-	t.Log("LIVE route notification registered and cancelled twice")
+	t.Log("LIVE route and interface notifications registered and cancelled twice")
 }

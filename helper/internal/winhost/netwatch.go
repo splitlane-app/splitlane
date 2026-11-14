@@ -38,15 +38,17 @@ func (d *debounce) over(now time.Time) bool {
 	return true
 }
 
-// One notification of route changes serves every watcher of the process: Windows calls routeChanged on
-// a thread of its own, which only reads the interface of the route and wakes the watchers. NewCallback
-// is called once: a process has only so many callbacks.
+// One notification of route changes and one of interface changes serve every watcher of the process:
+// Windows calls routeChanged and ifaceChanged on threads of its own, which only read the interface and
+// wake the watchers. NewCallback is called once each: a process has only so many callbacks.
 var (
 	routeCallback = windows.NewCallback(routeChanged)
-	routeMu       sync.Mutex     // registers and cancels the notification; the callback never takes it
+	ifaceCallback = windows.NewCallback(ifaceChanged)
+	routeMu       sync.Mutex     // registers and cancels the notifications; the callbacks never take it
 	routeHandle   windows.Handle // the notification of NotifyRouteChange2; 0 while no watcher runs
-	routeCount    int            // the watchers that use routeHandle
-	routeWatchers sync.Map       // *routeWatch -> struct{}: every watcher the callback wakes
+	ifaceHandle   windows.Handle // the notification of NotifyIpInterfaceChange; 0 while no watcher runs
+	routeCount    int            // the watchers that use routeHandle and ifaceHandle
+	routeWatchers sync.Map       // *routeWatch -> struct{}: every watcher the callbacks wake
 )
 
 // routeIface reads the interface of a route as the decisions see it; the tests replace it.
@@ -73,11 +75,25 @@ func routeChanged(callerContext uintptr, row *windows.MibIpForwardRow2, notifica
 	if row != nil && !routeCounts(routeIface(row.InterfaceLuid)) {
 		return 0
 	}
+	kickAll()
+	return 0
+}
+
+// ifaceChanged is the callback of NotifyIpInterfaceChange, filtered as routeChanged: a cable pulled out or
+// plugged in changes the interface (connected) and leaves the routes as they are (task 16 of plan 1B).
+func ifaceChanged(callerContext uintptr, row *windows.MibIpInterfaceRow, notificationType uintptr) uintptr {
+	if row != nil && !routeCounts(routeIface(row.InterfaceLuid)) {
+		return 0
+	}
+	kickAll()
+	return 0
+}
+
+func kickAll() {
 	routeWatchers.Range(func(w, _ any) bool {
 		w.(*routeWatch).kick()
 		return true
 	})
-	return 0
 }
 
 // routeWatch is one watcher: its goroutine (loop) turns the wakes into one call of onChange per burst.
@@ -106,7 +122,7 @@ func (w *routeWatch) loop(onChange func(), log func(string, ...any)) {
 			d.note(time.Now())
 		case <-timer.C:
 			if d.over(time.Now()) {
-				log("routes changed")
+				log("routes or interfaces changed")
 				onChange()
 			}
 		}
@@ -116,12 +132,12 @@ func (w *routeWatch) loop(onChange func(), log func(string, ...any)) {
 	}
 }
 
-// WatchRoutes calls onChange when the routes of Windows change (section 10): once per burst, 2 s after
-// its last notification, on a goroutine of its own; changes on the core's own adapter and the system
-// Tailscale's are left out (routeCounts). The notification is NotifyRouteChange2 of
-// iphlpapi.dll for IPv4 and IPv6, without the initial notification; stop ends the watcher and, with the
-// last watcher, cancels the notification (CancelMibChangeNotify2). stop may be called more than once.
-// Only the notification is registered: nothing in the system changes.
+// WatchRoutes calls onChange when the routes or the interfaces of Windows change (section 10): once per
+// burst, 2 s after its last notification, on a goroutine of its own; changes on the core's own adapter
+// and the system Tailscale's are left out (routeCounts). The notifications are NotifyRouteChange2 and
+// NotifyIpInterfaceChange of iphlpapi.dll for IPv4 and IPv6, without the initial notification; stop ends
+// the watcher and, with the last watcher, cancels both (CancelMibChangeNotify2). stop may be called more
+// than once. Only the notifications are registered: nothing in the system changes.
 func WatchRoutes(onChange func(), log func(string, ...any)) (stop func(), err error) {
 	if log == nil {
 		log = func(string, ...any) {}
@@ -130,11 +146,15 @@ func WatchRoutes(onChange func(), log func(string, ...any)) (stop func(), err er
 	routeMu.Lock()
 	defer routeMu.Unlock()
 	if routeCount == 0 {
-		var h windows.Handle
+		var h, hi windows.Handle
 		if err := windows.NotifyRouteChange2(windows.AF_UNSPEC, routeCallback, nil, false, &h); err != nil {
 			return nil, fmt.Errorf("NotifyRouteChange2: %w", err)
 		}
-		routeHandle = h
+		if err := windows.NotifyIpInterfaceChange(windows.AF_UNSPEC, ifaceCallback, nil, false, &hi); err != nil {
+			windows.CancelMibChangeNotify2(h)
+			return nil, fmt.Errorf("NotifyIpInterfaceChange: %w", err)
+		}
+		routeHandle, ifaceHandle = h, hi
 	}
 	routeCount++
 	routeWatchers.Store(w, struct{}{})
@@ -151,7 +171,10 @@ func WatchRoutes(onChange func(), log func(string, ...any)) (stop func(), err er
 				if err := windows.CancelMibChangeNotify2(routeHandle); err != nil {
 					log("route watch: CancelMibChangeNotify2: %v", err)
 				}
-				routeHandle = 0
+				if err := windows.CancelMibChangeNotify2(ifaceHandle); err != nil {
+					log("interface watch: CancelMibChangeNotify2: %v", err)
+				}
+				routeHandle, ifaceHandle = 0, 0
 			}
 		})
 	}, nil

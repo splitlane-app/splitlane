@@ -235,7 +235,7 @@ func run(args []string) int {
 		}
 	}()
 	// Section 10: sleep and wake come to the hidden window, whose procedure must answer at once; route
-	// changes come a burst at a time. The engine follows them only while routing is on.
+	// and interface changes come a burst at a time. The engine follows them only while routing is on.
 	watcher, err := session.Watch(session.Handlers{
 		OnEnd:   eng.SessionEnding,
 		OnPower: func(event string) { go eng.NetworkChanged(event) },
@@ -245,7 +245,7 @@ func run(args []string) int {
 	}
 	stopRoutes, err := winhost.WatchRoutes(func() { eng.NetworkChanged("route") }, logf)
 	if err != nil {
-		logf("route changes will not be noticed: %v", err)
+		logf("network changes will not be noticed: %v", err)
 		stopRoutes = func() {}
 	}
 	ctx, cancel := context.WithCancel(context.Background())

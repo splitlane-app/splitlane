@@ -23,7 +23,7 @@ type netWatch struct {
 func (w *netWatch) holds() bool { return w.pathFrom.IsZero() }
 
 // NetworkChanged is a change of the network that Windows reports (section 10): why is "route" for a burst
-// of route changes (winhost.WatchRoutes) and "resume" for the wake from sleep (session); "suspend" is
+// of route or interface changes (winhost.WatchRoutes) and "resume" for the wake from sleep (session); "suspend" is
 // ignored, the wake after it counts. It is followed only while the main core runs in on, degraded or
 // blocked and no operation starts or stops it: the core resets its connections itself. The path to the
 // exit node read last is kept as the path before the change; a change while one is followed starts the

@@ -46,7 +46,8 @@ func ignored(i Iface) bool {
 		i.Type == windows.IF_TYPE_SOFTWARE_LOOPBACK
 }
 
-// DefaultRouteOK: an IPv4 default route through an adapter that is neither ours nor Tailscale's.
+// DefaultRouteOK: an IPv4 default route through an adapter that is up and neither ours nor Tailscale's;
+// an adapter with its cable out does not count, whatever the route table still holds.
 func DefaultRouteOK(routes []Route, ifaces []Iface) bool {
 	byLUID := map[uint64]Iface{}
 	for _, i := range ifaces {
@@ -54,7 +55,7 @@ func DefaultRouteOK(routes []Route, ifaces []Iface) bool {
 	}
 	for _, r := range routes {
 		i, ok := byLUID[r.LUID]
-		if r.PrefixLen == 0 && ok && !ignored(i) {
+		if r.PrefixLen == 0 && ok && i.Up && !ignored(i) {
 			return true
 		}
 	}

@@ -27,6 +27,11 @@ func TestDefaultRouteOK(t *testing.T) {
 	if DefaultRouteOK([]Route{{LUID: 1, PrefixLen: 1}}, ifaces) || DefaultRouteOK(nil, ifaces) {
 		t.Fatal("no default route")
 	}
+	unplugged := ethernet
+	unplugged.Up = false
+	if DefaultRouteOK([]Route{{LUID: 1}}, []Iface{unplugged, ours, ts}) {
+		t.Fatal("a default route through an adapter that is down (cable out) does not count")
+	}
 }
 
 func TestPhysicalForwarding(t *testing.T) {
