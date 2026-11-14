@@ -360,6 +360,84 @@ func TestDetailForAGroup(t *testing.T) {
 	}
 }
 
+// Review F4-1: the file description comes from the file's resources on the disk (on a network share a
+// read can take the SMB timeout), so the tracker reads it outside its lock: a summary asked while it is
+// read is the one of the sample before, at once. The sample that reads it names the program after it.
+func TestDescribeOutsideTheLock(t *testing.T) {
+	entered, release := make(chan string, 8), make(chan struct{})
+	env := testEnv
+	env.Describe = func(exe string) string {
+		entered <- exe
+		<-release
+		return "Slow Tool"
+	}
+	tr := New(env)
+	none := layout(t)
+	slow := `C:\Apps\Slow\slow.exe`
+	tr.Sample(start, nil, none, protocol.LaneVPN)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tr.Sample(start.Add(time.Second), []Conn{conn("1", slow, protocol.LaneVPN, 1, 1)}, none, protocol.LaneVPN)
+	}()
+	if exe := <-entered; exe != slow {
+		t.Fatalf("described %q", exe)
+	}
+	got := make(chan protocol.Activity, 1)
+	go func() { got <- tr.Summary("") }()
+	select {
+	case s := <-got:
+		if !reflect.DeepEqual(s.Apps, idle(protocol.LaneVPN)) {
+			t.Fatalf("while the description is read, the summary of the sample before: %+v", s.Apps)
+		}
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("Summary waits for the file description")
+	}
+	close(release)
+	<-done
+	if g := find(t, tr.Summary(""), `C:\Apps\Slow\`); g.Name != "Slow Tool" || g.Down != 1 {
+		t.Fatalf("after the description: %+v", g)
+	}
+}
+
+// Review F4-1: a file is described once (a cache by path, while the tracker keeps its groups), even when the
+// group's executable goes to another file and back. A path that Normalize refuses is never described: a
+// network share (its read is the slow one), a file that is not an .exe; the group is named after the file.
+func TestDescribeOncePerLocalPath(t *testing.T) {
+	var calls []string
+	env := testEnv
+	env.Describe = func(exe string) string {
+		calls = append(calls, exe)
+		return ""
+	}
+	tr := New(env)
+	none := layout(t)
+	a, b := `C:\Apps\Two\a.exe`, `C:\Apps\Two\b.exe`
+	share, odd := `\\server\share\Tools\tool.exe`, `C:\Apps\Odd\odd.bin`
+	tr.Sample(start, nil, none, protocol.LaneVPN)
+	tr.Sample(start.Add(time.Second), []Conn{conn("1", a, protocol.LaneVPN, 0, 10), conn("3", share, protocol.LaneVPN, 0, 1),
+		conn("4", odd, protocol.LaneVPN, 0, 1)}, none, protocol.LaneVPN)
+	tr.Sample(start.Add(2*time.Second), []Conn{conn("1", a, protocol.LaneVPN, 0, 10), conn("2", b, protocol.LaneVPN, 0, 20)}, none, protocol.LaneVPN)
+	if g := find(t, tr.Summary(""), `C:\Apps\Two\`); g.Exe != b || g.Name != "b" {
+		t.Fatalf("b.exe has the most bytes: %+v", g)
+	}
+	tr.Sample(start.Add(3*time.Second), []Conn{conn("1", a, protocol.LaneVPN, 0, 30), conn("2", b, protocol.LaneVPN, 0, 20)}, none, protocol.LaneVPN)
+	s := tr.Summary("")
+	if g := find(t, s, `C:\Apps\Two\`); g.Exe != a || g.Name != "a" {
+		t.Fatalf("a.exe has the most bytes again: %+v", g)
+	}
+	if g := find(t, s, share); g.Name != "tool" {
+		t.Fatalf("a program on a share: %+v", g)
+	}
+	if g := find(t, s, odd); g.Name != "odd" {
+		t.Fatalf("not an .exe: %+v", g)
+	}
+	if want := []string{a, b}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("described %q, want %q", calls, want)
+	}
+}
+
 func TestResetForgets(t *testing.T) {
 	tr := New(testEnv)
 	none := layout(t)

@@ -42,7 +42,8 @@ type Tracker struct {
 	last      time.Time           // the time of the previous sample; zero before the first
 	groups    map[string]*group   // by class.id
 	lanes     protocol.ActivityLanes
-	sysPinned bool // the layout of the last sample pins "Windows services": the tile system is left out
+	sysPinned bool              // the layout of the last sample pins "Windows services": the tile system is left out
+	names     map[string]string // the description of each file read so far, by lower-case path; "" when it has none
 }
 
 type counters struct{ up, down int64 }
@@ -85,7 +86,8 @@ func New(env rules.Env) *Tracker {
 	return t
 }
 
-// Reset forgets everything (the core stopped): counters, groups, the files seen, the last sample's time.
+// Reset forgets everything (the core stopped): counters, groups, the files seen and their descriptions,
+// the last sample's time.
 func (t *Tracker) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -98,6 +100,7 @@ func (t *Tracker) reset() {
 	t.sysPinned = false
 	t.lanes = protocol.ActivityLanes{}
 	t.groups = map[string]*group{}
+	t.names = map[string]string{}
 	for _, key := range []string{protocol.KeySystem, protocol.KeyUnattributed} {
 		c := t.special(key, protocol.LaneVPN)
 		t.groups[c.id] = newGroup(c)
@@ -116,8 +119,10 @@ func (t *Tracker) special(key, mainLane string) class {
 // Sample takes the connections of one second. mainLane is the lane of unpinned programs now (the default lane,
 // or direct in "all direct"). The rates are the bytes since the previous sample per second of the time
 // between the two samples (a tick may come late), and at least one second: the first sample, and a tick
-// right after a late one, count as one second.
+// right after a late one, count as one second. The descriptions of the programs seen for the first time
+// are read before, outside the lock (describeNew).
 func (t *Tracker) Sample(now time.Time, conns []Conn, layout Layout, mainLane string) {
+	t.describeNew(conns, layout, mainLane)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, g := range t.groups {
@@ -259,6 +264,47 @@ func (g *group) take(c class) {
 	}
 }
 
+// describeNew reads the file description of each unpinned program in conns that has not been read yet, once
+// per path, outside the lock (review F4-1): it reads the file's resources from the disk, on a network share
+// for as long as the SMB timeout, and a summary asked meanwhile must not wait for it. A path that Normalize
+// refuses (a share, a pseudo-path, not an .exe) is never read: such a program is named after its file.
+func (t *Tracker) describeNew(conns []Conn, layout Layout, mainLane string) {
+	if t.env.Describe == nil {
+		return
+	}
+	t.mu.Lock()
+	var paths []string
+	seen := map[string]bool{}
+	for _, c := range conns {
+		low := strings.ToLower(c.ProcessPath)
+		if _, read := t.names[low]; c.ProcessPath != "" && !read && !seen[low] {
+			seen[low] = true
+			paths = append(paths, c.ProcessPath)
+		}
+	}
+	t.mu.Unlock()
+	for _, path := range paths {
+		if cl := t.classify(path, layout, mainLane); cl.ruleID != "" || cl.kind != protocol.KindApp {
+			continue // a pinned program has the name of its rule, a special tile none
+		}
+		d := ""
+		if t.local(path) {
+			d = strings.TrimSpace(t.env.Describe(path))
+		}
+		t.mu.Lock()
+		t.names[strings.ToLower(path)] = d
+		t.mu.Unlock()
+	}
+}
+
+// local: Normalize takes the path, an .exe on a local drive; only such a file's resources are read.
+func (t *Tracker) local(path string) bool {
+	env := t.env
+	env.Describe = nil
+	_, err := rules.Normalize(protocol.AppRule{Exe: path, Matcher: protocol.Matcher{Kind: protocol.KindFile}}, env)
+	return err == nil
+}
+
 // settle picks the executable with the most bytes; an unpinned program is named after it.
 func (t *Tracker) settle(g *group) {
 	top := ""
@@ -275,12 +321,11 @@ func (t *Tracker) settle(g *group) {
 	}
 }
 
-// describe is the file description from the resources of exe, or its name without the extension (spec 8.4).
+// describe is the file description from the resources of exe, as describeNew read it, or its name without
+// the extension (spec 8.4). It reads no file: it runs under the lock.
 func (t *Tracker) describe(exe string) string {
-	if t.env.Describe != nil {
-		if d := strings.TrimSpace(t.env.Describe(exe)); d != "" {
-			return d
-		}
+	if d := t.names[strings.ToLower(exe)]; d != "" {
+		return d
 	}
 	base := filepath.Base(exe)
 	return strings.TrimSuffix(base, filepath.Ext(base))

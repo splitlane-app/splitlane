@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"splitlane/helper/internal/activity"
 	"splitlane/helper/internal/protocol"
 	"splitlane/helper/internal/rules"
 )
@@ -202,6 +203,56 @@ func TestNoActivityWhenOff(t *testing.T) {
 	h.e.sampleActivity(ctx)
 	if _, ok := h.e.Activity(""); ok || reads() != read {
 		t.Fatal("after the disable: a summary, or read")
+	}
+}
+
+// Review F4-1: the name of an unpinned program comes from its file's resources (on a network share a read can
+// take the SMB timeout). The tick that reads it holds no lock of the engine's or the activity event's: while
+// it waits, the state is there, and so is the summary of the sample before.
+func TestActivityDoesNotWaitForADescription(t *testing.T) {
+	h := enabled(t)
+	windows(h, 1)
+	entered, release := make(chan struct{}, 8), make(chan struct{})
+	env := testRules
+	env.Describe = func(string) string {
+		entered <- struct{}{}
+		<-release
+		return "Curl A"
+	}
+	h.e.act.tracker = activity.New(env)
+	ctx := context.Background()
+	setConns(h, Conn{ID: "1", Lane: protocol.LaneVPN, Upload: 1, Download: 1}) // no owner: nothing to describe
+	h.e.sampleActivity(ctx)
+	h.clock.After(time.Second)
+	h.e.sampleActivity(ctx)
+	h.clock.After(time.Second)
+	setConns(h, Conn{ID: "1", Lane: protocol.LaneVPN, Upload: 1, Download: 1},
+		Conn{ID: "2", ProcessPath: curlA, Lane: protocol.LaneVPN, Upload: 5, Download: 50})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.e.sampleActivity(ctx)
+	}()
+	<-entered
+	answered := make(chan bool, 1)
+	go func() {
+		_, ok := h.e.Activity("")
+		h.e.State()
+		answered <- ok
+	}()
+	select {
+	case ok := <-answered:
+		if !ok {
+			t.Fatal("while the description is read, the summary of the sample before is offered")
+		}
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("Engine.Activity waits for the file description")
+	}
+	close(release)
+	<-done
+	if g, ok := appIn(summaryNow(t, h, ""), `C:\Tools\a\`); !ok || g.Name != "Curl A" || g.Down != 50 {
+		t.Fatalf("after the description: %+v", g)
 	}
 }
 

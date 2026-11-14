@@ -19,6 +19,7 @@ type liveActivity struct {
 	tracker *activity.Tracker
 	run     *coreRun // guarded by Engine.mu: the run the tracker's samples are of; nil after a reset
 	fresh   bool     // guarded by Engine.mu: the last tick sampled run while a window was connected
+	resets  int      // guarded by Engine.mu: the resets of tracker so far (Activity reads it without Engine.mu)
 
 	// Owned by sampleActivity.
 	apps   []protocol.AppRule // the layout that set was compiled from
@@ -39,14 +40,14 @@ func (e *Engine) sampleActivity(ctx context.Context) {
 	r := e.run
 	if r == nil || r.stopping || !live(e.st.Phase) {
 		if a.run != nil {
-			a.tracker.Reset()
+			a.reset()
 		}
 		a.run, a.fresh = nil, false
 		e.mu.Unlock()
 		return
 	}
 	if a.run != r {
-		a.tracker.Reset()
+		a.reset()
 		a.run, a.fresh = r, false
 	}
 	if e.clients.Load() == 0 {
@@ -92,14 +93,37 @@ func (e *Engine) sampleActivity(ctx context.Context) {
 	e.mu.Unlock()
 }
 
+// reset starts the tracker again from nothing; Engine.mu must be held.
+func (a *liveActivity) reset() {
+	a.tracker.Reset()
+	a.resets++
+}
+
 // Activity is the summary of the last sample (spec 8.4) with the detail of the group detailFor ("" for
 // none): the data of the activity event. false while no core with the adapter runs (any phase but on,
-// degraded and blocked), and until the run has been sampled with a window connected.
+// degraded and blocked), and until the run has been sampled with a window connected. The summary is
+// taken without e.mu, under the tracker's own lock (review F4-1: nothing of the engine waits for it);
+// the run is checked before and again after it, and a reset in between (a new run of the core) gives
+// false, never the empty tracker of the new run.
 func (e *Engine) Activity(detailFor string) (protocol.Activity, bool) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if r := e.run; r == nil || r.stopping || r != e.act.run || !e.act.fresh || !live(e.st.Phase) {
+	ok, resets := e.activityLive(), e.act.resets
+	e.mu.Unlock()
+	if !ok {
 		return protocol.Activity{}, false
 	}
-	return e.act.tracker.Summary(detailFor), true
+	s := e.act.tracker.Summary(detailFor)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.activityLive() || e.act.resets != resets {
+		return protocol.Activity{}, false
+	}
+	return s, true
+}
+
+// activityLive: the core with the adapter runs and the last tick sampled its run with a window connected;
+// e.mu must be held.
+func (e *Engine) activityLive() bool {
+	r := e.run
+	return r != nil && !r.stopping && r == e.act.run && e.act.fresh && live(e.st.Phase)
 }
