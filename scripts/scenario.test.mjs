@@ -15,7 +15,7 @@ import {
   addressBook, buildLayout, coreAliveThroughout, createAllDirectTracker, createLineReader, createRpc,
   laneOf, lanesKnown, learn, mask, maskText, parseSample, parseStunResponse, parseTasklist, sameSystem,
   scenarioPaths, stunRequest, systemExitNode, verdictLane, verdictLeak, verdictSwitch, withDefault,
-  withLane,
+  withLane, ENABLE_WAIT_MS,
 } from './scenario-lib.mjs';
 
 const SCENARIO = fileURLToPath(new URL('./scenario.mjs', import.meta.url));
@@ -348,4 +348,9 @@ test('keep child reuses one connection and reconnects', async () => {
   } finally {
     server.close();
   }
+});
+
+test('the wait for step 1 covers the tunnel retry of spec 5.3 (review F7-1)', () => {
+  // first start and proof 45 s + stop + second start and proof 45 s, and the early-exit retry
+  assert.ok(ENABLE_WAIT_MS >= 180000, `ENABLE_WAIT_MS ${ENABLE_WAIT_MS} is below 180000`);
 });

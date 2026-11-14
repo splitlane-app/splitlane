@@ -50,6 +50,9 @@ export function parseStunResponse(buf, txId) {
 // MAX_LINE is the longest message line of the pipe (spec 5.1: 1 MiB).
 export const MAX_LINE = 1 << 20;
 
+// ENABLE_WAIT_MS is the wait for phase on in step 1.
+export const ENABLE_WAIT_MS = 180000; // 2 x 45 s of tunnel proof, the stop between, the start-up (spec 5.3, step 5)
+
 // createLineReader frames a byte stream into lines: push takes the chunks as they come; a line may
 // span chunks, a chunk may hold many lines, a character split between chunks is joined. A trailing
 // \r is dropped and empty lines are skipped; a line longer than max characters throws.

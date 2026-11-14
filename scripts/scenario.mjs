@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import {
-  addressBook, buildLayout, createAllDirectTracker, createLineReader, createRpc, heartbeatText, isIPv4,
+  ENABLE_WAIT_MS, addressBook, buildLayout, createAllDirectTracker, createLineReader, createRpc, heartbeatText, isIPv4,
   laneOf, lanesKnown, learn, maskText, parseSample, parseStunResponse, parseTasklist, sameSystem,
   scenarioPaths, stunRequest, systemExitNode, verdictLane, verdictLeak, verdictSwitch, withDefault, withLane,
 } from './scenario-lib.mjs';
@@ -51,7 +51,7 @@ const POWERSHELL = path.join(SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.
 const TAILSCALE = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe');
 const SELF = fileURLToPath(import.meta.url);
 
-const ENABLE_WAIT = 120000; // step 1
+const ENABLE_WAIT = ENABLE_WAIT_MS; // step 1
 const DISABLE_WAIT = 30000; // step 8
 const SWITCH_LIMIT = 3000; // step 4
 const RETURN_LIMIT = 5000; // step 5: the 3 s check of spec 8.3 and one more request
@@ -355,7 +355,7 @@ function switchText(v) {
   return v.ok ? `first reply from the new lane after ${v.firstMs} ms, none from the old lane after it` : v.why;
 }
 
-// Step 1: routing.enable, phase on within 120 s, both lane addresses known and different.
+// Step 1: routing.enable, phase on within 180 s, both lane addresses known and different.
 async function stepEnable(helper) {
   const t = Date.now();
   const r = await helper.call('routing.enable');
