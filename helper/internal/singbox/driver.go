@@ -66,7 +66,7 @@ func (d *Driver) BuildConfig(o engine.CoreOptions) ([]byte, error) {
 	return coreconfig.Build(coreconfig.Options{
 		Mode: o.Mode, DataDir: d.DataDir, HelperPath: o.HelperPath, TailscaleDir: o.TailscaleDir,
 		Hostname: o.Hostname, ExitNode: o.ExitNode, Ports: coreconfig.Ports(o.Ports),
-		ClashSecret: o.ClashSecret, APISecret: o.APISecret, DevPin: o.DevPin,
+		ClashSecret: o.ClashSecret, APISecret: o.APISecret, DevPin: o.DevPin, LogLevel: o.LogLevel,
 	})
 }
 
@@ -231,7 +231,7 @@ func (d *Driver) Clash(port int, secret string) engine.ClashAPI {
 // BuildSetupConfig is the config of the setup mode (spec 7), with the files of the driver's data folder.
 func (d *Driver) BuildSetupConfig(o engine.SetupOptions) ([]byte, error) {
 	return coreconfig.BuildSetup(coreconfig.SetupOptions{
-		DataDir: d.DataDir, Hostname: o.Hostname, APIPort: o.APIPort, APISecret: o.APISecret,
+		DataDir: d.DataDir, Hostname: o.Hostname, APIPort: o.APIPort, APISecret: o.APISecret, LogLevel: o.LogLevel,
 	})
 }
 

@@ -59,7 +59,8 @@ type CoreOptions struct {
 	Ports        Ports
 	ClashSecret  string
 	APISecret    string
-	DevPin       bool // development only (Plan 1, safety rule 4)
+	DevPin       bool   // development only (Plan 1, safety rule 4)
+	LogLevel     string // the core's log level: "" is info (spec 6.1), debug only from Settings.CoreLogLevel
 }
 
 // CoreEvents is what the core's log says after a byte offset: the connector state (spec 5.3
@@ -119,6 +120,7 @@ type SetupOptions struct {
 	Hostname  string
 	APIPort   int
 	APISecret string
+	LogLevel  string // as CoreOptions.LogLevel
 }
 
 // NodeState is what the API service says about the embedded node (spec 7, 5.2).
@@ -188,6 +190,7 @@ type Settings struct {
 	DevPin        bool   // development only, see coreconfig.DevPinProcesses
 	HelperVersion string
 	CoreVersion   string
+	CoreLogLevel  string // development only: debug from --core-log-level; "" or info in the product (spec 6.1)
 }
 
 // Deps are everything the engine uses.

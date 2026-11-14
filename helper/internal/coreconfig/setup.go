@@ -12,6 +12,7 @@ type SetupOptions struct {
 	Hostname  string // <PC>-splitlane
 	APIPort   int    // the API service of this run (spec 6.1)
 	APISecret string
+	LogLevel  string // as Options.LogLevel: "" or info, debug only from --core-log-level
 }
 
 // BuildSetup returns the config of the setup mode (spec 7) as indented JSON, in the shape that
@@ -24,9 +25,13 @@ func BuildSetup(o SetupOptions) ([]byte, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
 	}
+	level, err := logLevel(o.LogLevel)
+	if err != nil {
+		return nil, err
+	}
 	p := PathsFor(o.DataDir)
 	config := obj{
-		"log": obj{"level": "info", "timestamp": true, "output": filepath.ToSlash(p.CoreLog)},
+		"log": obj{"level": level, "timestamp": true, "output": filepath.ToSlash(p.CoreLog)},
 		"dns": obj{"servers": []any{obj{"type": "local", "tag": "dns-local"}}},
 		"endpoints": []any{obj{
 			"type":            "tailscale",

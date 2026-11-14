@@ -23,6 +23,26 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// --core-log-level is a development flag (spec 6.1): only with --dev, only info or debug; info by default.
+func TestCoreLogLevelNeedsDev(t *testing.T) {
+	paths := []string{"--data-dir", `C:\d`, "--core", `C:\c\sing-box.exe`}
+	for _, level := range []string{"debug", "info"} {
+		if _, err := parse(append([]string{"--core-log-level", level}, paths...)); err == nil || !strings.Contains(err.Error(), "--core-log-level needs --dev") {
+			t.Errorf("%s without --dev: %v", level, err)
+		}
+	}
+	if _, err := parse(append([]string{"--dev", "--core-log-level", "trace"}, paths...)); err == nil || !strings.Contains(err.Error(), "info or debug") {
+		t.Errorf("trace: %v", err)
+	}
+	o, err := parse(append([]string{"--dev", "--core-log-level", "debug"}, paths...))
+	if err != nil || o.coreLogLevel != "debug" {
+		t.Fatalf("debug: %+v %v", o, err)
+	}
+	if o, _ := parse(append([]string{"--dev"}, paths...)); o.coreLogLevel != "info" {
+		t.Fatalf("default %q", o.coreLogLevel)
+	}
+}
+
 // A file that is not the pinned core is refused before anything starts (spec 4.3).
 func TestRunRefusesAWrongCore(t *testing.T) {
 	dir := t.TempDir()

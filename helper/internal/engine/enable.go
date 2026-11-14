@@ -70,22 +70,7 @@ func (e *Engine) enable(ctx context.Context, unattended bool) *protocol.Reason {
 		}
 	}
 	cancel()
-	// Steps 3 and 4; a core that exits before its start line gets one more try with new ports (6.1).
-	var r *coreRun
-	for attempt := 1; ; attempt++ {
-		var why *protocol.Reason
-		var retry bool
-		r, why, retry = e.startCore(ctx)
-		if why == nil {
-			break
-		}
-		if !retry || attempt == 2 || ctx.Err() != nil {
-			return why
-		}
-		e.d.Log("core exited before its start line; trying again with new ports")
-	}
-	// Step 5: the tunnel works, without touching the system VPN.
-	directIP, why := e.proveTunnel(ctx, r)
+	r, directIP, why := e.startAndProve(ctx)
 	if why != nil {
 		return why
 	}
@@ -168,6 +153,42 @@ func (e *Engine) preflight(ctx context.Context, unattended bool) *protocol.Reaso
 	return nil
 }
 
+// startAndProve is steps 3–5 of 5.3 and returns the core that proved the tunnel with the address
+// of the direct lane. A core that exits before its start line gets one more try with new ports
+// (6.1). A tunnel that is not proven gets one more core with new ports too: the core's own DNS now
+// and then gets no answers for the first tens of seconds (appendix A, checks of plan 1B), and the
+// system is untouched before step 6. That core is stopped as in step 2 of 5.4 first. Each retry
+// happens at most once per enable, so at most three cores start; same_address and login_expired
+// are not retried. The restarts of 5.5 and the unattended enables run the same steps.
+func (e *Engine) startAndProve(ctx context.Context) (*coreRun, string, *protocol.Reason) {
+	exitRetried, proofRetried := false, false
+	for {
+		r, why, retry := e.startCore(ctx)
+		if why != nil {
+			if !retry || exitRetried || ctx.Err() != nil {
+				return nil, "", why
+			}
+			exitRetried = true
+			e.d.Log("core exited before its start line; trying again with new ports")
+			continue
+		}
+		// Step 5: the tunnel works, without touching the system VPN.
+		directIP, why := e.proveTunnel(ctx, r)
+		if why == nil {
+			return r, directIP, nil
+		}
+		if why.Code != protocol.ReasonTunnelNotProven || proofRetried || ctx.Err() != nil {
+			return nil, "", why
+		}
+		proofRetried = true
+		e.d.Log("tunnel not proven; trying the core once more with new ports")
+		e.stopCore()
+		if ctx.Err() != nil {
+			return nil, "", errCancelled
+		}
+	}
+}
+
 // startCore is steps 3 and 4 of 5.3. retry is true when the core exited before its start line.
 func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, bool) {
 	e.mu.Lock()
@@ -197,7 +218,7 @@ func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, boo
 	config, err := e.d.Core.BuildConfig(CoreOptions{
 		Mode: r.mode, HelperPath: e.d.Settings.HelperPath, TailscaleDir: e.d.Sys.Dir(), Hostname: e.hostname(),
 		ExitNode: s.SelectedExitNode, Ports: r.ports, ClashSecret: clashSecret, APISecret: e.d.Host.Secret(),
-		DevPin: e.d.Settings.DevPin,
+		DevPin: e.d.Settings.DevPin, LogLevel: e.d.Settings.CoreLogLevel,
 	})
 	if err != nil {
 		return invalid(err)

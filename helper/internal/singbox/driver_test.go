@@ -185,11 +185,11 @@ func TestDriverSpeaksSingBox(t *testing.T) {
 	config, err := d.BuildConfig(engine.CoreOptions{Mode: "vpn-localdns", HelperPath: `C:\SplitLane\splitlane-helper.exe`,
 		TailscaleDir: `C:\Program Files\Tailscale`, Hostname: "pc-splitlane", ExitNode: "100.64.0.1",
 		Ports:       engine.Ports{ProbeVPN: 40001, ProbeDirect: 40002, Clash: 40003, API: 40004},
-		ClashSecret: "0123456789abcdef", APISecret: "fedcba9876543210"})
+		ClashSecret: "0123456789abcdef", APISecret: "fedcba9876543210", LogLevel: "debug"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"default_mode": "vpn-localdns"`, `"exit_node": "100.64.0.1"`, `"listen_port": 40002`,
+	for _, want := range []string{`"default_mode": "vpn-localdns"`, `"exit_node": "100.64.0.1"`, `"listen_port": 40002`, `"level": "debug"`,
 		`"output": "` + filepath.ToSlash(p.CoreLog) + `"`, `"path": "` + filepath.ToSlash(p.RulesDirect) + `"`} {
 		if !strings.Contains(string(config), want) {
 			t.Errorf("config lacks %s", want)
