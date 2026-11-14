@@ -368,3 +368,27 @@ export function parseTasklist(text) {
 export function heartbeatText(nowMs) {
   return String(Math.floor(nowMs / 1000) + 400);
 }
+
+// scrubPaths replaces the temp and the home folders in text by %TEMP% and %USERPROFILE%, so that the
+// user name of Windows is not printed (the lines are copied into the records). roots is
+// {tmp: [path...], home: [path...]}; the match ignores case, the longest path first.
+export function scrubPaths(text, roots) {
+  const list = [
+    ...(roots.tmp ?? []).map((p) => [p, '%TEMP%']),
+    ...(roots.home ?? []).map((p) => [p, '%USERPROFILE%']),
+  ].filter(([p]) => p).sort((a, b) => b[0].length - a[0].length);
+  let out = text;
+  for (const [p, label] of list) {
+    const low = p.toLowerCase();
+    let at = 0;
+    let res = '';
+    for (;;) {
+      const i = out.toLowerCase().indexOf(low, at);
+      if (i < 0) break;
+      res += out.slice(at, i) + label;
+      at = i + p.length;
+    }
+    out = res + out.slice(at);
+  }
+  return out;
+}

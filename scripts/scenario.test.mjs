@@ -15,7 +15,7 @@ import {
   addressBook, buildLayout, coreAliveThroughout, createAllDirectTracker, createLineReader, createRpc,
   laneOf, lanesKnown, learn, mask, maskText, parseSample, parseStunResponse, parseTasklist, sameSystem,
   scenarioPaths, stunRequest, systemExitNode, verdictLane, verdictLeak, verdictSwitch, withDefault,
-  withLane, ENABLE_WAIT_MS,
+  withLane, ENABLE_WAIT_MS, scrubPaths,
 } from './scenario-lib.mjs';
 
 const SCENARIO = fileURLToPath(new URL('./scenario.mjs', import.meta.url));
@@ -374,4 +374,13 @@ test('step 7 counts a request only when one core process of phase on lived throu
   assert.deepEqual(verdictLeak(samples, core, [], book), { ok: false, counted: 2, ignored: 2, leaks: 1, replied: 2 });
   assert.equal(verdictLeak([s(450, 550, null), s(1250, 1350, null)], core, [], book).ok, false, 'no counted request got a reply');
   assert.equal(verdictLeak([s(450, 550, '203.0.113.10')], core, [], book).ok, true);
+});
+
+test('the output hides the temp and the home folder (review F5-3)', () => {
+  const roots = { tmp: [String.raw`C:\Users\Ivan Petrov\AppData\Local\Temp`], home: [String.raw`C:\Users\Ivan Petrov`] };
+  assert.equal(
+    scrubPaths(String.raw`EPERM: open 'C:\Users\Ivan Petrov\AppData\Local\Temp\splitlane-scenario\vpn\curl-vpn.exe'`, roots),
+    String.raw`EPERM: open '%TEMP%\splitlane-scenario\vpn\curl-vpn.exe'`);
+  assert.equal(scrubPaths(String.raw`c:\users\ivan petrov\x`, roots), String.raw`%USERPROFILE%\x`);
+  assert.equal(scrubPaths('nothing here', roots), 'nothing here');
 });

@@ -36,7 +36,7 @@ import { parseArgs } from 'node:util';
 import {
   ENABLE_WAIT_MS, addressBook, buildLayout, createAllDirectTracker, createLineReader, createRpc, heartbeatText, isIPv4,
   laneOf, lanesKnown, learn, maskText, parseSample, parseStunResponse, parseTasklist, sameSystem,
-  scenarioPaths, stunRequest, systemExitNode, verdictLane, verdictLeak, verdictSwitch, withDefault, withLane,
+  scenarioPaths, scrubPaths, stunRequest, systemExitNode, verdictLane, verdictLeak, verdictSwitch, withDefault, withLane,
 } from './scenario-lib.mjs';
 
 const USAGE = 'usage: node scripts/scenario.mjs [--pipe \\\\.\\pipe\\SplitLane.Helper] [--heartbeat FILE] [--keep]';
@@ -62,10 +62,19 @@ const HEARTBEAT_EVERY = 30000;
 const KEEP_MS = '60000'; // the longest life of a keep child; the scenario stops it earlier
 
 const book = addressBook();
+// The folders that the output never shows: the user name of Windows is in them.
+const SCRUB = { tmp: [os.tmpdir(), safeReal(os.tmpdir())], home: [os.homedir()] };
+function safeReal(p) {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return p;
+  }
+}
 
 // say prints one line; every address in it becomes its lane.
 function say(line) {
-  process.stdout.write(maskText(line, book) + '\n');
+  process.stdout.write(scrubPaths(maskText(line, book), SCRUB) + '\n');
 }
 
 const sec = (ms) => (ms / 1000).toFixed(1);
@@ -635,7 +644,7 @@ async function scenario(opts) {
     if (helper) restored = await withHelper(helper, opts, report);
   } catch (err) {
     failed.push('abort');
-    say(`SCENARIO-ABORT ${err.message}`);
+    say(`SCENARIO-ABORT ${err.code ?? 'error'}`);
   } finally {
     helper?.close();
     await stopHeartbeat();
