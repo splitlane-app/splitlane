@@ -430,13 +430,13 @@
 
 - [ ] **Step 7: Файл из Проводника и «Открепить» (нужен пользователь)**
 
-Откройте пользователю папку: `Start-Process explorer.exe C:\code\router\spike\plan1\bin\free`. Скажите: «Перетащите файл curl-free.exe из Проводника на дорожку «Напрямую». Потом правой кнопкой на его карточке выберите «Открепить»». Сразу после этого:
+Положите рядом текстовый файл и откройте пользователю папку: `Set-Content -Path C:\code\router\spike\plan1\bin\free\note.txt -Value 'not a program'; Start-Process explorer.exe C:\code\router\spike\plan1\bin\free`. Скажите: «Выделите в Проводнике curl-free.exe и note.txt и перетащите оба на дорожку «Напрямую»: окно добавит программу и скажет «Не программа: note.txt». Потом правой кнопкой на карточке curl-free выберите «Открепить»». Сразу после этого:
 
 ```powershell
 . C:\code\router\spike\plan1\p1lib.ps1; if (-not (Assert-P1Armed)) { return }; Set-P1Heartbeat; $f = 'C:\code\router\spike\plan1\bin\free\curl-free.exe'; $t0 = Get-Date; $in = $false; while (((Get-Date) - $t0).TotalSeconds -lt 240 -and -not $in) { Start-Sleep -Seconds 3; Set-P1Heartbeat; $in = [bool](& "$P1Bin\slctl.exe" expect-lanes "$f=direct" | Select-String -Pattern '^LANE-OK') }; "dropped onto direct: $in"; $out = $false; while (((Get-Date) - $t0).TotalSeconds -lt 360 -and -not $out) { Start-Sleep -Seconds 3; Set-P1Heartbeat; $out = [bool](& "$P1Bin\slctl.exe" expect-lanes "$f=vpn" | Select-String -Pattern '^LANE-OK') }; "unpinned, by the main lane: $out"; & "$P1Bin\slctl.exe" state | Select-Object -Last 1
 ```
 
-Ожидается `dropped onto direct: True`, `unpinned, by the main lane: True`, в состоянии `apps=2`.
+Ожидается `dropped onto direct: True`, `unpinned, by the main lane: True`, в состоянии `apps=2`. Пользователь подтверждает сообщение «Не программа: note.txt»; после шага удалите `note.txt`.
 
 - [ ] **Step 8: Смена основной дорожки и возврат (нужен пользователь)**
 
@@ -467,6 +467,10 @@
 ```
 
 Ожидается `main processes before: 1`, `main processes after a second start: 1` (второй запуск показал первое окно), `autostart entry: True hidden flag: True`, фаза `on`. Скажите пользователю выключить «Запускать при входе в Windows» и проверьте: `(Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run).PSObject.Properties | Where-Object { "$($_.Value)" -match 'SplitLane\.exe' }` — пусто.
+
+- [ ] **Step 10a: Проверка глазами (нужен пользователь, без команд)**
+
+Спросите пользователя и запишите ответы: значок SplitLane в трее — круг цвета VPN при включённом делении; окно, суженное до минимума (860×560), с открытой панелью «+ Добавить» — обе дорожки читаются, ничего не налезает; на карточке Пробел начинает перетаскивание с клавиатуры, стрелки двигают, Escape отменяет его и не закрывает открытую панель «+ Добавить»; карточка программы (щелчок по карточке curl-vpn при трафике) показывает соединения и скорость.
 
 - [ ] **Step 11: «Выход» из трея при включённом делении (нужен пользователь)**
 
