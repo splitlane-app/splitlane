@@ -1,6 +1,8 @@
 package session
 
 import (
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,7 +12,7 @@ import (
 // with wParam TRUE only, before the message returns.
 func TestEndSessionCallsTheHandler(t *testing.T) {
 	var calls atomic.Int32
-	w, err := Watch(func() { calls.Add(1) }, t.Logf)
+	w, err := Watch(Handlers{OnEnd: func() { calls.Add(1) }}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,12 +30,42 @@ func TestEndSessionCallsTheHandler(t *testing.T) {
 	}
 }
 
-func TestTwoWatchersAndStop(t *testing.T) {
-	a, err := Watch(func() {}, nil)
+// Section 10: the same hidden window gets WM_POWERBROADCAST. PBT_APMSUSPEND is "suspend"; the wake is
+// "resume" once, although Windows sends PBT_APMRESUMEAUTOMATIC and, when the user is back,
+// PBT_APMRESUMESUSPEND; other power events are not reported. Every one is answered TRUE.
+func TestPowerBroadcastCallsTheHandler(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	w, err := Watch(Handlers{OnPower: func(event string) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, event)
+	}}, t.Logf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := Watch(func() {}, nil)
+	defer w.Stop()
+	const pbtPowerStatusChange = 0x000A
+	for _, event := range []uintptr{pbtAPMSuspend, pbtAPMResumeAutomatic, pbtAPMResumeSuspend, pbtPowerStatusChange,
+		pbtAPMSuspend, pbtAPMResumeSuspend} {
+		if r := w.send(wmPowerBroadcast, event, 0); r != 1 {
+			t.Fatalf("WM_POWERBROADCAST %#x answered %d", event, r)
+		}
+	}
+	w.send(wmEndSession, 1, 0) // no OnEnd: nothing to call
+	mu.Lock()
+	defer mu.Unlock()
+	if s := strings.Join(got, ","); s != "suspend,resume,suspend,resume" {
+		t.Fatalf("events %s", s)
+	}
+}
+
+func TestTwoWatchersAndStop(t *testing.T) {
+	a, err := Watch(Handlers{OnEnd: func() {}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Watch(Handlers{OnEnd: func() {}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
