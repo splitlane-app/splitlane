@@ -38,16 +38,22 @@ func (e *Engine) every(ctx context.Context, d time.Duration, fn func(context.Con
 // The requests of a round run side by side. probe-direct runs every round: the addresses follow
 // every successful check (5.5), and the leak check compares with this round's direct address, so
 // a new address of the provider (DHCP, CGNAT, another network) does not hide a leak.
+// After a network change (section 10, netRound) the round also looks at the default route while the
+// checks have not passed, and reads the path to the exit node once they have; until they pass, the
+// failures count for nothing (no degraded, no restart), and a leak still rolls back.
 func (e *Engine) checkHealth(ctx context.Context) {
 	e.mu.Lock()
-	r, phase, url := e.run, e.st.Phase, e.saved.ProbeURL
+	r, phase, url, w := e.run, e.st.Phase, e.saved.ProbeURL, e.net
 	idle := e.op == nil && !e.exiting && !e.ending
+	waiting, watchPath := w != nil && w.holds(), w != nil && !w.holds()
 	e.mu.Unlock()
 	if r == nil || !idle || !live(phase) {
 		return
 	}
 	adapter := phase != protocol.PhaseBlocked
+	route := !waiting || e.d.Host.HasDefaultRoute()
 	var v, d, a ProbeResult
+	var path string
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); v = e.d.Probe.ViaProxy(ctx, url, r.ports.ProbeVPN) }()
@@ -55,6 +61,10 @@ func (e *Engine) checkHealth(ctx context.Context) {
 	if adapter {
 		wg.Add(1)
 		go func() { defer wg.Done(); a = e.d.Probe.Direct(ctx, url) }()
+	}
+	if watchPath {
+		wg.Add(1)
+		go func() { defer wg.Done(); path = e.readPath(ctx) }()
 	}
 	wg.Wait()
 
@@ -67,6 +77,7 @@ func (e *Engine) checkHealth(ctx context.Context) {
 		return
 	}
 	dirty := false
+	hold := e.net != nil && e.net.holds() // since a network change the checks have not passed
 	// An answer of probe-direct equal to probe-vpn's is not the direct lane (the system exit node
 	// is on again, 5.6): the stored direct address stays.
 	if d.IP != "" && d.IP != v.IP && (e.st.Addresses.Direct == nil || *e.st.Addresses.Direct != d.IP) {
@@ -83,12 +94,13 @@ func (e *Engine) checkHealth(ctx context.Context) {
 			ip := v.IP
 			e.st.Addresses.VPN, dirty = &ip, true
 		}
-	case d.Reached:
+	case d.Reached && !hold:
 		e.vpnFails++
 		if e.vpnFails >= 3 && !e.degraded {
 			e.degraded, dirty = true, true
 		}
 	}
+	passed := v.Reached && !adapter // in blocked probe-vpn alone (5.5)
 	if adapter {
 		direct := e.st.Addresses.Direct // this round's when probe-direct answered, else the last one
 		switch {
@@ -99,7 +111,8 @@ func (e *Engine) checkHealth(ctx context.Context) {
 			if a.IP != "" {
 				e.leakHits = 0
 			}
-		case v.Reached:
+			passed = v.Reached
+		case v.Reached && !hold:
 			e.adapterFails++
 		}
 		if e.leakHits >= 2 {
@@ -114,6 +127,11 @@ func (e *Engine) checkHealth(ctx context.Context) {
 			e.mu.Unlock()
 			return
 		}
+	}
+	// A change that came during the round starts its wait from the next round on.
+	if w != nil && e.net == w && e.netRound(w, route, passed, d.Reached, path) {
+		e.mu.Unlock()
+		return
 	}
 	now := e.vpnDown()
 	mode, current := e.d.Core.Mode(e.saved.DefaultLane, e.st.AllDirect, now), r.mode

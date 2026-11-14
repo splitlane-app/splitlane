@@ -163,9 +163,19 @@ func run(args []string) int {
 			logf("console interrupt ignored")
 		}
 	}()
-	watcher, err := session.Watch(eng.SessionEnding, logf)
+	// Section 10: sleep and wake come to the hidden window, whose procedure must answer at once; route
+	// changes come a burst at a time. The engine follows them only while routing is on.
+	watcher, err := session.Watch(session.Handlers{
+		OnEnd:   eng.SessionEnding,
+		OnPower: func(event string) { go eng.NetworkChanged(event) },
+	}, logf)
 	if err != nil {
-		logf("session end will not be noticed: %v", err)
+		logf("session end and sleep will not be noticed: %v", err)
+	}
+	stopRoutes, err := winhost.WatchRoutes(func() { eng.NetworkChanged("route") }, logf)
+	if err != nil {
+		logf("route changes will not be noticed: %v", err)
+		stopRoutes = func() {}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	eng.Start()
@@ -176,5 +186,6 @@ func run(args []string) int {
 	cancel()
 	srv.Close()
 	watcher.Stop()
+	stopRoutes()
 	return exitOK
 }

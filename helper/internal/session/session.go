@@ -1,6 +1,7 @@
-// Package session tells the helper that the Windows session ends (logoff, restart, shutdown).
-// A process that loaded user32.dll gets no console event for it; it gets WM_QUERYENDSESSION and
-// WM_ENDSESSION in a top-level window (spec 5.4). A message-only window does not get them.
+// Package session tells the helper that the Windows session ends (logoff, restart, shutdown) and
+// that the computer goes to sleep and wakes (section 10). A process that loaded user32.dll gets no
+// console event for the end of the session; it gets WM_QUERYENDSESSION and WM_ENDSESSION in a
+// top-level window (spec 5.4), and WM_POWERBROADCAST there too. A message-only window gets none of them.
 package session
 
 import (
@@ -18,6 +19,14 @@ const (
 	wmClose           = 0x0010
 	wmQueryEndSession = 0x0011
 	wmEndSession      = 0x0016
+	wmPowerBroadcast  = 0x0218
+)
+
+// The events of WM_POWERBROADCAST (wParam) that the helper uses.
+const (
+	pbtAPMSuspend         = 0x0004 // the computer goes to sleep
+	pbtAPMResumeSuspend   = 0x0007 // it woke, and the user is there
+	pbtAPMResumeAutomatic = 0x0012 // it woke; sent at every wake
 )
 
 var (
@@ -70,9 +79,16 @@ var (
 	classErr error
 )
 
+// Handlers are what the hidden window reports; a nil one is not called.
+type Handlers struct {
+	OnEnd   func()             // WM_ENDSESSION: the session ends; it must finish within a few seconds
+	OnPower func(event string) // WM_POWERBROADCAST: "suspend" before sleep, "resume" once per wake; it must return at once
+}
+
 type handler struct {
-	onEnd func()
-	log   func(string, ...any)
+	h       Handlers
+	log     func(string, ...any)
+	resumed bool // the wake since the last suspend was reported; only the window's thread uses it
 }
 
 func proc(hwnd, message, wParam, lParam uintptr) uintptr {
@@ -85,9 +101,12 @@ func proc(hwnd, message, wParam, lParam uintptr) uintptr {
 		case wmEndSession:
 			h.log("session: WM_ENDSESSION ending=%v lParam=%#x", wParam != 0, lParam)
 			if wParam != 0 {
-				h.onEnd()
+				h.h.OnEnd()
 			}
 			return 0
+		case wmPowerBroadcast:
+			h.power(wParam)
+			return 1
 		case wmDestroy:
 			handlers.Delete(hwnd)
 			procPostQuitMessage.Call(0)
@@ -98,13 +117,36 @@ func proc(hwnd, message, wParam, lParam uintptr) uintptr {
 	return r
 }
 
+// power reports one event of WM_POWERBROADCAST. A wake comes as PBT_APMRESUMEAUTOMATIC and, once the
+// user is there, PBT_APMRESUMESUSPEND as well: it is reported once, until the next suspend.
+func (h *handler) power(event uintptr) {
+	switch event {
+	case pbtAPMSuspend:
+		h.log("session: WM_POWERBROADCAST suspend")
+		h.resumed = false
+		h.h.OnPower("suspend")
+	case pbtAPMResumeAutomatic, pbtAPMResumeSuspend:
+		h.log("session: WM_POWERBROADCAST resume %#x", event)
+		if !h.resumed {
+			h.resumed = true
+			h.h.OnPower("resume")
+		}
+	}
+}
+
 var className = windows.StringToUTF16Ptr("SplitLaneSessionWatch")
 
-// Watch creates the hidden window on a thread of its own and calls onEnd from WM_ENDSESSION,
-// before Windows ends the process. onEnd must finish within a few seconds.
-func Watch(onEnd func(), log func(string, ...any)) (*Watcher, error) {
+// Watch creates the hidden window on a thread of its own. It calls h.OnEnd from WM_ENDSESSION, before
+// Windows ends the process, and h.OnPower from WM_POWERBROADCAST.
+func Watch(h Handlers, log func(string, ...any)) (*Watcher, error) {
 	if log == nil {
 		log = func(string, ...any) {}
+	}
+	if h.OnEnd == nil {
+		h.OnEnd = func() {}
+	}
+	if h.OnPower == nil {
+		h.OnPower = func(string) {}
 	}
 	ready := make(chan error, 1)
 	w := &Watcher{}
@@ -133,7 +175,7 @@ func Watch(onEnd func(), log func(string, ...any)) (*Watcher, error) {
 			ready <- err
 			return
 		}
-		handlers.Store(hwnd, &handler{onEnd: onEnd, log: log})
+		handlers.Store(hwnd, &handler{h: h, log: log})
 		w.hwnd = hwnd
 		ready <- nil
 		var m msg

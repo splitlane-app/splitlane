@@ -64,6 +64,7 @@ type Engine struct {
 	vpnFails     int
 	adapterFails int
 	leakHits     int
+	net          *netWatch    // the sequence after a network change (section 10, network.go); nil when none runs
 	clients      atomic.Int32 // connected windows; atomic, so the pipe may set it under its own lock
 	lastGone     atomic.Int64 // Clock time (UnixNano) at which the last window went (spec 7)
 	ending       bool         // the Windows session ends (5.4)
@@ -358,6 +359,7 @@ func (e *Engine) setPhase(phase string, why *protocol.Reason) {
 }
 
 // finish ends in off or error: "was on" cleared, all direct reset (5.2); e.mu must be held.
+// A network change that was followed is over with the core.
 func (e *Engine) finish(phase string, why *protocol.Reason) {
 	e.saved.WasOn = false
 	e.save()
@@ -365,15 +367,18 @@ func (e *Engine) finish(phase string, why *protocol.Reason) {
 	e.st.Addresses = protocol.Addresses{}
 	e.degraded, e.sysExitOn = false, false
 	e.vpnFails, e.adapterFails, e.leakHits = 0, 0, 0
+	e.net = nil
 	e.setPhase(phase, why)
 }
 
-// finishOn is step 9 of 5.3: phase on, "was on" set; e.mu must be held.
+// finishOn is step 9 of 5.3: phase on, "was on" set; e.mu must be held. A network change that was
+// followed is over: the core is a new one.
 func (e *Engine) finishOn() {
 	e.saved.WasOn = true
 	e.save()
 	e.degraded, e.sysExitOn = false, false
 	e.vpnFails, e.adapterFails, e.leakHits = 0, 0, 0
+	e.net = nil
 	e.setPhase(protocol.PhaseOn, nil)
 }
 
