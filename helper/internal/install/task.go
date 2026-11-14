@@ -18,8 +18,10 @@ func esc(s string) string {
 // TaskXML is the task of spec 4.3, the XML of check (е) of Appendix A (plan 1A, Task 6) for the
 // product: command without arguments, as the setup user (account, sid) in his session with the
 // highest privileges; a logon trigger of that user; start on demand; no time limit, no power
-// conditions; a second start while it runs is ignored (IgnoreNew). The user may read and run the
-// task (FRFX), not change it.
+// conditions; a second start while it runs is ignored (IgnoreNew). Priority 5 is the normal priority
+// class: the helper runs at the class of the task and the core it starts at the helper's, and the core
+// carries all traffic (7, the default of a task, is below normal). The user may read and run the task
+// (FRFX), not change it.
 func TaskXML(account, sid, command string) string {
 	return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -58,7 +60,7 @@ func TaskXML(account, sid, command string) string {
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>7</Priority>
+    <Priority>5</Priority>
   </Settings>
   <Actions Context="Author">
     <Exec>

@@ -10,7 +10,8 @@ import (
 // The task of spec 4.3 is the XML of check (е) (plan 1A, Task 6), for the product: the task
 // SplitLane Helper runs <ProgramDir>\splitlane-helper.exe without arguments, as the setup user with
 // the highest privileges, at his logon and on demand, without a time limit or power conditions, a
-// second start ignored; he may read and run it, not change it. The file is UTF-16 LE with a BOM.
+// second start ignored, at the normal priority (review F14-2); he may read and run it, not change it.
+// The file is UTF-16 LE with a BOM.
 func TestTaskXMLProduct(t *testing.T) {
 	const sid = "S-1-5-21-1000-2000-3000-1001"
 	text := TaskXML(`TESTPC\Тестер & Co`, sid, `C:\Program Files\SplitLane\splitlane-helper.exe`)
@@ -35,6 +36,7 @@ func TestTaskXMLProduct(t *testing.T) {
 			OnDemand    bool   `xml:"AllowStartOnDemand"`
 			Enabled     bool   `xml:"Enabled"`
 			TimeLimit   string `xml:"ExecutionTimeLimit"`
+			Priority    int    `xml:"Priority"`
 		} `xml:"Settings"`
 		Exec struct {
 			Command   string `xml:"Command"`
@@ -58,6 +60,8 @@ func TestTaskXMLProduct(t *testing.T) {
 	case task.Settings.Multiple != "IgnoreNew" || task.Settings.NoBattery || task.Settings.StopBattery ||
 		!task.Settings.OnDemand || !task.Settings.Enabled || task.Settings.TimeLimit != "PT0S":
 		t.Fatalf("%+v", task.Settings)
+	case task.Settings.Priority != 5:
+		t.Fatalf("Priority %d: the helper and the core it starts (all traffic) run at the priority class of the task; want 5, normal", task.Settings.Priority)
 	case task.Exec.Command != `C:\Program Files\SplitLane\splitlane-helper.exe` || task.Exec.Arguments != "" || strings.Contains(text, "<Arguments>"):
 		t.Fatalf("%+v", task.Exec)
 	}
