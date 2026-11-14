@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"splitlane/helper/internal/coreconfig"
+	"splitlane/helper/internal/diag"
 	"splitlane/helper/internal/engine"
 	"splitlane/helper/internal/install"
 	"splitlane/helper/internal/pipe"
@@ -200,6 +202,7 @@ func run(args []string) int {
 	host, _ := os.Hostname()
 	exit := make(chan struct{})
 	var srv *pipe.Server
+	var lastReason *protocol.Reason // the engine publishes under its lock, one state at a time
 	eng := engine.New(engine.Deps{
 		Clock: realClock{},
 		Store: store.Dir{Path: o.dataDir},
@@ -212,11 +215,8 @@ func run(args []string) int {
 			DevPin: o.devPin, HelperVersion: version, CoreVersion: singbox.CoreVersion, CoreLogLevel: o.coreLogLevel},
 		Log: logf,
 		OnState: func(s protocol.State) {
-			code := "-"
-			if s.Reason != nil {
-				code = s.Reason.Code
-			}
-			logf("state: phase=%s reason=%s allDirect=%v", s.Phase, code, s.AllDirect)
+			logf("%s", stateLine(s, lastReason))
+			lastReason = s.Reason
 			srv.Broadcast(s)
 		},
 		OnExit: func() { close(exit) },
@@ -263,6 +263,22 @@ func run(args []string) int {
 	watcher.Stop()
 	stopRoutes()
 	return exitOK
+}
+
+// stateLine is the line of helper.log for a state the engine published: the phase, the code of its reason
+// and allDirect, and the reason's params whenever the reason differs from last, the one of the state before
+// (review F12-1): sorted, masked, the login links hidden (diag.ReasonParams). So the cause of
+// restore_pending, config_invalid, core_start_timeout or switch_check_failed is in the archive.
+func stateLine(s protocol.State, last *protocol.Reason) string {
+	code := "-"
+	if s.Reason != nil {
+		code = s.Reason.Code
+	}
+	line := fmt.Sprintf("state: phase=%s reason=%s allDirect=%v", s.Phase, code, s.AllDirect)
+	if r := s.Reason; r != nil && len(r.Params) > 0 && (last == nil || last.Code != r.Code || !maps.Equal(last.Params, r.Params)) {
+		line += " params: " + diag.ReasonParams(r.Params)
+	}
+	return line
 }
 
 // productPlace checks that this helper is the product's own copy and finds the rest of the product

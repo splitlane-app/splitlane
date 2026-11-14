@@ -14,11 +14,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"splitlane/helper/internal/atomicfile"
 	"splitlane/helper/internal/coreconfig"
+	"splitlane/helper/internal/protocol"
 )
 
 // maxLog bounds what the archive takes of one log: its last 8 MiB. The logs themselves are never cut
@@ -134,6 +136,19 @@ func tail(path string) (data []byte, ok bool, err error) {
 	}
 	head := fmt.Sprintf("[splitlane: the first %d bytes were left out]\n", from+int64(i)+1)
 	return append([]byte(head), buf[i+1:]...), true, nil
+}
+
+// ReasonParams writes the params of a phase's reason on one line, for the state line of helper.log and for
+// meta.txt (review F12-1): key="value" sorted by key, each value quoted (the output of sing-box check has many
+// lines), its login links hidden as in the logs and its IPv4 addresses masked (protocol.MaskAddresses); ""
+// when there are none.
+func ReasonParams(params map[string]string) string {
+	parts := make([]string, 0, len(params))
+	for _, k := range slices.Sorted(maps.Keys(params)) {
+		v := protocol.MaskAddresses(string(redact([]byte(params[k]))))
+		parts = append(parts, k+"="+strconv.Quote(v))
+	}
+	return strings.Join(parts, " ")
 }
 
 // redact hides the login links of a log: every link of the login server or of the form

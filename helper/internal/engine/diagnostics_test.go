@@ -138,7 +138,7 @@ func TestDiagnosticsExportInAnyPhase(t *testing.T) {
 			code = c.why.Code
 		}
 		meta := "core: 1.14.4\nhelper: 0.1.0\njournal: " + journal + "\nphase: " + c.phase + "\nreason: " + code +
-			"\ntime: " + h.clock.Now().Local().Format(time.RFC3339) + "\n"
+			"\nreason params: -\ntime: " + h.clock.Now().Local().Format(time.RFC3339) + "\n"
 		if got["meta.txt"] != meta || got["state.json"] != string(state)+"\n" {
 			t.Fatalf("%s: meta.txt\n%s\nstate.json\n%s", c.phase, got["meta.txt"], got["state.json"])
 		}
@@ -146,6 +146,30 @@ func TestDiagnosticsExportInAnyPhase(t *testing.T) {
 			t.Fatalf("%s: core.log\n%s", c.phase, log)
 		}
 		<-h.clock.After(time.Second) // the next archive, the next second
+	}
+}
+
+// Review F12-1: meta.txt holds the params of the reason, as the state line of helper.log does: sorted by key, each
+// value quoted on the one line, the IPv4 addresses masked and the login links hidden. So the error of
+// restore_pending and its manual command, the output of sing-box check of config_invalid, the cause of
+// core_start_timeout and of switch_check_failed can be read from the archive.
+func TestExportHasReasonParams(t *testing.T) {
+	h := newHarness(t)
+	exportData(h)
+	h.load()
+	h.e.mu.Lock()
+	h.e.setPhase(protocol.PhaseStopping, reason(protocol.ReasonRestorePending,
+		protocol.ParamCommand, "tailscale set --exit-node=100.101.102.103 --exit-node-allow-lan-access",
+		protocol.ParamError, "tailscale set: exit status 1\nvisit https://login.tailscale.com/a/1f2e3d4c"))
+	h.e.mu.Unlock()
+	path, err := export(h, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "reason: restore_pending\nreason params: " +
+		`command="tailscale set --exit-node=<ip> --exit-node-allow-lan-access" error="tailscale set: exit status 1\nvisit <login link>"` + "\n"
+	if meta := archiveEntries(t, path)["meta.txt"]; !strings.Contains(meta, want) {
+		t.Fatalf("meta.txt:\n%s", meta)
 	}
 }
 

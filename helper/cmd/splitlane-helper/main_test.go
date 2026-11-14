@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"splitlane/helper/internal/install"
 	"splitlane/helper/internal/pipe"
 	"splitlane/helper/internal/place"
+	"splitlane/helper/internal/protocol"
 )
 
 func TestParse(t *testing.T) {
@@ -219,6 +221,36 @@ func TestRunRefusesAWrongCore(t *testing.T) {
 	}
 	if code := run([]string{"--dev", "--data-dir", `data`, "--core", core}); code != exitUsage {
 		t.Fatalf("a relative data folder: %d", code)
+	}
+}
+
+// Review F12-1: the state line of helper.log carries the params of the reason whenever the reason changes (the
+// error of restore_pending and its manual command, the output of sing-box check of config_invalid, ...): sorted by
+// key, each value quoted on the one line, the IPv4 addresses masked and the login links hidden. The same reason
+// again gives the line without them.
+func TestStateLineHasReasonParams(t *testing.T) {
+	pending := &protocol.Reason{Code: protocol.ReasonRestorePending, Params: map[string]string{
+		protocol.ParamError:   "tailscale set: exit status 1\nvisit https://login.tailscale.com/a/1f2e3d4c",
+		protocol.ParamCommand: "tailscale set --exit-node=100.101.102.103 --exit-node-allow-lan-access"}}
+	stopping := protocol.State{Phase: protocol.PhaseStopping, Reason: pending}
+	const head = "state: phase=stopping reason=restore_pending allDirect=false"
+	want := head + ` params: command="tailscale set --exit-node=<ip> --exit-node-allow-lan-access" error="tailscale set: exit status 1\nvisit <login link>"`
+	if got := stateLine(stopping, nil); got != want {
+		t.Fatalf("a new reason:\n got %s\nwant %s", got, want)
+	}
+	if got := stateLine(stopping, &protocol.Reason{Code: pending.Code, Params: maps.Clone(pending.Params)}); got != head {
+		t.Fatalf("the same reason again: %s", got)
+	}
+	other := &protocol.Reason{Code: pending.Code, Params: map[string]string{protocol.ParamCommand: "", protocol.ParamError: "access denied"}}
+	if got, want := stateLine(protocol.State{Phase: protocol.PhaseStopping, Reason: other}, pending), head+` params: command="" error="access denied"`; got != want {
+		t.Fatalf("the same code, other params:\n got %s\nwant %s", got, want)
+	}
+	crashed := &protocol.Reason{Code: protocol.ReasonCoreCrashed, Params: map[string]string{}}
+	if got := stateLine(protocol.State{Phase: protocol.PhaseError, Reason: crashed}, pending); got != "state: phase=error reason=core_crashed allDirect=false" {
+		t.Fatalf("a reason without params: %s", got)
+	}
+	if got := stateLine(protocol.State{Phase: protocol.PhaseOff, AllDirect: true}, crashed); got != "state: phase=off reason=- allDirect=true" {
+		t.Fatalf("no reason: %s", got)
 	}
 }
 

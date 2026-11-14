@@ -23,9 +23,10 @@ const (
 // cmdExport is diagnostics.export (5.1): in any phase, outside the queue of the state-changing commands;
 // the answer comes when the archive is written. The archive holds the logs of the helper and of the core,
 // the saved state (state.json as this run holds it; never the core config, the rule files, the node's
-// state folder, the journal or a secret: spec 11) and meta.txt: the versions, the phase and its reason,
-// the time, and whether a restore journal is there (one that could not be read counts as there, as for
-// restoreOnDisable). The state is read under e.mu; the archive is built without it.
+// state folder, the journal or a secret: spec 11) and meta.txt: the versions, the phase, its reason and the
+// reason's params (as the state line of helper.log has them: diag.ReasonParams), the time, and whether a
+// restore journal is there (one that could not be read counts as there, as for restoreOnDisable). The state
+// is read under e.mu; the archive is built without it.
 func (e *Engine) cmdExport(params json.RawMessage) (any, *protocol.Error) {
 	if err := noParams(params); err != nil {
 		return nil, err
@@ -33,16 +34,19 @@ func (e *Engine) cmdExport(params json.RawMessage) (any, *protocol.Error) {
 	now := e.d.Clock.Now().Local()
 	e.mu.Lock()
 	state, err := json.MarshalIndent(e.saved, "", "  ")
-	why := "-"
+	why, whyParams := "-", "-"
 	if e.st.Reason != nil {
 		why = e.st.Reason.Code
+		if p := diag.ReasonParams(e.st.Reason.Params); p != "" {
+			whyParams = p
+		}
 	}
 	journal := "absent"
 	if e.journal != nil || e.journalErr != nil {
 		journal = "present"
 	}
 	meta := map[string]string{"helper": e.d.Settings.HelperVersion, "core": e.d.Settings.CoreVersion,
-		"phase": e.st.Phase, "reason": why, "time": now.Format(time.RFC3339), "journal": journal}
+		"phase": e.st.Phase, "reason": why, "reason params": whyParams, "time": now.Format(time.RFC3339), "journal": journal}
 	e.mu.Unlock()
 	if err != nil {
 		return nil, protocol.Errorf(protocol.CodeInternal, "diagnostics.export: state: %v", err)
