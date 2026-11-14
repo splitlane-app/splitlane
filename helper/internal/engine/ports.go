@@ -149,6 +149,9 @@ type Host interface {
 	FlushDNS() error
 	FreePorts(n int) ([]int, error)
 	Secret() string
+	// RemoveStaleAdapter removes the Wintun device of the core's adapter that a forced end of an
+	// earlier core left behind, non-present (5.3 step 4); removed tells that there was one.
+	RemoveStaleAdapter() (removed bool, err error)
 }
 
 // Settings are fixed for the life of the process.

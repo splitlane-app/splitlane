@@ -629,3 +629,44 @@ func TestEarlyExitWatcherLeavesTheSystemAlone(t *testing.T) {
 		t.Fatalf("the second run must have switched the system exit node off: %v", h.rec.list())
 	}
 }
+
+// logEvents makes each log line of the engine an event "log:<line>" of the recorder.
+func logEvents(h *harness) {
+	h.e.d.Log = func(format string, args ...any) { h.rec.add("log:"+format, args...) }
+}
+
+// 5.3 step 4 and appendix A (checks of plan 1B): the Wintun device that a forced end of the core
+// left behind goes right before every start of the core, after its check. A failed removal is
+// logged and the start goes on: the core may still take the device, an early exit is tried again.
+func TestStaleAdapterIsRemovedBeforeStart(t *testing.T) {
+	h := newHarness(t)
+	logEvents(h)
+	h.host.staleAdapter = true
+	h.core.dieEarly = 1
+	h.load()
+	startEnable(h)
+	h.waitPhase(protocol.PhaseOn)
+	var order []string
+	for _, ev := range h.rec.list() {
+		if ev == "core:check" || ev == "host:removestale" || strings.HasPrefix(ev, "core:start") {
+			order = append(order, strings.Fields(ev)[0])
+		}
+	}
+	if got := strings.Join(order, ","); got != "core:check,host:removestale,core:start,core:check,host:removestale,core:start" {
+		t.Fatalf("order %s: %v", got, h.rec.list())
+	}
+	if n := h.rec.count("log:removed the stale Wintun device of the adapter"); n != 1 {
+		t.Fatalf("removal logged %d times: %v", n, h.rec.list())
+	}
+
+	h = newHarness(t)
+	logEvents(h)
+	h.host.removeErr = errBoom
+	h.load()
+	startEnable(h)
+	h.waitPhase(protocol.PhaseOn)
+	remove, start := h.rec.index("host:removestale"), h.rec.index("core:start")
+	if remove < 0 || start < remove || h.rec.count("log:stale Wintun device of the adapter not removed: boom") != 1 {
+		t.Fatalf("a failed removal is logged and the start goes on: %v", h.rec.list())
+	}
+}
