@@ -118,6 +118,7 @@ type fakeHelper struct {
 
 	activity *protocol.Activity                 // the live activity (spec 8.4); nil: no core with the adapter runs
 	details  map[string]protocol.ActivityDetail // the detail of each group key
+	archive  string                             // the path diagnostics.export answers with; "": it fails
 }
 
 // Activity is the engine's summary for the pipe's activity events: the detail of detailFor when it has one.
@@ -177,6 +178,13 @@ func (f *fakeHelper) Handle(ctx context.Context, method string, params json.RawM
 			}
 		}()
 		return struct{}{}, nil
+	case protocol.MethodDiagnosticsExport:
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.archive == "" {
+			return nil, protocol.Errorf(protocol.CodeInternal, "diagnostics.export: the disk is full")
+		}
+		return protocol.ExportResult{Path: f.archive}, nil
 	}
 	return nil, protocol.Errorf(protocol.CodeUnknownMethod, "unknown")
 }
@@ -459,6 +467,34 @@ func TestActivityCommand(t *testing.T) {
 	}
 	if code := run([]string{"-pipe", name, "activity", "-seconds", "0"}, &out); code != exitUsage {
 		t.Fatalf("-seconds 0: %d", code)
+	}
+}
+
+// slctl export (spec 5.1): diagnostics.export, then the path of the archive in one line, exit code 0. An
+// error response is exit code 1 with its ERROR line; an argument is a usage error.
+func TestExportCommand(t *testing.T) {
+	path := `C:\ProgramData\SplitLane\export\splitlane-diagnostics-20261114-120000.zip`
+	f := &fakeHelper{st: protocol.State{Phase: protocol.PhaseOn, Apps: []protocol.AppRule{}}, archive: path}
+	name := testPipeName()
+	srv, err := serveHelper(name, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	var out strings.Builder
+	if code := run([]string{"-pipe", name, "export"}, &out); code != exitOK || !strings.Contains(out.String(), "SLCTL: export written: "+path+"\n") {
+		t.Fatalf("exit %d:\n%s", code, out.String())
+	}
+	f.mu.Lock()
+	f.archive = ""
+	f.mu.Unlock()
+	out.Reset()
+	if code := run([]string{"-pipe", name, "export"}, &out); code != exitFailed ||
+		!strings.Contains(out.String(), "ERROR internal diagnostics.export: the disk is full") || strings.Contains(out.String(), "export written") {
+		t.Fatalf("a failed export: exit %d:\n%s", code, out.String())
+	}
+	if code := run([]string{"-pipe", name, "export", "now"}, &out); code != exitUsage {
+		t.Fatalf("an argument: exit %d", code)
 	}
 }
 

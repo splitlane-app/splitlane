@@ -41,6 +41,7 @@ const usage = `usage: slctl [-pipe NAME] [-timeout 150s] [-show-addresses] [-url
   login [-timeout 300s]          tailscale.login, print the login link once, wait until logged in
   logout [-timeout 60s]          tailscale.logout, wait for backend needs_login
   activity [-seconds 10] [-detail KEY]   activity.subscribe, print each event; 3 when none came
+  export                         diagnostics.export, print the path of the archive
   shutdown                       helper.shutdown, wait until the pipe closes
   call METHOD [PARAMS|@FILE]     any method, params as JSON or from a file
   wait PHASE[,PHASE...]          wait for one of the phases; success when it is the first one
@@ -76,7 +77,7 @@ func exitCodeFor(err error) int {
 
 // pipeCommands are the commands that talk to the helper.
 var pipeCommands = []string{"state", "enable", "disable", "alldirect", "lanes", "exitnode", "clear-system-exit-node",
-	"login", "logout", "activity", "shutdown", "call", "wait", "watch", "expect-lanes"}
+	"login", "logout", "activity", "export", "shutdown", "call", "wait", "watch", "expect-lanes"}
 
 // A helper that was just started opens its pipe a moment later (its log, the SHA-256 of the core,
 // the engine). go-winio retries only a busy pipe, so slctl tries a missing one again itself.
@@ -452,6 +453,24 @@ func command(c *client, cmd string, args []string, url string) int {
 		return nodeCommand(c, cmd, args)
 	case "activity":
 		return activityCommand(c, args)
+	case "export":
+		if len(args) != 0 {
+			return exitUsage
+		}
+		raw, perr, err := c.call(protocol.MethodDiagnosticsExport, nil)
+		switch {
+		case err != nil:
+			return c.fail(err)
+		case perr != nil:
+			return exitFailed // call printed its ERROR line
+		}
+		var res protocol.ExportResult
+		if json.Unmarshal(raw, &res) != nil || res.Path == "" {
+			c.print("SLCTL: the answer names no archive")
+			return exitFailed
+		}
+		c.print("SLCTL: export written: %s", res.Path)
+		return exitOK
 	case "shutdown":
 		if code := simple(protocol.MethodShutdown, nil); code != exitOK {
 			return code

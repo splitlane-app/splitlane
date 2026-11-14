@@ -1,5 +1,6 @@
 // Package store keeps the helper's files in the data folder: state.json (spec 5.2),
-// the restore journal restore.json (spec 5.7), the rule files and the core config.
+// the restore journal restore.json (spec 5.7), the rule files and the core config; it names
+// the logs and the folder of the diagnostics archives (spec 5.1, 4.2).
 package store
 
 import (
@@ -204,6 +205,18 @@ func (d Dir) WriteConfig(config []byte) (string, error) {
 		return "", err
 	}
 	return p.Config, atomicfile.Write(p.Config, config)
+}
+
+// ExportDir is the folder of the diagnostics archives, export\ of the data folder (spec 4.2): the one
+// folder that the user who set SplitLane up may read.
+func (d Dir) ExportDir() string { return filepath.Join(d.Path, "export") }
+
+// Logs are the logs that diagnostics.export takes (spec 5.1): the helper's and the core's in logs\,
+// each with the one of the run before (.prev).
+func (d Dir) Logs() []string {
+	p := coreconfig.PathsFor(d.Path)
+	helper := filepath.Join(p.LogsDir, "helper.log")
+	return []string{helper, helper + ".prev", p.CoreLog, p.CoreLog + ".prev"}
 }
 
 func (d Dir) writeJSON(path string, v any) error {

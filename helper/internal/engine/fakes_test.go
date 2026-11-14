@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -104,6 +105,7 @@ type fakeStore struct {
 	stateReads      int     // calls of LoadState
 	stateSaves      int     // calls of SaveState
 	journalReads    int     // calls of LoadJournal
+	dataDir         string  // a real folder for diagnostics.export (exportData); "" in the other tests
 }
 
 // readErr is how the store reports a file that is there but could not be read (store.ErrIO).
@@ -200,6 +202,13 @@ func (s *fakeStore) WriteConfig(config []byte) (string, error) {
 	defer s.mu.Unlock()
 	s.config = config
 	return `C:\data\core-config.json`, nil
+}
+
+// ExportDir and Logs are export\ and two logs in logs\ of dataDir: diagnostics.export writes a real archive.
+func (s *fakeStore) ExportDir() string { return filepath.Join(s.dataDir, "export") }
+
+func (s *fakeStore) Logs() []string {
+	return []string{filepath.Join(s.dataDir, "logs", "helper.log"), filepath.Join(s.dataDir, "logs", "core.log")}
 }
 
 func (s *fakeStore) saved() store.State {
