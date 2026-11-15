@@ -20,6 +20,9 @@ function sortedNodes(nodes: ExitNode[]): ExitNode[] {
   return [...nodes].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, lang))
 }
 
+/** How long a choice of the exit node waits for the next one before it is sent. */
+const CHOICE_SETTLE_MS = 500
+
 /**
  * The exit nodes of the tailnet as one radio group; choosing one sends tailscale.setExitNode (the helper validates
  * it). The selected node is always in it, named as far as the window knows (the list is empty while routing is off).
@@ -28,6 +31,26 @@ function ExitNodeList({ state, last }: { state: HelperState; last: LastExitNode 
   const services = useServices()
   const { selectedExitNode } = state.tailscale
   const nodes = exitNodeChoices(state, last)
+  // arrow keys move through native radios and change the choice on each press; every change restarts split
+  // routing while it is live, so only a settled choice (the last one, after a pause) is sent
+  const [pending, setPending] = useState<string | null>(null)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (timer.current !== null) clearTimeout(timer.current)
+    },
+    []
+  )
+  const choose = (id: string): void => {
+    setPending(id)
+    if (timer.current !== null) clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      timer.current = null
+      setPending(null)
+      void sendCommand(services, { method: 'tailscale.setExitNode', id })
+    }, CHOICE_SETTLE_MS)
+  }
+  const shown = pending ?? selectedExitNode
   if (nodes.length === 0) return <p className={styles.lead}>{t('connect.noExitNodes')}</p>
   return (
     <div className={styles.nodes} role="radiogroup" aria-label={t('connect.exitNodes')}>
@@ -37,8 +60,8 @@ function ExitNodeList({ state, last }: { state: HelperState; last: LastExitNode 
             type="radio"
             name="exit-node"
             className={styles.nodeRadio}
-            checked={n.id === selectedExitNode}
-            onChange={() => void sendCommand(services, { method: 'tailscale.setExitNode', id: n.id })}
+            checked={n.id === shown}
+            onChange={() => choose(n.id)}
           />
           <span className={styles.nodeName}>{n.name || n.id}</span>
           {!n.online && <span className={styles.offline}>{t('connect.offline')}</span>}

@@ -14,6 +14,7 @@ export function UpdateBanner(): React.JSX.Element | null {
   const update = useApp((s) => s.snapshot?.update ?? null)
   const { busy, run } = useUpdateActions()
   const installed = update?.kind === 'installed'
+  const installedVersion = update?.kind === 'installed' ? update.version : null
 
   // the success notice has nothing to decide: it closes by itself
   useEffect(() => {
@@ -21,7 +22,7 @@ export function UpdateBanner(): React.JSX.Element | null {
     const timer = setTimeout(() => void run('dismiss'), INSTALLED_MS)
     return () => clearTimeout(timer)
     // run is new on every render; the timer belongs to the notice, not to the render
-  }, [installed])
+  }, [installed, installedVersion])
 
   if (update === null) return null
   const banner = updateBannerModel(update)

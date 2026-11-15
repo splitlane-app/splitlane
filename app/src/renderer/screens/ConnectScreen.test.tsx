@@ -135,8 +135,67 @@ test('ConnectScreen lists exit nodes, online first, and chooses one', async () =
   const radios = within(group).getAllByRole('radio') as HTMLInputElement[]
   expect(radios.map((r) => r.closest('label')?.textContent)).toEqual(['alpha', 'beta', 'zetaне в сети'])
   expect(radios.every((r) => !r.checked)).toBe(true)
-  fireEvent.click(screen.getByRole('radio', { name: /zeta/ }))
-  await vi.waitFor(() => expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.5' }]))
+  vi.useFakeTimers()
+  try {
+    fireEvent.click(screen.getByRole('radio', { name: /zeta/ }))
+    expect(commands).toEqual([])
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.5' }])
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('quick changes of the exit node send only the last one, and the pending one shows as checked', async () => {
+  const { bridge, commands } = fakeBridge()
+  const exitNodes = [
+    { id: '100.64.0.3', name: 'alpha', online: true },
+    { id: '100.64.0.4', name: 'beta', online: true },
+    { id: '100.64.0.5', name: 'gamma', online: true }
+  ]
+  renderWith(<ConnectionScreen />, servicesFor(bridge, withTs({ exitNodes, selectedExitNode: '100.64.0.3' }, { phase: 'on' }, true)))
+  vi.useFakeTimers()
+  try {
+    fireEvent.click(screen.getByRole('radio', { name: 'beta' }))
+    await act(async () => {
+      vi.advanceTimersByTime(400)
+    })
+    fireEvent.click(screen.getByRole('radio', { name: 'gamma' }))
+    expect((screen.getByRole('radio', { name: 'gamma' }) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByRole('radio', { name: 'alpha' }) as HTMLInputElement).checked).toBe(false)
+    await act(async () => {
+      vi.advanceTimersByTime(499)
+    })
+    expect(commands).toEqual([])
+    await act(async () => {
+      vi.advanceTimersByTime(1)
+    })
+    expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.5' }])
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('a pending exit node choice is dropped when the screen goes away', async () => {
+  const { bridge, commands } = fakeBridge()
+  const exitNodes = [
+    { id: '100.64.0.3', name: 'alpha', online: true },
+    { id: '100.64.0.4', name: 'beta', online: true }
+  ]
+  const view = renderWith(<ConnectionScreen />, servicesFor(bridge, withTs({ exitNodes, selectedExitNode: '100.64.0.3' }, { phase: 'on' }, true)))
+  vi.useFakeTimers()
+  try {
+    fireEvent.click(screen.getByRole('radio', { name: 'beta' }))
+    view.unmount()
+    await act(async () => {
+      vi.advanceTimersByTime(1000)
+    })
+    expect(commands).toEqual([])
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 test('ConnectScreen warns about the system exit node before enabling', async () => {
@@ -486,7 +545,7 @@ test('the exit node of «Подключение» is one radio group: the select
   const hint = screen.getByText('Смена exit node ненадолго перезапустит деление')
   expect(group.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   fireEvent.click(b!)
-  await vi.waitFor(() => expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.3' }]))
+  await vi.waitFor(() => expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.3' }]), { timeout: 2000 })
 })
 
 test('«Подключение» shows the remembered name as the checked radio while the list is empty', () => {
