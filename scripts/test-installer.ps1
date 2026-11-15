@@ -63,7 +63,7 @@ function Get-Task {
     }
 }
 
-# The names of the uninstall entries called SplitLane (both registry views).
+# The registry paths of the uninstall entries called SplitLane (both registry views).
 function Get-UninstallEntries {
     $keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
@@ -71,7 +71,7 @@ function Get-UninstallEntries {
         if (-not (Test-Path -LiteralPath $key)) { continue }
         foreach ($sub in Get-ChildItem -LiteralPath $key) {
             $p = Get-ItemProperty -LiteralPath $sub.PSPath -ErrorAction SilentlyContinue
-            if ($p -and $p.DisplayName -eq 'SplitLane') { $sub.PSChildName }
+            if ($p -and $p.DisplayName -eq 'SplitLane') { $sub.PSPath }
         }
     }
 }
@@ -199,13 +199,15 @@ function Install-Product {
 function Uninstall-Product([string]$arguments) {
     $uninstaller = Join-Path $product 'Uninstall SplitLane.exe'
     if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) { throw "no $uninstaller" }
+    $entries = @(Get-UninstallEntries)
+    if ($entries.Count -eq 0) { throw 'no uninstall entry SplitLane before the uninstall' }
     $deadline = (Get-Date).AddSeconds(120)
     $code = Invoke-Program $uninstaller $arguments 120
     if ($code -ne 0) { throw "Uninstall SplitLane.exe $arguments ended with exit code $code" }
     while ($true) {
         $left = @()
         if (Test-Path -LiteralPath $product) { $left += $product }
-        if (@(Get-UninstallEntries).Count -gt 0) { $left += 'the uninstall entry SplitLane' }
+        if (@($entries | Where-Object { Test-Path -LiteralPath $_ }).Count -gt 0) { $left += 'the uninstall entry SplitLane' }
         if ((Get-UninstallerCopies).Count -gt 0) { $left += 'the uninstaller copy in %TEMP%' }
         if ($left.Count -eq 0) { break }
         if ((Get-Date) -gt $deadline) {
@@ -220,6 +222,7 @@ function Uninstall-Product([string]$arguments) {
         }
         Start-Sleep -Milliseconds 500
     }
+    if (@(Get-UninstallEntries).Count -gt 0) { throw 'an uninstall entry SplitLane is still there' }
     Say "Uninstall SplitLane.exe $arguments ended (exit code 0) and its copy removed $product and the uninstall entry"
 }
 
