@@ -3,7 +3,10 @@
 // as a worker and starts it anew after a failure.
 package supervise
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 const (
 	Pause        = 5 * time.Second  // before a worker is started again
@@ -50,12 +53,21 @@ type Clock interface {
 	After(time.Duration) <-chan time.Time
 }
 
+// codeText is an exit code for the log: a crash code (NTSTATUS, 0x80000000 and up) in hex, any other in decimal.
+func codeText(code int) string {
+	if code >= 0x80000000 {
+		return fmt.Sprintf("0x%X", code)
+	}
+	return fmt.Sprint(code)
+}
+
 // Run starts the worker, waits for it and decides, until a final code or too many failures. It returns
-// the exit code of the supervisor: the worker's last code, or 5 when the worker cannot be started.
-func Run(start func() (Worker, error), c Clock, logf func(format string, args ...any)) int {
+// the exit code of the supervisor: the worker's last code, or 5 when the worker cannot be started. start
+// gets restarted=false for the first worker and true for every one after a failure.
+func Run(start func(restarted bool) (Worker, error), c Clock, logf func(format string, args ...any)) int {
 	var restarts []time.Time
 	for {
-		w, err := start()
+		w, err := start(len(restarts) > 0)
 		if err != nil {
 			logf("supervisor: cannot start the helper: %v", err)
 			return exitInternal
@@ -64,14 +76,17 @@ func Run(start func() (Worker, error), c Clock, logf func(format string, args ..
 		now := c.Now()
 		switch {
 		case Final(code):
-			logf("supervisor: the helper ended with code %d; not starting it again", code)
+			logf("supervisor: the helper ended with code %s; not starting it again", codeText(code))
 			return code
 		case !Decide(code, restarts, now):
-			logf("supervisor: the helper ended with code %d %d times within 10m; giving up", code, MaxRestarts)
+			logf("supervisor: the helper ended with code %s %d times within %s; giving up", codeText(code), MaxRestarts, windowText)
 			return code
 		}
 		restarts = append(within(restarts, now), now)
-		logf("supervisor: the helper ended with code %d; starting it again in %s (restart %d of %d in 10m)", code, Pause, len(restarts), MaxRestarts)
+		logf("supervisor: the helper ended with code %s; starting it again in %s (restart %d of %d in %s)", codeText(code), Pause, len(restarts), MaxRestarts, windowText)
 		<-c.After(Pause)
 	}
 }
+
+// windowText is Window as the log writes it.
+var windowText = fmt.Sprintf("%dm", int(Window/time.Minute))

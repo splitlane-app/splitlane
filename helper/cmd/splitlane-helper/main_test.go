@@ -193,11 +193,12 @@ func TestProductModeSupervisesItself(t *testing.T) {
 	exe := filepath.Join(prog, "splitlane-helper.exe")
 
 	var gotExe string
-	var gotArgs []string
+	var allArgs []string
 	var codes []int
 	old := startWorker
 	startWorker = func(exe string, args []string) (supervise.Worker, error) {
-		gotExe, gotArgs = exe, args
+		gotExe = exe
+		allArgs = append(allArgs, strings.Join(args, " "))
 		code := codes[0]
 		codes = codes[1:]
 		return endedWorker{code}, nil
@@ -210,8 +211,8 @@ func TestProductModeSupervisesItself(t *testing.T) {
 	if code := run(nil); code != exitRefused {
 		t.Fatalf("exit code %d", code)
 	}
-	if gotExe != exe || len(gotArgs) != 1 || gotArgs[0] != "--worker" {
-		t.Fatalf("the worker was started as %q %q", gotExe, gotArgs)
+	if gotExe != exe || len(allArgs) != 2 || allArgs[0] != "--worker" || allArgs[1] != "--worker --restarted" {
+		t.Fatalf("the worker was started as %q %q", gotExe, allArgs)
 	}
 	b, _ := os.ReadFile(logPath)
 	log := string(b)
@@ -226,26 +227,75 @@ func TestProductModeSupervisesItself(t *testing.T) {
 		t.Fatal("the supervisor rotated the log")
 	}
 
-	// No logs folder: the lines are skipped, the folder is not made.
+	// A refused place at the very first start: its code, no worker, and its line is in helper.log
+	// although there was no logs folder (the supervisor makes it, as the worker does).
 	os.RemoveAll(logs)
-	codes = []int{0}
-	if code := run(nil); code != exitOK {
-		t.Fatalf("no logs folder: exit code %d", code)
-	}
-	if _, err := os.Stat(logs); err == nil {
-		t.Fatal("the supervisor made the logs folder")
-	}
-
-	// A refused place: its code, no worker.
 	gotExe = ""
 	executable = func() (string, error) { return `C:\Users\u\Downloads\splitlane-helper.exe`, nil }
 	if code := run(nil); code != exitUsage || gotExe != "" {
 		t.Fatalf("a helper outside the program folder: exit code %d, worker %q", code, gotExe)
 	}
+	if !strings.Contains(helperLog(t, data), "the product runs only as") {
+		t.Fatalf("the refusal is not logged:\n%s", helperLog(t, data))
+	}
+	// The logs folder exists but helper.log does not: the first line makes the file.
+	os.Remove(logPath)
+	codes = []int{0}
 	executable = func() (string, error) { return exe, nil }
+	if code := run(nil); code != exitOK || !strings.Contains(helperLog(t, data), "not starting it again") {
+		t.Fatalf("no helper.log: exit code %d, log:\n%s", code, helperLog(t, data))
+	}
+	executable = func() (string, error) { return exe, nil }
+	gotExe = ""
 	os.Remove(filepath.Join(data, place.SetupFile))
 	if code := run(nil); code != exitNotInstalled || gotExe != "" {
 		t.Fatalf("no setup.json: exit code %d, worker %q", code, gotExe)
+	}
+}
+
+// --restarted is the supervisor's flag for a worker it starts after a failure: only with --worker.
+func TestRestartedNeedsWorker(t *testing.T) {
+	for _, args := range [][]string{{"--restarted"}, {"--dev", "--restarted", "--data-dir", `C:\d`, "--core", `C:\c\sing-box.exe`}} {
+		if _, err := parse(args); err == nil || !strings.Contains(err.Error(), "--restarted needs --worker") {
+			t.Errorf("%v: %v", args, err)
+		}
+		if code := run(args); code != exitUsage {
+			t.Errorf("run %v: exit code %d", args, code)
+		}
+	}
+	if o, err := parse([]string{"--worker", "--restarted"}); err != nil || !o.worker || !o.restarted {
+		t.Fatalf("%+v %v", o, err)
+	}
+}
+
+// The first worker rotates helper.log as ever; a restarted one appends, so that the lines of the
+// failure (and the supervisor's) are not rotated away by a crash loop.
+func TestRestartedWorkerKeepsTheLog(t *testing.T) {
+	prog, data := fakePlace(t)
+	if err := place.WriteSetup(data, place.Setup{UserSID: "S-1-5-21-1000-2000-3000-1001"}); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(prog, "sing-box.exe"), []byte("not the core"), 0o644) // the run ends at the core check
+	logs := filepath.Join(data, "logs")
+	os.MkdirAll(logs, 0o755)
+	logPath := filepath.Join(logs, "helper.log")
+
+	os.WriteFile(logPath, []byte("the failure\n"), 0o644)
+	if code := run([]string{"--worker", "--restarted"}); code != exitBadCore {
+		t.Fatalf("exit code %d", code)
+	}
+	if !strings.HasPrefix(helperLog(t, data), "the failure\n") || !strings.Contains(helperLog(t, data), "core refused") {
+		t.Fatalf("log:\n%s", helperLog(t, data))
+	}
+	if _, err := os.Stat(logPath + ".prev"); err == nil {
+		t.Fatal("a restarted worker rotated the log")
+	}
+
+	if code := run([]string{"--worker"}); code != exitBadCore {
+		t.Fatalf("exit code %d", code)
+	}
+	if b, _ := os.ReadFile(logPath + ".prev"); !strings.HasPrefix(string(b), "the failure\n") || strings.HasPrefix(helperLog(t, data), "the failure") {
+		t.Fatalf("the first worker must rotate: prev %q, log:\n%s", b, helperLog(t, data))
 	}
 }
 

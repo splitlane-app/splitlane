@@ -32,6 +32,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -84,7 +85,7 @@ var (
 // The supervisor (spec 4): startWorker runs this exe with the arguments, superviseClock paces the
 // restarts; the tests replace both, so that no test starts a process or waits.
 var (
-	startWorker    = startWorkerProcess
+	startWorker                    = startWorkerProcess
 	superviseClock supervise.Clock = realClock{}
 )
 
@@ -112,6 +113,7 @@ type options struct {
 	pipe         string
 	devPin       bool
 	worker       bool
+	restarted    bool
 	coreLogLevel string
 }
 
@@ -122,6 +124,7 @@ func parse(args []string) (options, error) {
 	fs.BoolVar(&o.dev, "dev", false, "development mode: the paths below; without it the helper is the product")
 	fs.StringVar(&o.dataDir, "data-dir", "", "development only: data folder (absolute)")
 	fs.BoolVar(&o.worker, "worker", false, "product only: run as the worker the supervisor starts")
+	fs.BoolVar(&o.restarted, "restarted", false, "internal: the supervisor started this worker after a failure; it keeps helper.log")
 	fs.StringVar(&o.core, "core", "", "development only: full path of sing-box.exe 1.14.4")
 	fs.StringVar(&o.pipe, "pipe", pipe.DefaultName, "development only: pipe name")
 	fs.BoolVar(&o.devPin, "dev-pin", false, "development only: keep the AI assistant's programs on the VPN lane")
@@ -134,6 +137,8 @@ func parse(args []string) (options, error) {
 	switch {
 	case o.worker && o.dev:
 		return o, fmt.Errorf("--worker needs the product: it cannot go with --dev, which has no supervisor")
+	case o.restarted && !o.worker:
+		return o, fmt.Errorf("--restarted needs --worker: only the supervisor passes it, to a worker")
 	case given["core-log-level"] && !o.dev:
 		return o, fmt.Errorf("--core-log-level needs --dev: the product always writes the core log at level info")
 	case given["dev-pin"] && !o.dev:
@@ -185,12 +190,18 @@ func run(args []string) int {
 		return exitUsage
 	}
 	logPath := filepath.Join(paths.LogsDir, "helper.log")
-	_ = os.Rename(logPath, logPath+".prev")
+	if !o.restarted { // a worker the supervisor restarts appends: the lines of the failure stay (spec 4)
+		_ = os.Rename(logPath, logPath+".prev")
+	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return exitUsage
 	}
 	defer logFile.Close()
+	// A panic trace goes to helper.log, not to NUL (the worker has no console).
+	if debug.SetCrashOutput(logFile, debug.CrashOptions{}) == nil {
+		defer debug.SetCrashOutput(nil, debug.CrashOptions{})
+	}
 	logger := log.New(logFile, "", log.LstdFlags|log.Lmicroseconds)
 	logf := func(format string, a ...any) { logger.Printf(format, a...) }
 	logf("splitlane-helper %s starting, dev=%v dev-pin=%v core-log-level=%s", version, o.dev, o.devPin, o.coreLogLevel)
@@ -288,11 +299,11 @@ func run(args []string) int {
 }
 
 // appendWriter writes every line to the end of the file at path: it opens the file for the line and closes
-// it at once, so that nothing stays open; a file that cannot be opened (no logs folder) skips the line.
+// it at once, so that nothing stays open; a file that cannot be made (no logs folder) skips the line.
 type appendWriter struct{ path string }
 
 func (w appendWriter) Write(p []byte) (int, error) {
-	f, err := os.OpenFile(w.path, os.O_APPEND|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return len(p), nil
 	}
@@ -313,6 +324,10 @@ func supervisor() int {
 	if fi, err := os.Stat(dataDir); err != nil || !fi.IsDir() {
 		return exitNotInstalled
 	}
+	// The worker makes this folder too; without it a refusal of the very first start would be lost.
+	if err := os.MkdirAll(coreconfig.PathsFor(dataDir).LogsDir, 0o755); err != nil {
+		return exitUsage
+	}
 	logger := log.New(appendWriter{filepath.Join(coreconfig.PathsFor(dataDir).LogsDir, "helper.log")}, "", log.LstdFlags|log.Lmicroseconds)
 	logf := func(format string, a ...any) { logger.Printf(format, a...) }
 	helperPath, err := executable()
@@ -323,8 +338,12 @@ func supervisor() int {
 	if _, _, code := productPlace(helperPath, dataDir, logf); code != exitOK {
 		return code
 	}
-	return supervise.Run(func() (supervise.Worker, error) {
-		return startWorker(helperPath, []string{"--worker"})
+	return supervise.Run(func(restarted bool) (supervise.Worker, error) {
+		args := []string{"--worker"}
+		if restarted {
+			args = append(args, "--restarted")
+		}
+		return startWorker(helperPath, args)
 	}, superviseClock, logf)
 }
 

@@ -32,12 +32,14 @@ type script struct {
 	codes  []int
 	starts int
 	err    error
+	again  []bool // the restarted argument of every start
 }
 
-func (s *script) start() (Worker, error) {
+func (s *script) start(restarted bool) (Worker, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
+	s.again = append(s.again, restarted)
 	s.starts++
 	return fakeWorker{s.codes[s.starts-1]}, nil
 }
@@ -99,6 +101,9 @@ func TestRunRestartsAfterAFailureAndPause(t *testing.T) {
 	if len(c.pauses) != 1 || c.pauses[0] != 5*time.Second {
 		t.Fatalf("pauses %v", c.pauses)
 	}
+	if len(s.again) != 2 || s.again[0] || !s.again[1] {
+		t.Fatalf("restarted flags %v: only a start after a failure is a restart", s.again)
+	}
 }
 
 func TestRunStopsAfterThreeRestartsInTenMinutes(t *testing.T) {
@@ -111,12 +116,12 @@ func TestRunStopsAfterThreeRestartsInTenMinutes(t *testing.T) {
 
 func TestRunLogsEveryDecision(t *testing.T) {
 	l := &lines{}
-	Run((&script{codes: []int{2, 2, 2, 2}}).start, newClock(), l.logf)
+	Run((&script{codes: []int{2, 2, 2, 0xC0000005}}).start, newClock(), l.logf)
 	want := []string{
 		"supervisor: the helper ended with code 2; starting it again in 5s (restart 1 of 3 in 10m)",
 		"supervisor: the helper ended with code 2; starting it again in 5s (restart 2 of 3 in 10m)",
 		"supervisor: the helper ended with code 2; starting it again in 5s (restart 3 of 3 in 10m)",
-		"supervisor: the helper ended with code 2 3 times within 10m; giving up",
+		"supervisor: the helper ended with code 0xC0000005 3 times within 10m; giving up",
 	}
 	if strings.Join(l.got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("log:\n%s", strings.Join(l.got, "\n"))

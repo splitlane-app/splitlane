@@ -20,7 +20,7 @@ type fakeSystem struct {
 	exitIP         string
 	ignoreSet      int // so many SetExitNode calls change nothing
 	helpers        int
-	workers        int              // of the helpers, so many are worker copies (their parent is a helper)
+	workers        int // of the helpers, so many are worker copies (their parent is a helper)
 	cores          int
 	adapter        bool
 	launchErr      error
@@ -452,6 +452,22 @@ func TestKillWorkerCommand(t *testing.T) {
 	}
 	if !strings.HasPrefix(sys.list(), "kill splitlane-helper.exe children of 2") {
 		t.Fatalf("the supervisor must not be killed by name first: %s", sys.list())
+	}
+}
+
+// The real rule of kill-worker: of the helper processes only those whose parent is a helper, so a
+// supervisor, its worker and an orphan whose parent is not a helper give just the worker.
+func TestWorkersAreHelpersOfHelpers(t *testing.T) {
+	ps := []proc{
+		{pid: 10, parent: 1, image: "scheduler.exe"},
+		{pid: 20, parent: 10, image: HelperImage}, // the supervisor
+		{pid: 30, parent: 20, image: HelperImage}, // its worker
+		{pid: 40, parent: 99, image: HelperImage}, // an orphan: its parent is gone or not a helper
+		{pid: 50, parent: 30, image: CoreImage},   // the core is not a helper
+	}
+	got := childrenOf(ps, withImage(ps, HelperImage), HelperImage)
+	if len(got) != 1 || got[0] != 30 {
+		t.Fatalf("workers %v", got)
 	}
 }
 
