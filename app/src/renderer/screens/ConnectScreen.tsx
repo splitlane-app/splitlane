@@ -3,6 +3,7 @@ import type { Command } from '../../shared/ipc'
 import type { ExitNode, HelperState } from '../../shared/protocol'
 import type { WindowSettings } from '../../shared/settings'
 import { Banner } from '../components/Banner'
+import { UpdateBanner } from '../components/UpdateBanner'
 import { ScreenFrame } from '../components/ScreenFrame'
 import { Toggle } from '../components/Toggle'
 import { t } from '../i18n/t'
@@ -109,6 +110,7 @@ export function ConnectScreen(): React.JSX.Element | null {
   return (
     <ScreenFrame title={t('connect.title')} wide>
       <Banner withoutOff />
+      <UpdateBanner />
       <p className={styles.lead}>{t('connect.lead')}</p>
       <ul className={styles.tiles} aria-label={t('connect.methods')}>
         <li className={styles.tile} data-active="true">

@@ -128,10 +128,11 @@ export function runInstallerScript(exe: string): string {
 }
 
 /** powershell.exe's exit code of runInstallerScript as the result of runInstaller. */
-export function installerOutcome(code: number): 'started' | 'cancelled' | { error: string } {
+export function installerOutcome(code: number, stderr = ''): 'started' | 'cancelled' | { error: string } {
   if (code === 0) return 'started'
   if (code === UAC_CANCELLED) return 'cancelled'
-  return { error: `powershell exit ${code}` }
+  const first = stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l !== '') ?? ''
+  return { error: first === '' ? `powershell exit ${code}` : first.slice(0, 300) }
 }
 
 export class Updater {

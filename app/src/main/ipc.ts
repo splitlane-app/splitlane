@@ -345,8 +345,12 @@ export function registerIpc(d: IpcDeps): void {
   on(IPC.saveDiagnostics, () => d.saveDiagnostics())
   on(IPC.quit, () => d.quit())
   // no argument of the page is read: the buttons carry none
-  on(IPC.checkUpdates, () => d.checkUpdates())
-  on(IPC.installUpdate, () => d.installUpdate())
+  // a check or a download runs on its own: the answer comes at once, so that «Отменить» stays pressable
+  const detached = (name: string, op: () => Promise<void>): void => {
+    op().catch((e: unknown) => d.log(`ipc: ${name}: ${errText(e)}`))
+  }
+  on(IPC.checkUpdates, () => detached('checkUpdates', () => d.checkUpdates()))
+  on(IPC.installUpdate, () => detached('installUpdate', () => d.installUpdate()))
   on(IPC.cancelUpdate, () => {
     d.cancelUpdate()
   })

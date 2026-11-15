@@ -122,3 +122,49 @@ test('hopWith aborts the request when the body is dropped early', async () => {
   await it.return?.()
   expect(req.aborted).toBe(1)
 })
+
+test('dropped before reading aborts the request', async () => {
+  const req = new FakeRequest()
+  const p = hopWith(asRequest(req), 'ua', new AbortController().signal)
+  req.emit('response', response(['a']))
+  const r = await p
+  await r.body![Symbol.asyncIterator]().return?.()
+  expect(req.aborted).toBe(1)
+  // a second drop does not abort again
+  await r.body![Symbol.asyncIterator]().return?.()
+  expect(req.aborted).toBe(1)
+})
+
+test('a body read to its end does not abort the request', async () => {
+  const req = new FakeRequest()
+  const p = hopWith(asRequest(req), 'ua', new AbortController().signal)
+  req.emit('response', response(['a']))
+  const r = await p
+  await drain(r.body!)
+  await r.body![Symbol.asyncIterator]().return?.()
+  expect(req.aborted).toBe(0)
+})
+
+test('a response error after drop is not thrown', async () => {
+  const req = new FakeRequest()
+  const p = hopWith(asRequest(req), 'ua', new AbortController().signal)
+  const stream = new Readable({ read() {} })
+  req.emit('response', Object.assign(stream, { statusCode: 200, headers: {} }))
+  const r = await p
+  await r.body![Symbol.asyncIterator]().return?.()
+  stream.destroy(new Error('socket hang up'))
+  await new Promise((res) => setTimeout(res, 10))
+  expect(req.aborted).toBe(1)
+})
+
+test('a response error before the next read is thrown by it', async () => {
+  const req = new FakeRequest()
+  const p = hopWith(asRequest(req), 'ua', new AbortController().signal)
+  const stream = new Readable({ read() {} })
+  req.emit('response', Object.assign(stream, { statusCode: 200, headers: {} }))
+  const r = await p
+  stream.destroy(new Error('socket hang up'))
+  await new Promise((res) => setTimeout(res, 10))
+  await expect(r.body![Symbol.asyncIterator]().next()).rejects.toThrow('socket hang up')
+  expect(req.aborted).toBe(1)
+})

@@ -77,3 +77,16 @@ test('UpdateBanner survives a rejecting bridge', async () => {
   expect(installUpdate).toHaveBeenCalledTimes(1)
   expect(screen.getByText('Доступна версия 1.2.0')).toBeTruthy()
 })
+
+test('Cancel stays pressable while the install request is still pending', async () => {
+  const cancelUpdate = vi.fn(async () => {})
+  const { bridge } = fakeBridge({ installUpdate: () => new Promise<void>(() => {}), cancelUpdate })
+  const services = servicesFor(bridge, withUpdate({ kind: 'available', version: '1.2.0', notesUrl: N, hidden: false }))
+  renderWith(<UpdateBanner />, services)
+  await click('Обновить')
+  act(() => services.store.getState().setSnapshot(withUpdate({ kind: 'downloading', version: '1.2.0', notesUrl: N, percent: 1 })))
+  const cancel = screen.getByRole('button', { name: 'Отменить' }) as HTMLButtonElement
+  expect(cancel.disabled).toBe(false)
+  await click('Отменить')
+  expect(cancelUpdate).toHaveBeenCalledTimes(1)
+})

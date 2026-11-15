@@ -370,7 +370,9 @@ function createUpdater(): Updater {
     // the elevated installer is not waited for: powershell exits once the prompt is answered
     runInstaller: async (exe) => {
       const r = await execText()(tools.powershell, encodePowerShell(runInstallerScript(exe)))
-      return installerOutcome(r.code)
+      const outcome = installerOutcome(r.code, r.stderr)
+      if (typeof outcome === 'object') log(`update: the installer did not start: ${outcome.error}`)
+      return outcome
     },
     settings: {
       get: () => settings,

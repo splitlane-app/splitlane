@@ -356,17 +356,38 @@ describe('check', () => {
     expect(hits.filter((h) => h === API)).toHaveLength(1)
     expect(r.u.state()).toEqual({ kind: 'upToDate' })
 
-    // a failure of the promoted check shows its reason
+    // a failure of the promoted check shows its reason (a fresh gate: the promotion happens while it is held)
+    let release2!: () => void
+    const gate2 = new Promise<void>((res) => (release2 = res))
     routes[API] = async (_q, res) => {
-      await gate
+      await gate2
       res.writeHead(500).end('x')
     }
     r.u.dismiss()
     const auto2 = r.u.check(false)
     await vi.waitFor(() => expect(hits.filter((h) => h === API)).toHaveLength(2))
+    expect(r.u.state()).toEqual({ kind: 'idle' })
     const manual2 = r.u.check(true)
+    expect(r.u.state()).toEqual({ kind: 'checking', manual: true })
+    release2()
     await Promise.all([auto2, manual2])
     expect(r.u.state()).toEqual({ kind: 'checkFailed', reason: 'HTTP 500' })
+
+    // a promoted check that finds a release ends available, even for a version seen before
+    let release3!: () => void
+    const gate3 = new Promise<void>((res) => (release3 = res))
+    routes[API] = async (_q, res) => {
+      await gate3
+      res.writeHead(200).end(JSON.stringify(releaseJson(feed)))
+    }
+    r.u.dismiss()
+    const auto3 = r.u.check(false)
+    await vi.waitFor(() => expect(hits.filter((h) => h === API)).toHaveLength(3))
+    const manual3 = r.u.check(true)
+    expect(r.u.state()).toEqual({ kind: 'checking', manual: true })
+    release3()
+    await Promise.all([auto3, manual3])
+    expect(r.u.state()).toMatchObject({ kind: 'available', version: '9.9.9', hidden: false })
   })
 
   it('a check refuses an answer over 1 MB', async () => {
@@ -868,5 +889,9 @@ describe('installerOutcome', () => {
     expect(installerOutcome(1223)).toBe('cancelled')
     expect(installerOutcome(1)).toEqual({ error: 'powershell exit 1' })
     expect(installerOutcome(-1)).toEqual({ error: 'powershell exit -1' })
+    expect(installerOutcome(1, '\r\n  The file is blocked \r\nsecond line')).toEqual({ error: 'The file is blocked' })
+    expect(installerOutcome(1, 'x'.repeat(500))).toEqual({ error: 'x'.repeat(300) })
+    expect(installerOutcome(1, '  \r\n')).toEqual({ error: 'powershell exit 1' })
+    expect(installerOutcome(0, 'warning')).toBe('started')
   })
 })

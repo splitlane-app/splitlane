@@ -14,6 +14,7 @@ export interface RequestLike {
 export interface ResponseLike extends AsyncIterable<Uint8Array> {
   statusCode: number
   headers: Record<string, string | string[] | undefined>
+  on(event: 'error', cb: (err: Error) => void): unknown
 }
 
 function headerNumber(v: string | string[] | undefined): number | null {
@@ -29,7 +30,6 @@ function headerNumber(v: string | string[] | undefined): number | null {
 export function hopWith(req: RequestLike, userAgent: string, signal: AbortSignal): Promise<HopResponse> {
   return new Promise<HopResponse>((resolve, reject) => {
     let settled = false
-    let bodyDone = false
     const fail = (e: Error): void => {
       if (settled) return
       settled = true
@@ -57,33 +57,63 @@ export function hopWith(req: RequestLike, userAgent: string, signal: AbortSignal
     req.on('response', (res) => {
       if (settled) return
       settled = true
-      async function* body(): AsyncGenerator<Uint8Array> {
-        const it = res[Symbol.asyncIterator]()
-        const aborted = new Promise<never>((_resolve, rej) => {
-          if (signal.aborted) rej(new Error('aborted'))
-          signal.addEventListener('abort', () => rej(new Error('aborted')), { once: true })
-        })
-        aborted.catch(() => undefined)
-        try {
-          for (;;) {
+      const it = res[Symbol.asyncIterator]()
+      let finished = false
+      let failure: Error | null = null
+      const rejectAbort: { fn: (e: Error) => void } = { fn: () => undefined }
+      const aborted = new Promise<never>((_resolve, rej) => {
+        rejectAbort.fn = rej
+      })
+      aborted.catch(() => undefined)
+      const onBodyAbort = (): void => rejectAbort.fn(new Error('aborted'))
+      signal.addEventListener('abort', onBodyAbort, { once: true })
+      // an error of the stream is kept for the next read; after a drop nobody reads it and nothing is thrown
+      res.on('error', (e) => {
+        failure = e
+      })
+      /** Ends the body; a body that did not run to its end aborts the request, read or not. */
+      const finish = (abort: boolean): void => {
+        if (finished) return
+        finished = true
+        signal.removeEventListener('abort', onAbort)
+        signal.removeEventListener('abort', onBodyAbort)
+        if (abort) {
+          req.abort()
+          void Promise.resolve(it.return?.()).catch(() => undefined)
+        }
+      }
+      const iterator: AsyncIterableIterator<Uint8Array> = {
+        [Symbol.asyncIterator]: () => iterator,
+        async next() {
+          if (finished) return { done: true, value: undefined }
+          if (failure !== null) {
+            const e = failure
+            finish(true)
+            throw e
+          }
+          try {
             // a stream of an aborted request may never end by itself: the abort wins the race
             const r = await Promise.race([it.next(), aborted])
-            if (r.done) break
-            yield r.value
+            if (r.done) finish(false)
+            return r
+          } catch (e) {
+            finish(true)
+            throw e
           }
-          bodyDone = true
-        } finally {
-          signal.removeEventListener('abort', onAbort)
-          if (!bodyDone) {
-            req.abort()
-            void Promise.resolve(it.return?.()).catch(() => undefined)
-          }
+        },
+        return() {
+          finish(true)
+          return Promise.resolve({ done: true, value: undefined })
+        },
+        throw(e: unknown) {
+          finish(true)
+          return Promise.reject(e instanceof Error ? e : new Error(String(e)))
         }
       }
       resolve({
         status: res.statusCode,
         location: null,
-        body: body(),
+        body: iterator,
         contentLength: headerNumber(res.headers['content-length'])
       })
     })

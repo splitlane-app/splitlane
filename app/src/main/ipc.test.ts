@@ -495,3 +495,15 @@ test('the update requests reach the updater without arguments', async () => {
   await expect(h.invokeFrom({ id: 'other' }, IPC.installUpdate)).rejects.toThrow()
   expect(h.d.installUpdate).toHaveBeenCalledTimes(1)
 })
+
+test('checkUpdates and installUpdate answer before the operation ends', async () => {
+  const h = ipcHarness()
+  h.d.installUpdate.mockImplementation(() => new Promise<void>(() => {}))
+  h.d.checkUpdates.mockImplementation(() => new Promise<void>(() => {}))
+  await expect(h.invoke(IPC.installUpdate)).resolves.toBeUndefined()
+  await expect(h.invoke(IPC.checkUpdates)).resolves.toBeUndefined()
+  h.d.installUpdate.mockRejectedValueOnce(new Error('boom'))
+  await expect(h.invoke(IPC.installUpdate)).resolves.toBeUndefined()
+  await Promise.resolve()
+  expect(h.d.log).toHaveBeenCalledWith('ipc: installUpdate: boom')
+})

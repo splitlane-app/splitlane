@@ -29,6 +29,11 @@ export function UpdateBanner(): React.JSX.Element | null {
     }
   }
   const run = async (action: UpdateAction): Promise<void> => {
+    // the main process answers at once, but the banner never holds its buttons for a download: «Отменить» must work
+    if (action === 'install' || action === 'retry' || action === 'cancel') {
+      perform(action).catch(() => {})
+      return
+    }
     setBusy(true)
     try {
       await perform(action)
