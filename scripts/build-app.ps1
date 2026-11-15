@@ -1,5 +1,6 @@
 # SplitLane: build the unpacked, unsigned Windows build of the window into app\release\win-unpacked, with
-# the six files of dist\helper as resources\helper. Stops on the first failure.
+# the six files of dist\helper in helper\ next to SplitLane.exe, as the installer lays them out (spec 2 of
+# stage 2). For development; scripts\build-installer.ps1 builds the installer. Stops on the first failure.
 # ASCII only: Windows PowerShell 5.1 reads a script without BOM in the ANSI code page.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-app.ps1
 # Result: last line BUILD-OK app\release\win-unpacked or BUILD-FAILED <reason>.
@@ -27,7 +28,7 @@ try {
     } finally {
         Pop-Location
     }
-    $dir = Join-Path $app 'release\win-unpacked\resources\helper'
+    $dir = Join-Path $app 'release\win-unpacked\helper'
     foreach ($f in 'splitlane-helper.exe', 'sing-box.exe', 'libcronet.dll', 'sing-box-LICENSE', 'LICENSE', 'THIRD-PARTY.md') {
         if (-not (Test-Path -LiteralPath (Join-Path $dir $f))) { throw "missing $f in $dir" }
     }

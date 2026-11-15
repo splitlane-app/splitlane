@@ -48,6 +48,11 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
+## Установщик
+
+- NSIS (Nullsoft Scriptable Install System) 3.04 в сборке electron-builder (`nsis-3.0.4.1`, модули `nsis-resources-3.4.1`): из него собраны установщик `SplitLane-Setup-<версия>.exe` и деинсталлятор `Uninstall SplitLane.exe`, его заглушка входит в оба файла. Лицензия zlib/libpng; отдельные части — свои лицензии, перечень: https://nsis.sourceforge.io/License
+- Сценарии NSIS electron-builder (`app-builder-lib` 26.18.0, каталог `templates/nsis`), по которым собран установщик вместе с `app/build/installer.nsh`: лицензия MIT, https://github.com/electron-userland/electron-builder
+
 ## Модули Go служебного процесса
 
 - `golang.org/x/sys` v0.49.0 — лицензия BSD-3-Clause, https://cs.opensource.google/go/x/sys

@@ -2,11 +2,33 @@ appId: app.splitlane.window
 productName: SplitLane
 directories:
   output: release
+  buildResources: build
 files:
   - out/**
-extraResources:
+# the six files of the helper next to the window, in <ProductDir>\helper (spec 2 of stage 2)
+extraFiles:
   - from: ../dist/helper
     to: helper
 win:
-  target: dir
-  signAndEditExecutable: false
+  target: nsis
+  icon: build/icon.ico
+nsis:
+  oneClick: false
+  perMachine: true
+  allowToChangeInstallationDirectory: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  installerLanguages:
+    - ru_RU
+  language: "1049"
+  include: build/installer.nsh
+  artifactName: SplitLane-Setup-${version}.${ext}
+  uninstallDisplayName: SplitLane
+# the window cannot be started as Node.js with code of one's own (spec 5 of stage 2)
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
