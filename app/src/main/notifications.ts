@@ -20,17 +20,25 @@ export interface Watched {
   update: UpdateState
   /** The last version a notification was shown for (the window's settings). */
   notifiedVersion: string | null
+  /** AutoEnable is still retrying the start-up enable: its failed attempts are not news. */
+  retrying: boolean
 }
 
-export function watchedOf(state: HelperState | null, update: UpdateState, notifiedVersion: string | null): Watched | null {
+export function watchedOf(
+  state: HelperState | null,
+  update: UpdateState,
+  notifiedVersion: string | null,
+  retrying: boolean
+): Watched | null {
   if (state === null) return null
-  return { phase: state.phase, reason: state.reason?.code ?? null, update, notifiedVersion }
+  return { phase: state.phase, reason: state.reason?.code ?? null, update, notifiedVersion, retrying }
 }
 
 /** The conditions that are in force in a state (an update is not one: it is told per version, see below). */
 function conditions(s: Watched): Set<NoticeKind> {
   const c = new Set<NoticeKind>()
-  if (s.phase === 'error') c.add('error')
+  // the failed attempts of the start-up retries (no network yet) are not told one by one: only the give-up is
+  if (s.phase === 'error' && !(s.retrying && s.reason === 'no_default_route')) c.add('error')
   if (s.phase === 'blocked') c.add('blocked')
   if (s.phase === 'degraded' && s.reason === 'vpn_unreachable') c.add('vpnDown')
   if (s.phase === 'degraded' && s.reason === 'login_expired') c.add('loginExpired')
@@ -56,12 +64,26 @@ export function notificationsFor(prev: Watched | null, next: Watched): Notice[] 
   return out
 }
 
-/** Notifications are for a hidden window only (a visible one has its banners), when the setting is on. */
+/**
+ * Notifications are for a hidden window only (a visible one has its banners), when the setting is on. A window that
+ * is about to be shown (a normal start, before ready-to-show) counts as visible.
+ */
 export function shouldShow(
   notices: Notice[],
-  ctx: { enabled: boolean; windowHidden: boolean; supported: boolean }
+  ctx: { enabled: boolean; windowHidden: boolean; windowOpening: boolean; supported: boolean }
 ): Notice[] {
-  return ctx.enabled && ctx.windowHidden && ctx.supported ? notices : []
+  return ctx.enabled && ctx.windowHidden && !ctx.windowOpening && ctx.supported ? notices : []
+}
+
+/** The quiet period of a kind after its toast: a condition that flaps does not flood the tray. */
+export const QUIET_MS = 10 * 60_000
+
+/** Drops the notices of a kind shown less than QUIET_MS ago; an update is told once per version already. */
+export function quiet(notices: Notice[], lastShown: Partial<Record<NoticeKind, number>>, now: number): Notice[] {
+  return notices.filter((n) => {
+    const at = lastShown[n.kind]
+    return n.kind === 'update' || at === undefined || now - at > QUIET_MS
+  })
 }
 
 const TITLE: Record<Exclude<NoticeKind, 'update'>, 'notifyErrorTitle' | 'notifyVpnDownTitle' | 'notifyBlockedTitle' | 'notifyLoginTitle'> = {

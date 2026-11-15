@@ -1,14 +1,20 @@
 import { describe, expect, test } from 'vitest'
 import type { Phase, ReasonCode } from '../shared/protocol'
 import type { UpdateState } from '../shared/update'
-import { noticeText, notificationsFor, shouldShow, watchedOf, type Notice, type Watched } from './notifications'
+import { noticeText, notificationsFor, quiet, shouldShow, watchedOf, type Notice, type Watched } from './notifications'
 
 const N = 'https://github.com/splitlane-app/splitlane/releases/tag/v1.2.0'
 const idle: UpdateState = { kind: 'idle' }
 const avail = (version: string, hidden = false): UpdateState => ({ kind: 'available', version, notesUrl: N, hidden })
 
-function w(phase: Phase, reason: ReasonCode | null = null, update: UpdateState = idle, notifiedVersion: string | null = null): Watched {
-  return { phase, reason, update, notifiedVersion }
+function w(
+  phase: Phase,
+  reason: ReasonCode | null = null,
+  update: UpdateState = idle,
+  notifiedVersion: string | null = null,
+  retrying = false
+): Watched {
+  return { phase, reason, update, notifiedVersion, retrying }
 }
 const kinds = (n: Notice[]): string[] => n.map((x) => x.kind)
 
@@ -72,18 +78,35 @@ describe('notificationsFor: the transition table', () => {
   })
 })
 
+describe('the login burst of the start-up retries', () => {
+  const retry = (): Watched => w('error', 'no_default_route', idle, null, true)
+  test('no toast per failed attempt while AutoEnable retries; one when it gives up', () => {
+    expect(notificationsFor(w('off', null, idle, null, true), retry())).toEqual([])
+    expect(notificationsFor(retry(), w('starting', null, idle, null, true))).toEqual([])
+    expect(notificationsFor(w('starting', null, idle, null, true), retry())).toEqual([])
+    // gave up in the same event: retrying is false, the error is in force
+    expect(kinds(notificationsFor(retry(), w('error', 'no_default_route')))).toEqual(['error'])
+    // and not again while it lasts
+    expect(notificationsFor(w('error', 'no_default_route'), w('error', 'no_default_route'))).toEqual([])
+  })
+  test('only the no_default_route error is held back while retrying', () => {
+    expect(kinds(notificationsFor(w('on', null, idle, null, true), w('error', 'ip_forwarding', idle, null, true)))).toEqual(['error'])
+  })
+})
+
 describe('watchedOf', () => {
   test('is null without a state, else the small part of it', () => {
-    expect(watchedOf(null, idle, null)).toBeNull()
+    expect(watchedOf(null, idle, null, false)).toBeNull()
     const state = { phase: 'degraded', reason: { code: 'login_expired', params: {} } } as never
-    expect(watchedOf(state, idle, '1.0.0')).toEqual(w('degraded', 'login_expired', idle, '1.0.0'))
-    expect(watchedOf({ phase: 'on', reason: null } as never, idle, null)).toEqual(w('on'))
+    expect(watchedOf(state, idle, '1.0.0', false)).toEqual(w('degraded', 'login_expired', idle, '1.0.0'))
+    expect(watchedOf({ phase: 'on', reason: null } as never, idle, null, false)).toEqual(w('on'))
+    expect(watchedOf({ phase: 'on', reason: null } as never, idle, null, true)).toEqual(w('on', null, idle, null, true))
   })
 })
 
 describe('shouldShow', () => {
   const list: Notice[] = [{ kind: 'error' }]
-  const on = { enabled: true, windowHidden: true, supported: true }
+  const on = { enabled: true, windowHidden: true, windowOpening: false, supported: true }
   test('only while the window is hidden, the setting is on and Windows supports it', () => {
     expect(shouldShow(list, on)).toEqual(list)
     expect(shouldShow(list, { ...on, windowHidden: false })).toEqual([])
@@ -91,28 +114,61 @@ describe('shouldShow', () => {
     expect(shouldShow(list, { ...on, supported: false })).toEqual([])
     expect(shouldShow([], on)).toEqual([])
   })
+  test('a window that is about to be shown counts as visible', () => {
+    expect(shouldShow(list, { ...on, windowOpening: true })).toEqual([])
+  })
+})
+
+describe('quiet', () => {
+  const err: Notice[] = [{ kind: 'error' }]
+  test('a kind stays quiet for 10 minutes after its toast; updates are exempt', () => {
+    expect(quiet(err, {}, 0)).toEqual(err)
+    expect(quiet(err, { error: 0 }, 80_000)).toEqual([])
+    expect(quiet(err, { error: 0 }, 600_000)).toEqual([])
+    expect(quiet(err, { error: 0 }, 601_000)).toEqual(err)
+    // another kind is not held by it
+    expect(quiet([{ kind: 'blocked' }], { error: 0 }, 1000)).toEqual([{ kind: 'blocked' }])
+    const up: Notice[] = [{ kind: 'update', version: '1.2.0' }]
+    expect(quiet(up, { update: 0 }, 1000)).toEqual(up)
+  })
 })
 
 describe('noticeText', () => {
-  test('texts per language', () => {
-    expect(noticeText('ru', { kind: 'error' })).toEqual({
-      title: 'SplitLane: деление остановлено',
-      body: 'Откройте SplitLane, чтобы узнать причину'
-    })
-    expect(noticeText('en', { kind: 'error' })).toEqual({
-      title: 'SplitLane: split routing stopped',
-      body: 'Open SplitLane to see why'
-    })
-    expect(noticeText('en', { kind: 'vpnDown' }).title).toBe("SplitLane: can't reach the VPN server")
-    expect(noticeText('ru', { kind: 'vpnDown' }).title).toBe('SplitLane: нет связи с VPN-сервером')
-    expect(noticeText('en', { kind: 'blocked' }).title).toBe('SplitLane: Tailscale turned its exit node back on')
-    expect(noticeText('ru', { kind: 'blocked' }).body).toBe('Деление на паузе. Откройте SplitLane, чтобы выбрать, что делать')
-    expect(noticeText('en', { kind: 'loginExpired' }).title).toBe('SplitLane: log in to Tailscale again')
-    expect(noticeText('ru', { kind: 'loginExpired' }).title).toBe('SplitLane: войдите в Tailscale снова')
-    expect(noticeText('ru', { kind: 'update', version: '1.2.0' })).toEqual({
-      title: 'SplitLane: доступна версия 1.2.0',
-      body: 'Нажмите, чтобы открыть SplitLane и обновить'
-    })
-    expect(noticeText('en', { kind: 'update', version: '1.2.0' }).title).toBe('SplitLane: version 1.2.0 is available')
+  test('every kind in both languages', () => {
+    const table: [Notice, string, string, string, string][] = [
+      [{ kind: 'error' }, 'SplitLane: деление остановлено', 'Откройте SplitLane, чтобы узнать причину', 'SplitLane: split routing stopped', 'Open SplitLane to see why'],
+      [
+        { kind: 'vpnDown' },
+        'SplitLane: нет связи с VPN-сервером',
+        'Программы дорожки VPN без интернета, пока связь не вернётся',
+        "SplitLane: can't reach the VPN server",
+        'Programs in the VPN lane have no internet until the connection is back'
+      ],
+      [
+        { kind: 'blocked' },
+        'SplitLane: Tailscale снова включил exit node',
+        'Деление на паузе. Откройте SplitLane, чтобы выбрать, что делать',
+        'SplitLane: Tailscale turned its exit node back on',
+        'Split routing is paused. Open SplitLane to choose what to do'
+      ],
+      [
+        { kind: 'loginExpired' },
+        'SplitLane: войдите в Tailscale снова',
+        'Откройте SplitLane, чтобы войти',
+        'SplitLane: log in to Tailscale again',
+        'Open SplitLane to log in'
+      ],
+      [
+        { kind: 'update', version: '1.2.0' },
+        'SplitLane: доступна версия 1.2.0',
+        'Нажмите, чтобы открыть SplitLane и обновить',
+        'SplitLane: version 1.2.0 is available',
+        'Click to open SplitLane and update'
+      ]
+    ]
+    for (const [n, ruTitle, ruBody, enTitle, enBody] of table) {
+      expect(noticeText('ru', n), n.kind).toEqual({ title: ruTitle, body: ruBody })
+      expect(noticeText('en', n), n.kind).toEqual({ title: enTitle, body: enBody })
+    }
   })
 })

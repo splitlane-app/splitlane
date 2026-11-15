@@ -90,4 +90,27 @@ describe('AutoEnable', () => {
     s.a.onState(st('error', 'no_default_route'))
     expect(s.timers()).toBe(1)
   })
+
+  it('retrying() is true from the start-up attempt until success, a stop or the give-up', () => {
+    const s = setup()
+    expect(s.a.retrying()).toBe(false)
+    s.a.onReady(st('off'), false)
+    expect(s.a.retrying()).toBe(false)
+
+    const t = setup()
+    t.a.onReady(st('off'), true)
+    expect(t.a.retrying()).toBe(true)
+    t.a.onState(st('error', 'no_default_route'))
+    expect(t.a.retrying()).toBe(true)
+    t.fire()
+    t.at(125_000)
+    t.a.onState(st('error', 'no_default_route'))
+    // gave up: the window of 2 minutes is over and no retry is waiting
+    expect(t.a.retrying()).toBe(false)
+
+    const u = setup()
+    u.a.onReady(st('off'), true)
+    u.a.onState(st('on'))
+    expect(u.a.retrying()).toBe(false)
+  })
 })

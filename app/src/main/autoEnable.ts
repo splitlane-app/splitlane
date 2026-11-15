@@ -44,6 +44,11 @@ export class AutoEnable {
     this.stop()
   }
 
+  /** True while the start-up enable is still being tried (its failed attempts are expected). */
+  retrying(): boolean {
+    return this.active
+  }
+
   stop(): void {
     this.active = false
     this.cancel?.()

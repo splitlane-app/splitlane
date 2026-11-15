@@ -135,17 +135,9 @@ test('ConnectScreen lists exit nodes, online first, and chooses one', async () =
   const radios = within(group).getAllByRole('radio') as HTMLInputElement[]
   expect(radios.map((r) => r.closest('label')?.textContent)).toEqual(['alpha', 'beta', 'zetaне в сети'])
   expect(radios.every((r) => !r.checked)).toBe(true)
-  vi.useFakeTimers()
-  try {
-    fireEvent.click(screen.getByRole('radio', { name: /zeta/ }))
-    expect(commands).toEqual([])
-    await act(async () => {
-      vi.advanceTimersByTime(500)
-    })
-    expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.5' }])
-  } finally {
-    vi.useRealTimers()
-  }
+  // routing is off: the choice goes at once, the wizard does not wait
+  fireEvent.click(screen.getByRole('radio', { name: /zeta/ }))
+  await vi.waitFor(() => expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.5' }]))
 })
 
 test('quick changes of the exit node send only the last one, and the pending one shows as checked', async () => {
@@ -178,7 +170,7 @@ test('quick changes of the exit node send only the last one, and the pending one
   }
 })
 
-test('a pending exit node choice is dropped when the screen goes away', async () => {
+test('a pending exit node choice is applied when the screen goes away', async () => {
   const { bridge, commands } = fakeBridge()
   const exitNodes = [
     { id: '100.64.0.3', name: 'alpha', online: true },
@@ -188,14 +180,58 @@ test('a pending exit node choice is dropped when the screen goes away', async ()
   vi.useFakeTimers()
   try {
     fireEvent.click(screen.getByRole('radio', { name: 'beta' }))
-    view.unmount()
+    expect(commands).toEqual([])
+    await act(async () => {
+      view.unmount()
+    })
+    expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.4' }])
     await act(async () => {
       vi.advanceTimersByTime(1000)
+    })
+    expect(commands).toHaveLength(1)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('going back to the selected exit node within the pause sends nothing', async () => {
+  const { bridge, commands } = fakeBridge()
+  const exitNodes = [
+    { id: '100.64.0.3', name: 'alpha', online: true },
+    { id: '100.64.0.4', name: 'beta', online: true }
+  ]
+  renderWith(<ConnectionScreen />, servicesFor(bridge, withTs({ exitNodes, selectedExitNode: '100.64.0.3' }, { phase: 'on' }, true)))
+  vi.useFakeTimers()
+  try {
+    fireEvent.click(screen.getByRole('radio', { name: 'beta' }))
+    await act(async () => {
+      vi.advanceTimersByTime(200)
+    })
+    fireEvent.click(screen.getByRole('radio', { name: 'alpha' }))
+    expect((screen.getByRole('radio', { name: 'alpha' }) as HTMLInputElement).checked).toBe(true)
+    await act(async () => {
+      vi.advanceTimersByTime(2000)
     })
     expect(commands).toEqual([])
   } finally {
     vi.useRealTimers()
   }
+})
+
+test('the pending choice stays checked until the command is answered', async () => {
+  let answer: (r: { ok: true }) => void = () => {}
+  const { bridge } = fakeBridge({ command: () => new Promise((r) => (answer = r)) })
+  const exitNodes = [
+    { id: '100.64.0.3', name: 'alpha', online: true },
+    { id: '100.64.0.4', name: 'beta', online: true }
+  ]
+  renderWith(<ConnectionScreen />, servicesFor(bridge, withTs({ exitNodes, selectedExitNode: '100.64.0.3' }, { phase: 'off' }, true)))
+  fireEvent.click(screen.getByRole('radio', { name: 'beta' }))
+  expect((screen.getByRole('radio', { name: 'beta' }) as HTMLInputElement).checked).toBe(true)
+  await act(async () => {
+    answer({ ok: true })
+  })
+  expect((screen.getByRole('radio', { name: 'alpha' }) as HTMLInputElement).checked).toBe(true)
 })
 
 test('ConnectScreen warns about the system exit node before enabling', async () => {

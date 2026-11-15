@@ -33,7 +33,7 @@ import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
 import { forbiddenSwitch } from './switches'
 import { runTask, systemTools, taskRegistered, type Exec } from './task'
 import { mainText } from './mainText'
-import { noticeText, notificationsFor, shouldShow, watchedOf, type Watched } from './notifications'
+import { noticeText, notificationsFor, quiet, shouldShow, watchedOf, type NoticeKind, type Watched } from './notifications'
 import { AppTray, windowIcon } from './tray'
 import { installerOutcome, nodeFs, runInstallerScript, Updater } from './updater'
 
@@ -307,25 +307,51 @@ let watched: Watched | null = null
 /** Shown notifications stay referenced until they close, or Windows may drop their click. */
 const toasts = new Set<Notification>()
 
+/** True until ready-to-show of a normal start: the window is about to appear, so it is not "in the tray" yet. */
+let showPending = !startHidden
+const lastToast: Partial<Record<NoticeKind, number>> = {}
+
 function notify(): void {
-  const next = watchedOf(link.state(), updateState(), settings.notifiedVersion)
-  if (next === null) return
-  const found = notificationsFor(watched, next)
-  watched = next
-  if (found.length === 0) return
-  const supported = Notification.isSupported()
-  const windowHidden = win === null || win.isDestroyed() || !win.isVisible() || win.isMinimized()
-  for (const n of shouldShow(found, { enabled: settings.notifications, windowHidden, supported })) {
-    const { title, body } = noticeText(language, n)
-    const toast = new Notification({ title, body })
-    toasts.add(toast)
-    toast.on('click', showWindow)
-    toast.on('close', () => toasts.delete(toast))
-    toast.show()
-    if (n.kind === 'update' && n.version !== undefined) {
-      settings = { ...settings, notifiedVersion: n.version }
-      void saveSettings(settings)
+  try {
+    const next = watchedOf(link.state(), updateState(), settings.notifiedVersion, autoEnable.retrying())
+    if (next === null) return
+    const found = notificationsFor(watched, next)
+    watched = next
+    if (found.length === 0) return
+    const windowHidden = win === null || win.isDestroyed() || !win.isVisible() || win.isMinimized()
+    const now = Date.now()
+    const shown = quiet(
+      shouldShow(found, {
+        enabled: settings.notifications,
+        windowHidden,
+        windowOpening: showPending,
+        supported: Notification.isSupported()
+      }),
+      lastToast,
+      now
+    )
+    for (const n of shown) {
+      const { title, body } = noticeText(language, n)
+      const toast = new Notification({ title, body })
+      toasts.add(toast)
+      toast.on('click', () => {
+        toasts.delete(toast)
+        showWindow()
+      })
+      toast.on('close', () => toasts.delete(toast))
+      toast.on('failed', (_e, error) => {
+        toasts.delete(toast)
+        log(`notification: failed: ${error}`)
+      })
+      toast.show()
+      lastToast[n.kind] = now
+      if (n.kind === 'update' && n.version !== undefined) {
+        settings = { ...settings, notifiedVersion: n.version }
+        void saveSettings(settings)
+      }
     }
+  } catch (e) {
+    log(`notification: ${errText(e)}`)
   }
 }
 
@@ -572,6 +598,7 @@ function createWindow(): void {
   w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   w.webContents.on('will-navigate', (event) => event.preventDefault())
   w.once('ready-to-show', () => {
+    showPending = false
     if (!startHidden) w.show()
   })
   // closing hides to the tray; the helper and splitting go on (spec 10)

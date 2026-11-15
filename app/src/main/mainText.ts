@@ -56,7 +56,7 @@ export const MAIN_TEXT: Record<Lang, MainText> = {
     notifyErrorTitle: 'SplitLane: split routing stopped',
     notifyErrorBody: 'Open SplitLane to see why',
     notifyVpnDownTitle: "SplitLane: can't reach the VPN server",
-    notifyVpnDownBody: 'Programs on the VPN lane have no internet until the connection is back',
+    notifyVpnDownBody: 'Programs in the VPN lane have no internet until the connection is back',
     notifyBlockedTitle: 'SplitLane: Tailscale turned its exit node back on',
     notifyBlockedBody: 'Split routing is paused. Open SplitLane to choose what to do',
     notifyLoginTitle: 'SplitLane: log in to Tailscale again',

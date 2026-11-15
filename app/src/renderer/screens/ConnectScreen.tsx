@@ -20,6 +20,8 @@ function sortedNodes(nodes: ExitNode[]): ExitNode[] {
   return [...nodes].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, lang))
 }
 
+const isLive = (phase: HelperState['phase']): boolean => phase !== 'off' && phase !== 'error'
+
 /** How long a choice of the exit node waits for the next one before it is sent. */
 const CHOICE_SETTLE_MS = 500
 
@@ -31,23 +33,50 @@ function ExitNodeList({ state, last }: { state: HelperState; last: LastExitNode 
   const services = useServices()
   const { selectedExitNode } = state.tailscale
   const nodes = exitNodeChoices(state, last)
-  // arrow keys move through native radios and change the choice on each press; every change restarts split
-  // routing while it is live, so only a settled choice (the last one, after a pause) is sent
+  // arrow keys move through native radios and change the choice on each press, and while split routing is live every
+  // setExitNode restarts it: a live choice is sent when settled (the last one, after a pause). Without routing the
+  // choice goes at once, so the steps of the wizard do not lag.
   const [pending, setPending] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(
-    () => () => {
-      if (timer.current !== null) clearTimeout(timer.current)
-    },
-    []
-  )
+  const waiting = useRef<string | null>(null)
+  const mounted = useRef(true)
+  const send = (id: string): void => {
+    void sendCommand(services, { method: 'tailscale.setExitNode', id }).finally(() => {
+      if (mounted.current) setPending((p) => (p === id ? null : p))
+    })
+  }
+  const sendRef = useRef(send)
+  sendRef.current = send
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      // leaving the screen applies the choice made, it does not drop it
+      if (timer.current !== null && waiting.current !== null) {
+        clearTimeout(timer.current)
+        sendRef.current(waiting.current)
+      }
+    }
+  }, [])
   const choose = (id: string): void => {
-    setPending(id)
     if (timer.current !== null) clearTimeout(timer.current)
+    timer.current = null
+    waiting.current = null
+    // back on the node that is in force: nothing to send (the helper restarts on any setExitNode while live)
+    if (id === selectedExitNode) {
+      setPending(null)
+      return
+    }
+    setPending(id)
+    if (!isLive(state.phase)) {
+      send(id)
+      return
+    }
+    waiting.current = id
     timer.current = setTimeout(() => {
       timer.current = null
-      setPending(null)
-      void sendCommand(services, { method: 'tailscale.setExitNode', id })
+      waiting.current = null
+      send(id)
     }, CHOICE_SETTLE_MS)
   }
   const shown = pending ?? selectedExitNode
@@ -225,7 +254,6 @@ export function ConnectScreen(): React.JSX.Element | null {
   )
 }
 
-const live = (phase: HelperState['phase']): boolean => phase !== 'off' && phase !== 'error'
 
 /**
  * «Подключение» (spec 9.5, 9.6), opened from the connection pill: the device, the exit node and its change,
@@ -278,7 +306,7 @@ export function ConnectionScreen(): React.JSX.Element | null {
       store.getState().showNotice(t('connection.saveFailed'))
     })
   }
-  const canLogout = !live(state.phase)
+  const canLogout = !isLive(state.phase)
   const updateLine = update === null ? null : updateStatusLine(update)
   const updateActions = update === null ? [] : updateStatusActions(update)
 
@@ -291,7 +319,7 @@ export function ConnectionScreen(): React.JSX.Element | null {
       </div>
       <div className={styles.section}>
         <ExitNodeList state={state} last={settings.lastExitNode} />
-        {live(state.phase) && <p className={styles.lead}>{t('connection.changeNote')}</p>}
+        {isLive(state.phase) && <p className={styles.lead}>{t('connection.changeNote')}</p>}
       </div>
       <div className={styles.section} role="group" aria-label={t('connection.settings')}>
         <Toggle
