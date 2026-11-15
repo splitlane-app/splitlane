@@ -203,7 +203,27 @@ export function ConnectionScreen(): React.JSX.Element | null {
   const { bridge, store } = services
   const state = useApp((s) => s.snapshot?.state ?? null)
   const settings = useApp((s) => s.snapshot?.settings ?? null)
+  const link = useApp((s) => s.snapshot?.link ?? null)
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+  useEffect(() => {
+    let live = true
+    bridge.appInfo().then(
+      (i) => {
+        if (live) setAppVersion(i.version)
+      },
+      () => {}
+    )
+    return () => {
+      live = false
+    }
+  }, [bridge])
   if (state === null || settings === null) return null
+  const versions =
+    appVersion === null
+      ? null
+      : link?.kind === 'ready'
+        ? t('connect.versions', { app: appVersion, helper: link.hello.helper, core: link.hello.core })
+        : t('connect.versionApp', { app: appVersion })
 
   const save = (patch: Partial<WindowSettings>): void => {
     bridge.setSettings(patch).catch(() => {
@@ -256,6 +276,7 @@ export function ConnectionScreen(): React.JSX.Element | null {
         </button>
       </div>
       {!canLogout && <p className={styles.lead}>{t('connection.logoutBlocked')}</p>}
+      {versions !== null && <p className={styles.lead}>{versions}</p>}
     </ScreenFrame>
   )
 }

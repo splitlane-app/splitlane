@@ -250,6 +250,19 @@ test('connection screen shows the state banner, off included', async () => {
   expect(screen.getByRole('button', { name: 'Сохранить журнал' })).toBeTruthy()
 })
 
+test('ConnectScreen shows the versions', async () => {
+  const { bridge } = fakeBridge({ appInfo: async () => ({ version: '0.2.0', installed: true }) })
+  renderWith(<ConnectionScreen />, servicesFor(bridge, withTs({}, { phase: 'off' }, true)))
+  expect(await screen.findByText('SplitLane 0.2.0 · служба 0.1.0 · ядро 1.14.4')).toBeTruthy()
+})
+
+test('ConnectScreen shows the app version without a link', async () => {
+  const { bridge } = fakeBridge({ appInfo: async () => ({ version: '0.2.0', installed: true }) })
+  const off = withTs({}, { phase: 'off' }, true)
+  renderWith(<ConnectionScreen />, servicesFor(bridge, { ...off, link: { kind: 'unresponsive' } }))
+  expect(await screen.findByText('SplitLane 0.2.0')).toBeTruthy()
+})
+
 test('connection screen disables logout while routing is on', async () => {
   const { bridge, commands } = fakeBridge()
   const services = servicesFor(bridge, withTs({ deviceName: 'laptop-1' }, { phase: 'on' }, true))

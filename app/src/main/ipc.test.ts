@@ -301,6 +301,7 @@ function ipcHarness() {
     }),
     userCommand: vi.fn(),
     installHelper: vi.fn(async () => {}),
+    appInfo: vi.fn(async () => ({ version: '0.2.0', installed: true })),
     setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, ...p })),
     installedPrograms: vi.fn(async () => []),
     pickProgram: vi.fn(async () => null),

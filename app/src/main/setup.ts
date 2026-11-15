@@ -17,9 +17,16 @@ export const HELPER_FILES = [
 const SID_RE = /^S-1-\d+(-\d+)+$/
 const UAC_CANCELLED = 1223
 
-/** Where the helper files live: next to the app resources when packaged, `dist\helper` of the repo in development. */
-export function helperSourceDir(o: { isPackaged: boolean; resourcesPath: string; appPath: string }): string {
-  return o.isPackaged ? win32.join(o.resourcesPath, 'helper') : win32.resolve(o.appPath, '..', 'dist', 'helper')
+/** Where the helper files live: `helper` next to the window's exe when packaged, `dist\helper` of the repo in development. */
+export function helperSourceDir(o: { isPackaged: boolean; execPath: string; appPath: string }): string {
+  return o.isPackaged ? win32.join(win32.dirname(o.execPath), 'helper') : win32.resolve(o.appPath, '..', 'dist', 'helper')
+}
+
+/** True when the exe lies inside `<programFiles>\SplitLane\` (case ignored, on a folder boundary); no Program Files: false. */
+export function installedAt(execPath: string, programFiles: string | undefined): boolean {
+  if (programFiles === undefined || programFiles.trim() === '') return false
+  const dir = win32.join(programFiles, 'SplitLane').toLowerCase().replace(/\\+$/, '')
+  return execPath.toLowerCase().startsWith(`${dir}\\`)
 }
 
 /** Takes the SID from `whoami /user /fo csv /nh` output (`"DOMAIN\user","S-1-5-..."`). */

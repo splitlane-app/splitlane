@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { ScreenFrame } from '../components/ScreenFrame'
 import { t } from '../i18n/t'
 import { useApp, useServices } from '../services'
@@ -13,6 +14,20 @@ export function SetupScreen({ update }: { update: boolean }): React.JSX.Element 
   const running = install.kind === 'running'
   const done = install.kind === 'done' ? install.outcome : null
   const finished = done?.kind === 'ok'
+  // a packaged window outside the install folder cannot repair the helper; until the main process answers, the button stays
+  const [installed, setInstalled] = useState(true)
+  useEffect(() => {
+    let live = true
+    bridge.appInfo().then(
+      (i) => {
+        if (live) setInstalled(i.installed)
+      },
+      () => {}
+    )
+    return () => {
+      live = false
+    }
+  }, [bridge])
 
   const start = (): void => {
     bridge.installHelper().catch(() => {
@@ -47,7 +62,8 @@ export function SetupScreen({ update }: { update: boolean }): React.JSX.Element 
           <pre className={styles.mono}>{done.detail}</pre>
         </>
       )}
-      {!running && !finished && (
+      {!installed && <p className={styles.lead}>{t('setup.notInstalled')}</p>}
+      {installed && !running && !finished && (
         <div className={styles.actions}>
           <button type="button" className={`${styles.button} ${styles.primary}`} onClick={start}>
             {update ? t('setup.update') : t('setup.install')}

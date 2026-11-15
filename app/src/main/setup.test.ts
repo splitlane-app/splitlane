@@ -8,6 +8,7 @@ import {
   installAfterLink,
   installHelper,
   installScript,
+  installedAt,
   parseInstallOutput,
   parseSid
 } from './setup'
@@ -20,11 +21,25 @@ const OUT = 'C:\\Users\\u\\AppData\\Local\\Temp\\splitlane-install-1.txt'
 describe('setup', () => {
   it('helperSourceDir for packaged and dev', () => {
     expect(
-      helperSourceDir({ isPackaged: true, resourcesPath: 'C:\\App\\resources', appPath: 'C:\\App\\resources\\app.asar' })
-    ).toBe('C:\\App\\resources\\helper')
-    expect(helperSourceDir({ isPackaged: false, resourcesPath: 'x', appPath: 'C:\\code\\router\\app' })).toBe(
+      helperSourceDir({
+        isPackaged: true,
+        execPath: 'C:\\Program Files\\SplitLane\\SplitLane.exe',
+        appPath: 'C:\\Program Files\\SplitLane\\resources\\app.asar'
+      })
+    ).toBe('C:\\Program Files\\SplitLane\\helper')
+    expect(helperSourceDir({ isPackaged: false, execPath: 'x', appPath: 'C:\\code\\router\\app' })).toBe(
       'C:\\code\\router\\dist\\helper'
     )
+  })
+
+  it('installedAt inside, outside, prefix, case, empty', () => {
+    const pf = 'C:\\Program Files'
+    expect(installedAt('C:\\Program Files\\SplitLane\\SplitLane.exe', pf)).toBe(true)
+    expect(installedAt('C:\\code\\router\\app\\release\\win-unpacked\\SplitLane.exe', pf)).toBe(false)
+    expect(installedAt('C:\\Program Files\\SplitLaneX\\SplitLane.exe', pf)).toBe(false)
+    expect(installedAt('c:\\program files\\splitlane\\SplitLane.exe', 'C:\\PROGRAM FILES')).toBe(true)
+    expect(installedAt('C:\\Program Files\\SplitLane\\SplitLane.exe', undefined)).toBe(false)
+    expect(installedAt('C:\\Program Files\\SplitLane\\SplitLane.exe', '')).toBe(false)
   })
 
   it('parseSid takes the SID from whoami csv', () => {

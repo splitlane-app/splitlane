@@ -20,6 +20,7 @@ const bridge: SplitLaneBridge = {
   command: (c) => ipcRenderer.invoke(IPC.command, c),
   setActivityDetail: (key) => ipcRenderer.invoke(IPC.setActivityDetail, key),
   installHelper: () => ipcRenderer.invoke(IPC.installHelper),
+  appInfo: () => ipcRenderer.invoke(IPC.appInfo),
   retryLink: () => ipcRenderer.invoke(IPC.retryLink),
   setSettings: (patch) => ipcRenderer.invoke(IPC.setSettings, patch),
   installedPrograms: () => ipcRenderer.invoke(IPC.installedPrograms),

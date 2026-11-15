@@ -6,6 +6,11 @@ import type { InstallOutcome, LinkStatus } from './status'
 /** The install of the helper started from the window (spec 4.3). */
 export type InstallState = { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; outcome: InstallOutcome }
 
+export interface AppInfo {
+  version: string
+  installed: boolean
+}
+
 /** Everything the page shows apart from the activity; sent on every change. */
 export interface Snapshot {
   link: LinkStatus
@@ -43,6 +48,8 @@ export interface SplitLaneBridge {
   command(c: Command): Promise<CommandResult>
   setActivityDetail(key: string | null): Promise<void>
   installHelper(): Promise<void>
+  /** The window's version, and whether it runs from the installed folder (only then it can repair the helper). */
+  appInfo(): Promise<AppInfo>
   retryLink(): Promise<void>
   setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings>
   installedPrograms(): Promise<Program[]>
@@ -61,6 +68,7 @@ export const IPC = {
   command: 'splitlane:command',
   setActivityDetail: 'splitlane:set-activity-detail',
   installHelper: 'splitlane:install-helper',
+  appInfo: 'splitlane:app-info',
   retryLink: 'splitlane:retry-link',
   setSettings: 'splitlane:set-settings',
   installedPrograms: 'splitlane:installed-programs',

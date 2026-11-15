@@ -70,6 +70,7 @@ export function fakeBridge(over: Partial<SplitLaneBridge> = {}, answer: CommandR
     },
     setActivityDetail: async () => {},
     installHelper: async () => {},
+    appInfo: async () => ({ version: '0.2.0', installed: true }),
     retryLink: async () => {},
     setSettings: async (patch) => ({ ...DEFAULT_SETTINGS, ...patch }),
     installedPrograms: async () => [],

@@ -210,6 +210,7 @@ export const ru = {
   'setup.done': 'Готово, служебный процесс запускается…',
   'setup.cancelled': 'Настройка отменена',
   'setup.failed': 'Не удалось выполнить настройку',
+  'setup.notInstalled': 'Эта копия SplitLane не установлена. Установите SplitLane установщиком: он поставит и фоновую службу.',
 
   // connect the VPN and the connection screen (spec 9.5, 9.6)
   'connect.title': 'Подключите VPN',
@@ -241,6 +242,8 @@ export const ru = {
   'connect.enable': 'Включить деление',
   'connect.enabling': 'Включается…',
   'connection.title': 'Подключение',
+  'connect.versions': 'SplitLane {app} · служба {helper} · ядро {core}',
+  'connect.versionApp': 'SplitLane {app}',
   'connection.device': 'Устройство в сети Tailscale',
   'connection.exitNode': 'Выбранный exit node',
   'connection.changeNote': 'Смена exit node ненадолго перезапустит деление',

@@ -1,4 +1,4 @@
-import { IPC, LINK_CLOSED, MAX_DROPPED, type Command, type CommandResult, type Snapshot } from '../shared/ipc'
+import { IPC, LINK_CLOSED, MAX_DROPPED, type AppInfo, type Command, type CommandResult, type Snapshot } from '../shared/ipc'
 import type { Dropped, Program } from '../shared/programs'
 import { LIMITS, utf8Bytes, type AppRule, type HelperError, type Lane, type MatcherKind } from '../shared/protocol'
 import type { WindowSettings } from '../shared/settings'
@@ -249,6 +249,7 @@ export interface IpcDeps {
   /** A routing command came from the user: the auto-enable of this run stops. */
   userCommand(): void
   installHelper(): Promise<void>
+  appInfo(): Promise<AppInfo>
   setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings>
   installedPrograms(): Promise<Program[]>
   pickProgram(): Promise<Dropped | null>
@@ -290,6 +291,7 @@ export function registerIpc(d: IpcDeps): void {
     }
   })
   on(IPC.installHelper, () => d.installHelper())
+  on(IPC.appInfo, () => d.appInfo())
   on(IPC.retryLink, () => {
     d.link.retry()
   })

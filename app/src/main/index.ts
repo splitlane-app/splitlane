@@ -18,7 +18,7 @@ import { PageCrashReload } from './pageCrash'
 import { dialPipe } from './pipe'
 import { installedPrograms, pickedFile, resolveDropped, startMenuDirs, type DropReaders, type ProgramsFs } from './programs'
 import { SettingsFile } from './settingsFile'
-import { encodePowerShell, helperSourceDir, installAfterLink, installHelper } from './setup'
+import { encodePowerShell, helperSourceDir, installAfterLink, installHelper, installedAt } from './setup'
 import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
 import { runTask, systemTools, taskRegistered, type Exec } from './task'
 import { AppTray, MAIN_TEXT, windowIcon } from './tray'
@@ -334,7 +334,7 @@ async function runInstall(): Promise<void> {
       tools,
       sourceDir: helperSourceDir({
         isPackaged: app.isPackaged,
-        resourcesPath: process.resourcesPath,
+        execPath: process.execPath,
         appPath: app.getAppPath()
       }),
       tempDir: app.getPath('temp'),
@@ -491,6 +491,11 @@ async function main(): Promise<void> {
     snapshot,
     userCommand: () => autoEnable.stop(),
     installHelper: startInstall,
+    // in development the setup screen works with dist\helper, so the window counts as installed
+    appInfo: async () => ({
+      version: app.getVersion(),
+      installed: !app.isPackaged || installedAt(process.execPath, process.env['ProgramFiles'])
+    }),
     setSettings,
     installedPrograms: async () => {
       const [start, store, played] = await Promise.all([

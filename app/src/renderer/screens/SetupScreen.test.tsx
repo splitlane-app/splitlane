@@ -35,6 +35,15 @@ test('SetupScreen installs on the button and shows the progress', () => {
   expect(screen.getByText('Готово, служебный процесс запускается…')).toBeTruthy()
 })
 
+test('SetupScreen shows the install hint when not installed', async () => {
+  const { bridge } = fakeBridge({ appInfo: async () => ({ version: '0.2.0', installed: false }) })
+  renderWith(<SetupScreen update={false} />, servicesFor(bridge, setup({ kind: 'idle' })))
+  expect(
+    await screen.findByText('Эта копия SplitLane не установлена. Установите SplitLane установщиком: он поставит и фоновую службу.')
+  ).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Установить службу' })).toBeNull()
+})
+
 test('SetupScreen offers the update of an older helper', () => {
   const { bridge } = fakeBridge()
   renderWith(<SetupScreen update />, servicesFor(bridge, setup({ kind: 'idle' })))
