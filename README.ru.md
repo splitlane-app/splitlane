@@ -136,7 +136,7 @@ SplitLane распространяется под лицензией GPL-3.0-or-
 ## Разработка
 
 - **Состав.** `helper/` — служба `splitlane-helper.exe` (Go), единственная часть с правами администратора. `helper/cmd/slctl` — тестовый клиент канала службы. `helper/cmd/slguard` — сторож для проверок на ПК во время разработки; в поставку не входит. `app/` — окно (Electron, React, TypeScript); `app/build/installer.nsh` — дополнения установщика. `scripts/` — получение ядра, сборка и проверка установщика. `docs/` — спецификации и планы. `.github/workflows/build.yml` — сборка на GitHub Actions.
-- **Только служба** (Go 1.26 или новее, CGO не нужен):
+- **Только служба** (Go 1.27.4, CGO не нужен):
 
   ```powershell
   cd helper

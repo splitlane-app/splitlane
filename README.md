@@ -136,7 +136,7 @@ Security issues: see [SECURITY.md](SECURITY.md). Other problems and questions: [
 ## Development
 
 - **Layout.** `helper/`: the service `splitlane-helper.exe` (Go), the only part with administrator rights. `helper/cmd/slctl`: a test client for the service's pipe. `helper/cmd/slguard`: a guard for live checks on a PC during development, not shipped. `app/`: the window (Electron, React, TypeScript); `app/build/installer.nsh`: additions to the installer. `scripts/`: the core download, the builds and the installer check. `docs/`: specifications and plans, in Russian. `.github/workflows/build.yml`: the CI build.
-- **The service alone** (Go 1.26 or newer, no CGO):
+- **The service alone** (Go 1.27.4, no CGO):
 
   ```powershell
   cd helper
