@@ -1,5 +1,5 @@
 import type { ProxyOutcome } from '../shared/ipc'
-import { LIMITS } from '../shared/protocol'
+import { LIMITS, utf8Bytes } from '../shared/protocol'
 import { proxyRejected, runProxyAdd, type LinkCalls } from './ipc'
 
 /** The name the source `file` gets when the base name of the file breaks the helper's rules. */
@@ -40,7 +40,7 @@ export function confName(base: string): string {
     base === '..' ||
     /[/\\:]/.test(base) ||
     /\p{Cc}/u.test(base) ||
-    new TextEncoder().encode(base).length > LIMITS.maxNameBytes ||
+    utf8Bytes(base) > LIMITS.maxNameBytes ||
     !wellFormed(base)
   return bad ? FALLBACK_CONF_NAME : base
 }

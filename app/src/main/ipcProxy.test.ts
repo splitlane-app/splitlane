@@ -83,6 +83,12 @@ describe('runProxyAdd', () => {
     expect(await runProxyAdd(l, '€'.repeat(21846))).toMatchObject({ result: { rejected: [{ code: 'too_long' }] } })
     expect(l.call).toHaveBeenCalledTimes(1)
   })
+  test('a string longer than the limit in UTF-16 units is refused before it is trimmed', async () => {
+    const l = link()
+    const spaces = ' '.repeat(LIMITS.maxProxyTextBytes + 1)
+    expect(await runProxyAdd(l, spaces)).toMatchObject({ kind: 'done', result: { rejected: [{ line: 0, code: 'too_long' }] } })
+    expect(l.call).not.toHaveBeenCalled()
+  })
   test('helper errors, a lost link and a bad answer come back as failed', async () => {
     const err = { code: 'busy', message: 'a download is running' } as const
     const busy = link(() => {

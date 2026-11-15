@@ -4,7 +4,7 @@ import type { LinkStatus } from '../../shared/status'
 import { t } from '../i18n/t'
 import { bannerFor } from './banners'
 
-const ready: LinkStatus = { kind: 'ready', hello: { protocol: 1, helper: '1', core: '1' } }
+const ready: LinkStatus = { kind: 'ready', hello: { protocol: 2, helper: '1', core: '1' } }
 
 function state(phase: Phase, over: Partial<HelperState> = {}, reason: Reason | null = null): HelperState {
   return {

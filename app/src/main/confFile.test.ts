@@ -104,15 +104,19 @@ describe('addConfFile', () => {
     expect(out).toEqual({ kind: 'failed', error: { code: 'internal', message: 'file unreadable' } })
     expect(JSON.stringify(out)).not.toContain('Users')
     expect(t.link.call).not.toHaveBeenCalled()
+    let closed = false
     const r = setup(enc('x'), {
       openFile: async () => ({
         read: async () => {
           throw new Error(PATH)
         },
-        close: async () => {}
+        close: async () => {
+          closed = true
+        }
       })
     })
     expect(await addConfFile(r.deps, r.link)).toEqual({ kind: 'failed', error: { code: 'internal', message: 'file unreadable' } })
+    expect(closed).toBe(true)
   })
   test('a failing dialog is a failed outcome too', async () => {
     const t = setup(null, {

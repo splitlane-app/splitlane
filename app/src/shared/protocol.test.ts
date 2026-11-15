@@ -162,8 +162,7 @@ describe('parseState v2', () => {
     bad({ ...empty, servers: [server(SERVER_A), server(SERVER_A)] }, /servers\[1\]\.id repeats/)
     bad({ ...empty, servers: [server(SERVER_A, { protocol: 'openvpn' })] }, /protocol/)
     bad({ ...empty, servers: [server(SERVER_A, { source: 'other' })] }, /source/)
-    // a subscription id that the list does not have
-    bad({ ...empty, servers: [server(SERVER_A, { source: SUB })] }, /source/)
+    bad({ ...empty, servers: [server(SERVER_A, { source: 'sub-xyz' })] }, /source/)
     bad({ ...empty, selected: 'nope' }, /selected/)
     bad({ ...empty, selected: SUB }, /selected/)
     bad({ ...empty, subscriptions: [sub({ id: SERVER_A })] }, /subscriptions\[0\]\.id/)
@@ -173,6 +172,16 @@ describe('parseState v2', () => {
     bad({ ...empty, subscriptions: [sub({ error: 3 })] }, /error/)
     bad({ ...empty, subscriptions: [sub({ updatedAt: 'x'.repeat(65) })] }, /updatedAt/)
     bad({ servers: [], selected: null }, /subscriptions/)
+  })
+  test('a server of a subscription that is gone is kept, not a reason to refuse the state', () => {
+    const s = parseState(proxyState({ servers: [server(SERVER_A, { source: SUB })], selected: null, subscriptions: [] }))
+    expect(s.proxy.servers[0].source).toBe(SUB)
+  })
+  test('a name of 256 bytes passes, of 257 throws', () => {
+    const empty = { selected: null, subscriptions: [] }
+    const named = (name: string): Record<string, unknown> => proxyState({ ...empty, servers: [server(SERVER_A, { name })] })
+    expect(parseState(named('я'.repeat(127) + 'ab')).proxy.servers).toHaveLength(1) // 256 bytes
+    expect(() => parseState(named('я'.repeat(128) + 'a'))).toThrow(/name/) // 257 bytes
   })
   test('limits: names, 500 servers, 20 subscriptions', () => {
     const empty = { servers: [], selected: null, subscriptions: [] }

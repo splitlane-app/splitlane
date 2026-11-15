@@ -333,7 +333,8 @@ function parseProxy(x: unknown): HelperState['proxy'] {
     if (ids.has(id)) throw new Error(`${p}.id repeats`)
     ids.add(id)
     const source = str(e.source, `${p}.source`)
-    if (source !== 'manual' && source !== 'file' && !subIds.has(source)) throw new Error(`${p}.source: unknown value`)
+    // a subscription removed from the list may leave orphans: they must not discard the whole state
+    if (source !== 'manual' && source !== 'file' && !SUBSCRIPTION_ID.test(source)) throw new Error(`${p}.source: unknown value`)
     return {
       id,
       name: upTo(e.name, LIMITS.maxNameBytes, `${p}.name`),

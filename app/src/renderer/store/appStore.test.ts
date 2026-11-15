@@ -21,7 +21,7 @@ const ID1 = '6f1c2a4e-0b7d-4c3a-9e21-5d8f7a1b2c01'
 const ID2 = '6f1c2a4e-0b7d-4c3a-9e21-5d8f7a1b2c02'
 const ID3 = '6f1c2a4e-0b7d-4c3a-9e21-5d8f7a1b2c03'
 
-const ready: LinkStatus = { kind: 'ready', hello: { protocol: 1, helper: '0.1.0', core: '1.14.4' } }
+const ready: LinkStatus = { kind: 'ready', hello: { protocol: 2, helper: '0.1.0', core: '1.14.4' } }
 
 function state(over: Partial<HelperState> = {}): HelperState {
   return {

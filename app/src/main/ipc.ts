@@ -279,9 +279,10 @@ async function proxyCall(link: Pick<LinkCalls, 'call'>, method: string, params: 
  * rejection `too_long`, without a call; `name` is the base name of a `.conf` read from a file. Never throws.
  */
 export async function runProxyAdd(link: Pick<LinkCalls, 'call'>, text: unknown, name?: string): Promise<ProxyOutcome> {
-  if (typeof text !== 'string' || text.trim() === '') {
-    return { kind: 'failed', error: { code: 'bad_request', message: 'text is empty' } }
-  }
+  if (typeof text !== 'string') return { kind: 'failed', error: { code: 'bad_request', message: 'text is empty' } }
+  // UTF-8 bytes are never fewer than UTF-16 units: a long string is refused before it is trimmed or encoded
+  if (text.length > LIMITS.maxProxyTextBytes) return proxyRejected('too_long')
+  if (text.trim() === '') return { kind: 'failed', error: { code: 'bad_request', message: 'text is empty' } }
   if (utf8Bytes(text) > LIMITS.maxProxyTextBytes) return proxyRejected('too_long')
   return proxyCall(link, 'proxy.add', name === undefined ? { text } : { text, name })
 }
