@@ -342,12 +342,6 @@ func printable(s string) bool {
 	return true
 }
 
-// fingerprints of uTLS the core knows.
-var fingerprints = map[string]bool{
-	"chrome": true, "firefox": true, "edge": true, "safari": true, "360": true, "qq": true,
-	"ios": true, "android": true, "random": true, "randomized": true,
-}
-
 func fingerprint(s string) (string, *Rejection) {
 	s = strings.ToLower(s)
 	if s == "" || s == "none" {
@@ -678,18 +672,16 @@ func parseVLESS(body string) (Server, *Rejection) {
 	}
 	flow := strings.ToLower(q.get("flow"))
 	pe := strings.ToLower(q.get("packetencoding"))
-	switch pe {
-	case "", "xudp", "packetaddr", "none":
-	default:
+	if pe != "" && !packetEncodings[pe] {
 		return Server{}, reject(CodeBadLink, "packetEncoding")
 	}
 	tls, tr, r := stream(q, host, "none")
 	if r != nil {
 		return Server{}, r
 	}
-	switch flow {
-	case "":
-	case "xtls-rprx-vision":
+	switch {
+	case flow == "":
+	case flows[flow]:
 		if tls == nil || tr != nil {
 			return Server{}, reject(CodeBadLink, "flow needs tls over plain tcp")
 		}
@@ -704,10 +696,10 @@ func parseVLESS(body string) (Server, *Rejection) {
 }
 
 func vmessSecurity(s string) (string, *Rejection) {
-	switch s = strings.ToLower(s); s {
-	case "":
+	switch s = strings.ToLower(s); {
+	case s == "":
 		return "auto", nil
-	case "auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero":
+	case vmessSecurities[s]:
 		return s, nil
 	}
 	return "", reject(CodeUnsupportedProtocol, "vmess security")
@@ -910,13 +902,6 @@ func parseTrojan(body string) (Server, *Rejection) {
 	}
 	return Server{Name: linkName(p.fragment), Protocol: ProtocolTrojan, Host: host, Port: port, TLS: tls, Transport: tr,
 		Trojan: &Trojan{Password: pw}}, nil
-}
-
-// ssMethods: the AEAD methods (0) and the Shadowsocks 2022 methods with their key sizes. Stream
-// ciphers and none are refused: they are broken or pointless over the internet.
-var ssMethods = map[string]int{
-	"aes-128-gcm": 0, "aes-192-gcm": 0, "aes-256-gcm": 0, "chacha20-ietf-poly1305": 0, "xchacha20-ietf-poly1305": 0,
-	"2022-blake3-aes-128-gcm": 16, "2022-blake3-aes-256-gcm": 32, "2022-blake3-chacha20-poly1305": 32,
 }
 
 // parseShadowsocks: ss://userinfo@host:port[/]?…#name (SIP002), userinfo being base64(method:password)
@@ -1170,15 +1155,11 @@ func parseTUIC(body string) (Server, *Rejection) {
 		return Server{}, r
 	}
 	cc := strings.ToLower(q.get("congestion_control"))
-	switch cc {
-	case "", "cubic", "new_reno", "bbr":
-	default:
+	if cc != "" && !congestionControls[cc] {
 		return Server{}, reject(CodeBadLink, "congestion_control")
 	}
 	mode := strings.ToLower(q.get("udp_relay_mode"))
-	switch mode {
-	case "", "native", "quic":
-	default:
+	if mode != "" && !udpRelayModes[mode] {
 		return Server{}, reject(CodeBadLink, "udp_relay_mode")
 	}
 	if off, ok := parseBool(q.get("disable_sni")); !ok || off {

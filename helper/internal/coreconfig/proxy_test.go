@@ -298,12 +298,17 @@ func TestProxyConfigsShareTheRest(t *testing.T) {
 	}
 }
 
-// Rule 0 of spec 6.2 rejects the flows that the embedded Tailscale node hands the router from tailnet
-// peers. A proxy outbound opens no flow towards the PC. Whether a WireGuard endpoint does is for the
-// live check (task 9): until then wireGuardNodeRule is off and the rule is not written for it.
-func TestNodeRuleOnlyForTheTailscaleNode(t *testing.T) {
+// Rule 0 of spec 6.2 rejects the flows that an endpoint hands the router under its own tag: the
+// embedded Tailscale node does so for what tailnet peers open to its address, and the WireGuard
+// endpoint of sing-box 1.14.4 for what the peer opens to the interface addresses (rewritten to
+// 127.0.0.1 and ::1), so both configs start with it (wireGuardNodeRule; the live check confirms it).
+// A proxy outbound opens no flow towards the PC and gets no rule 0.
+func TestNodeRuleForTheEndpoints(t *testing.T) {
 	if firstRule(t, mustBuild(t, testOptions(`C:\ProgramData\SplitLane`))) != wantNodeInboundRule {
 		t.Fatal("the Tailscale config starts with rule 0")
+	}
+	if !wireGuardNodeRule {
+		t.Fatal("rule 0 is written for WireGuard (fail-closed) until the live check says otherwise")
 	}
 	for _, c := range proxyCases() {
 		s := c.server(t)
@@ -363,6 +368,20 @@ func TestProxyLaneDecisions(t *testing.T) {
 		{"ws: Host goes into the headers, early data into its header",
 			"vless://" + uuidA + "@example.com:443?security=tls&type=ws&host=cdn.example.com&path=%2Fws%3Fed%3D2048",
 			map[string]string{"transport": `{"early_data_header_name":"Sec-WebSocket-Protocol","headers":{"Host":"cdn.example.com"},"max_early_data":2048,"path":"/ws","type":"ws"}`}},
+		// The core's ws sends the server address as Host when it has none (its httpupgrade falls
+		// back to the TLS server name): a ws link without host takes the server name of its TLS.
+		{"ws without Host: the TLS server name",
+			"vless://" + uuidA + "@192.0.2.13:443?security=tls&sni=cdn.example.com&type=ws&path=%2Fws",
+			map[string]string{"transport": `{"headers":{"Host":"cdn.example.com"},"path":"/ws","type":"ws"}`}},
+		{"ws without Host and without a TLS server name: the core's default",
+			"vless://" + uuidA + "@example.com:443?security=tls&type=ws&path=%2Fws",
+			map[string]string{"transport": `{"path":"/ws","type":"ws"}`}},
+		{"ws without Host over REALITY: its server name is the disguise, not the server",
+			"vless://" + uuidA + "@example.com:443?security=reality&pbk=" + pbk + "&sni=www.example.com&type=ws&path=%2Fws",
+			map[string]string{"transport": `{"path":"/ws","type":"ws"}`}},
+		{"ws without TLS and without Host: the core's default",
+			"vless://" + uuidA + "@example.com:80?type=ws&path=%2Fws",
+			map[string]string{"transport": `{"path":"/ws","type":"ws"}`, "tls": ""}},
 		{"httpupgrade: host is its own field",
 			"vless://" + uuidA + "@example.com:443?type=httpupgrade&host=cdn.example.com&path=%2Fup",
 			map[string]string{"transport": `{"host":"cdn.example.com","path":"/up","type":"httpupgrade"}`, "tls": ""}},
@@ -457,7 +476,7 @@ func TestBuildRejectsBadLanes(t *testing.T) {
 		"both connectors": func(o *Options) { o.Lane.Proxy = trojan() },
 		"unknown protocol": func(o *Options) {
 			s := trojan()
-			s.Protocol = "socks"
+			s.Protocol = "bogus"
 			o.Lane = Lane{Proxy: s}
 		},
 		"a protocol without its settings": func(o *Options) {
@@ -514,6 +533,74 @@ func TestBuildRejectsBadLanes(t *testing.T) {
 			s := mustParse(t, "vless://"+uuidA+"@example.com:443")
 			s.VLESS.PacketEncoding = "bogus"
 			o.Lane = Lane{Proxy: s}
+		},
+		"unknown VLESS flow": func(o *Options) {
+			s := mustParse(t, "vless://"+uuidA+"@example.com:443?security=tls")
+			s.VLESS.Flow = "bogus"
+			o.Lane = Lane{Proxy: s}
+		},
+		"VLESS flow without TLS": func(o *Options) {
+			s := mustParse(t, "vless://"+uuidA+"@example.com:443")
+			s.VLESS.Flow = "xtls-rprx-vision"
+			o.Lane = Lane{Proxy: s}
+		},
+		"VLESS flow over a transport": func(o *Options) {
+			s := mustParse(t, "vless://"+uuidA+"@example.com:443?security=tls&type=ws")
+			s.VLESS.Flow = "xtls-rprx-vision"
+			o.Lane = Lane{Proxy: s}
+		},
+		"unknown VMess security": func(o *Options) {
+			s := mustParse(t, "vmess://"+uuidA+"@example.com:443")
+			s.VMess.Security = "bogus"
+			o.Lane = Lane{Proxy: s}
+		},
+		"VMess without security": func(o *Options) {
+			s := mustParse(t, "vmess://"+uuidA+"@example.com:443")
+			s.VMess.Security = ""
+			o.Lane = Lane{Proxy: s}
+		},
+		"unknown Shadowsocks method": func(o *Options) {
+			s := mustParse(t, "ss://2022-blake3-aes-256-gcm:"+strings.ReplaceAll(ss256, "=", "%3D")+"@example.com:443")
+			s.Shadowsocks.Method = "bogus"
+			o.Lane = Lane{Proxy: s}
+		},
+		"a Shadowsocks stream cipher": func(o *Options) {
+			s := mustParse(t, "ss://2022-blake3-aes-256-gcm:"+strings.ReplaceAll(ss256, "=", "%3D")+"@example.com:443")
+			s.Shadowsocks.Method = "rc4-md5"
+			o.Lane = Lane{Proxy: s}
+		},
+		"unknown uTLS fingerprint": func(o *Options) {
+			s := trojan()
+			s.TLS.Fingerprint = "bogus"
+			o.Lane = Lane{Proxy: s}
+		},
+		"unknown TUIC congestion control": func(o *Options) {
+			s := mustParse(t, "tuic://"+uuidA+":"+pw+"@example.com:443")
+			s.TUIC.CongestionControl = "bogus"
+			o.Lane = Lane{Proxy: s}
+		},
+		"unknown TUIC UDP relay mode": func(o *Options) {
+			s := mustParse(t, "tuic://"+uuidA+":"+pw+"@example.com:443")
+			s.TUIC.UDPRelayMode = "bogus"
+			o.Lane = Lane{Proxy: s}
+		},
+		"uTLS on Hysteria2": func(o *Options) {
+			s := mustParse(t, "hysteria2://"+pw+"@example.com:443")
+			s.TLS.Fingerprint = "chrome"
+			o.Lane = Lane{Proxy: s}
+		},
+		"REALITY on TUIC": func(o *Options) {
+			s := mustParse(t, "tuic://"+uuidA+":"+pw+"@example.com:443")
+			s.TLS.Fingerprint, s.TLS.Reality = "chrome", &connector.Reality{PublicKey: pbk}
+			o.Lane = Lane{Proxy: s}
+		},
+		"a server lane with ports that clash": func(o *Options) {
+			o.Lane = Lane{Proxy: trojan()}
+			o.Ports.Clash = o.Ports.ProbeVPN
+		},
+		"a server lane with a short Clash secret": func(o *Options) {
+			o.Lane = Lane{Proxy: trojan()}
+			o.ClashSecret = "short"
 		},
 		"a transport on Shadowsocks": func(o *Options) {
 			s := mustParse(t, "ss://2022-blake3-aes-256-gcm:"+strings.ReplaceAll(ss256, "=", "%3D")+"@example.com:443")
@@ -572,10 +659,38 @@ func TestBuildRejectsBadLanes(t *testing.T) {
 		if !strings.HasPrefix(err.Error(), "coreconfig: ") {
 			t.Errorf("%s: %v", name, err)
 		}
-		for _, secret := range []string{pw, uuidA, wgPriv, "example.com", "socks", "xhttp", "bogus", "other"} {
+		for _, secret := range []string{pw, uuidA, wgPriv, "example.com", "xhttp", "bogus", "other", "rc4-md5"} {
 			if strings.Contains(err.Error(), secret) {
 				t.Errorf("%s: the error %q repeats a value of the server", name, err)
 			}
+		}
+	}
+}
+
+// The API port and its secret belong to the embedded node's API service: a server lane needs
+// neither, the Tailscale lane both.
+func TestAPIOnlyForTheTailscaleLane(t *testing.T) {
+	o := proxyOptions(`C:\ProgramData\SplitLane`, mustParse(t, "trojan://pw@example.com:443"))
+	o.Ports.API, o.APISecret = 0, ""
+	b, err := Build(o)
+	if err != nil {
+		t.Fatalf("a server lane without the API port and secret: %v", err)
+	}
+	if bytes.Contains(b, []byte(`"services"`)) {
+		t.Fatal("no API service for a server lane")
+	}
+	o.Ports.API = o.Ports.Clash // unused, so it may be anything
+	if _, err := Build(o); err != nil {
+		t.Fatalf("a server lane with an unused API port: %v", err)
+	}
+	for name, change := range map[string]func(*Options){
+		"no API port":   func(o *Options) { o.Ports.API = 0 },
+		"no API secret": func(o *Options) { o.APISecret = "" },
+	} {
+		o := testOptions(`C:\ProgramData\SplitLane`)
+		change(&o)
+		if _, err := Build(o); err == nil {
+			t.Errorf("Tailscale lane, %s: want an error", name)
 		}
 	}
 }

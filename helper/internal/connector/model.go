@@ -194,6 +194,57 @@ type WireGuardPeer struct {
 	PersistentKeepalive int            // seconds; 0 = off
 }
 
+// The closed sets of values the model holds. The parsers refuse anything else, and coreconfig checks
+// a server against the same sets (the Known* functions) before it renders it. "" is in no set:
+// whether a field may be empty is said by its comment above.
+var (
+	flows              = set("xtls-rprx-vision")
+	packetEncodings    = set("xudp", "packetaddr", "none")
+	vmessSecurities    = set("auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero")
+	fingerprints       = set("chrome", "firefox", "edge", "safari", "360", "qq", "ios", "android", "random", "randomized") // of uTLS, all known to the core
+	congestionControls = set("cubic", "new_reno", "bbr")
+	udpRelayModes      = set("native", "quic")
+)
+
+// ssMethods: the AEAD methods (0) and the Shadowsocks 2022 methods with their key sizes. Stream
+// ciphers and none are refused: they are broken or pointless over the internet.
+var ssMethods = map[string]int{
+	"aes-128-gcm": 0, "aes-192-gcm": 0, "aes-256-gcm": 0, "chacha20-ietf-poly1305": 0, "xchacha20-ietf-poly1305": 0,
+	"2022-blake3-aes-128-gcm": 16, "2022-blake3-aes-256-gcm": 32, "2022-blake3-chacha20-poly1305": 32,
+}
+
+func set(values ...string) map[string]bool {
+	m := make(map[string]bool, len(values))
+	for _, v := range values {
+		m[v] = true
+	}
+	return m
+}
+
+// KnownFlow tells whether s is a VLESS flow of the model (VLESS.Flow).
+func KnownFlow(s string) bool { return flows[s] }
+
+// KnownPacketEncoding tells whether s is a VLESS packet encoding of the model (VLESS.PacketEncoding).
+func KnownPacketEncoding(s string) bool { return packetEncodings[s] }
+
+// KnownVMessSecurity tells whether s is a VMess security of the model (VMess.Security).
+func KnownVMessSecurity(s string) bool { return vmessSecurities[s] }
+
+// KnownShadowsocksMethod tells whether s is a Shadowsocks method of the model (Shadowsocks.Method).
+func KnownShadowsocksMethod(s string) bool {
+	_, ok := ssMethods[s]
+	return ok
+}
+
+// KnownFingerprint tells whether s is a uTLS fingerprint of the model (TLS.Fingerprint).
+func KnownFingerprint(s string) bool { return fingerprints[s] }
+
+// KnownCongestionControl tells whether s is a TUIC congestion control of the model (TUIC.CongestionControl).
+func KnownCongestionControl(s string) bool { return congestionControls[s] }
+
+// KnownUDPRelayMode tells whether s is a TUIC UDP relay mode of the model (TUIC.UDPRelayMode).
+func KnownUDPRelayMode(s string) bool { return udpRelayModes[s] }
+
 // Rejection says why a link, a .conf or a line was refused. Detail is a short English note for
 // logs (a parameter name, a field); it never repeats a value of the input.
 type Rejection struct {

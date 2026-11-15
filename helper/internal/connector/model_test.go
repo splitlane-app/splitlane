@@ -168,3 +168,50 @@ func checkServer(t *testing.T, s Server) {
 		}
 	}
 }
+
+// The Known* functions are the sets the parsers use: coreconfig checks a server with them.
+func TestKnownSets(t *testing.T) {
+	for _, c := range []struct {
+		known func(string) bool
+		in    []string
+	}{
+		{KnownFlow, []string{"xtls-rprx-vision"}},
+		{KnownPacketEncoding, []string{"xudp", "packetaddr", "none"}},
+		{KnownVMessSecurity, []string{"auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"}},
+		{KnownShadowsocksMethod, []string{"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
+			"xchacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"}},
+		{KnownFingerprint, []string{"chrome", "firefox", "edge", "safari", "360", "qq", "ios", "android", "random", "randomized"}},
+		{KnownCongestionControl, []string{"cubic", "new_reno", "bbr"}},
+		{KnownUDPRelayMode, []string{"native", "quic"}},
+	} {
+		for _, v := range c.in {
+			if !c.known(v) {
+				t.Errorf("%q is not known", v)
+			}
+		}
+		for _, v := range []string{"", "bogus", strings.ToUpper(c.in[0]), "rc4-md5", "xtls-rprx-direct", "chrome_psk"} {
+			if c.known(v) {
+				t.Errorf("%q is known", v)
+			}
+		}
+	}
+	// What the parser accepts is known: a flow, a fingerprint, a method, a security, TUIC values.
+	for _, link := range []string{
+		"vless://3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d@example.com:443?security=tls&flow=xtls-rprx-vision&fp=qq&packetEncoding=packetaddr",
+		"vmess://3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d@example.com:443?encryption=zero",
+		"ss://YWVzLTE5Mi1nY206cGFzcw@example.com:8388",
+		"tuic://3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d:pw@example.com:443?congestion_control=new_reno&udp_relay_mode=quic",
+	} {
+		s, err := ParseLink(link)
+		if err != nil {
+			t.Fatalf("%s: %v", link, err)
+		}
+		switch {
+		case s.VLESS != nil && (!KnownFlow(s.VLESS.Flow) || !KnownPacketEncoding(s.VLESS.PacketEncoding) || !KnownFingerprint(s.TLS.Fingerprint)),
+			s.VMess != nil && !KnownVMessSecurity(s.VMess.Security),
+			s.Shadowsocks != nil && !KnownShadowsocksMethod(s.Shadowsocks.Method),
+			s.TUIC != nil && (!KnownCongestionControl(s.TUIC.CongestionControl) || !KnownUDPRelayMode(s.TUIC.UDPRelayMode)):
+			t.Errorf("%s: parsed into a value that is not known: %+v", link, s)
+		}
+	}
+}

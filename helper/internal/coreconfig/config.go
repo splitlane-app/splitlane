@@ -149,8 +149,8 @@ func route(outbound string, match obj) obj {
 	return match
 }
 
-// rejectNodeInbound is rule 0 of spec 6.2, first in both configs of the Tailscale lane (for a
-// WireGuard endpoint see wireGuardNodeRule; a proxy outbound has no such flows). The embedded node hands the
+// rejectNodeInbound is rule 0 of spec 6.2, first in both configs of the Tailscale lane and in that of
+// a WireGuard endpoint (wireGuardNodeRule; a proxy outbound has no such flows). The embedded node hands the
 // router every flow that a tailnet peer opens to the node's own address, with the inbound TagVPN
 // and the destination rewritten to 127.0.0.1 (sing-box 1.14.4, protocol/tailscale/endpoint.go,
 // NewConnectionEx and NewPacketConnectionEx); routed, it would reach the PC's localhost-only
@@ -296,10 +296,16 @@ func (o Options) validate() error {
 	if err := o.Lane.check(); err != nil {
 		return err
 	}
+	// The API port and its secret are the embedded node's API service: the Tailscale lane only.
+	node := o.Lane.Tailscale != nil
+	ports, count := []int{o.Ports.ProbeVPN, o.Ports.ProbeDirect, o.Ports.Clash}, "three"
+	if node {
+		ports, count = append(ports, o.Ports.API), "four"
+	}
 	seen := map[int]bool{}
-	for _, port := range []int{o.Ports.ProbeVPN, o.Ports.ProbeDirect, o.Ports.Clash, o.Ports.API} {
+	for _, port := range ports {
 		if port <= 0 || port > 65535 || seen[port] {
-			return fmt.Errorf("coreconfig: ports must be four different numbers 1..65535")
+			return fmt.Errorf("coreconfig: ports must be %s different numbers 1..65535", count)
 		}
 		seen[port] = true
 	}
@@ -308,7 +314,7 @@ func (o Options) validate() error {
 		return fmt.Errorf("coreconfig: data folder must be an absolute path")
 	case o.HelperPath == "" || !filepath.IsAbs(o.HelperPath):
 		return fmt.Errorf("coreconfig: helper path must be an absolute path")
-	case len(o.ClashSecret) < 16 || len(o.APISecret) < 16:
+	case len(o.ClashSecret) < 16 || (node && len(o.APISecret) < 16):
 		return fmt.Errorf("coreconfig: secrets must be at least 16 characters")
 	}
 	return nil

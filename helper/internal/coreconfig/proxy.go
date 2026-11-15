@@ -36,11 +36,13 @@ func (t *TailscaleLane) check() error {
 
 // wireGuardNodeRule: whether rule 0 of spec 6.2 is written for a WireGuard endpoint. The embedded
 // Tailscale node hands the router, under the inbound TagVPN, the flows that tailnet peers open to
-// the node's own address (rejectNodeInbound). A WireGuard endpoint might do the same with flows the
-// server's side opens to the interface address; until the live check (task 9 of the plan of stage 3
-// part 1) shows whether it does, the rule is not written for it. This is the one place to switch it
-// on. Proxy outbounds have no such flows and never get the rule.
-const wireGuardNodeRule = false
+// the node's own address (rejectNodeInbound). The WireGuard endpoint of sing-box 1.14.4 does the same
+// for the flows its peer opens (protocol/wireguard/endpoint.go, NewConnectionEx and
+// NewPacketConnectionEx: the inbound is the endpoint's tag, a destination among the endpoint's own
+// addresses becomes 127.0.0.1 or ::1), so the rule is written for it too: fail-closed until the live
+// check (task 9 of the plan of stage 3 part 1) confirms it. This is the one place to switch it.
+// Proxy outbounds have no such flows and never get the rule.
+const wireGuardNodeRule = true
 
 // check refuses a lane with no connector or two, and a Tailscale lane without its values. A server
 // is checked while it is rendered (proxyLane): the checks and the fields stay together.
@@ -112,17 +114,23 @@ func proxyLane(s *connector.Server) (lane obj, endpoint bool, err error) {
 		}
 		o["type"], o["uuid"] = "vless", v.UUID
 		if v.Flow != "" {
+			switch {
+			case !connector.KnownFlow(v.Flow):
+				return nil, false, fmt.Errorf("coreconfig: unknown VLESS flow")
+			case s.TLS == nil || s.Transport != nil:
+				return nil, false, fmt.Errorf("coreconfig: the VLESS flow needs TLS over plain TCP")
+			}
 			o["flow"] = v.Flow
 		}
 		// The core takes no packet_encoding as its default, xudp, and an empty one as none at all.
-		switch v.PacketEncoding {
-		case "":
-		case "none":
-			o["packet_encoding"] = ""
-		case "xudp", "packetaddr":
-			o["packet_encoding"] = v.PacketEncoding
-		default:
+		switch {
+		case v.PacketEncoding == "":
+		case !connector.KnownPacketEncoding(v.PacketEncoding):
 			return nil, false, fmt.Errorf("coreconfig: unknown VLESS packet encoding")
+		case v.PacketEncoding == "none":
+			o["packet_encoding"] = ""
+		default:
+			o["packet_encoding"] = v.PacketEncoding
 		}
 		err = stream(o, s)
 	case connector.ProtocolVMess:
@@ -130,10 +138,10 @@ func proxyLane(s *connector.Server) (lane obj, endpoint bool, err error) {
 		if v == nil {
 			return nil, false, missing
 		}
-		o["type"], o["uuid"] = "vmess", v.UUID
-		if v.Security != "" {
-			o["security"] = v.Security
+		if !connector.KnownVMessSecurity(v.Security) {
+			return nil, false, fmt.Errorf("coreconfig: unknown VMess security")
 		}
+		o["type"], o["uuid"], o["security"] = "vmess", v.UUID, v.Security
 		if v.AlterID > 0 {
 			o["alter_id"] = v.AlterID
 		}
@@ -147,6 +155,9 @@ func proxyLane(s *connector.Server) (lane obj, endpoint bool, err error) {
 	case connector.ProtocolShadowsocks:
 		if s.Shadowsocks == nil {
 			return nil, false, missing
+		}
+		if !connector.KnownShadowsocksMethod(s.Shadowsocks.Method) {
+			return nil, false, fmt.Errorf("coreconfig: unknown Shadowsocks method")
 		}
 		o["type"], o["method"], o["password"] = "shadowsocks", s.Shadowsocks.Method, s.Shadowsocks.Password
 		err = bare(s, false)
@@ -185,9 +196,15 @@ func proxyLane(s *connector.Server) (lane obj, endpoint bool, err error) {
 		}
 		o["type"], o["uuid"], o["password"] = "tuic", u.UUID, u.Password
 		if u.CongestionControl != "" {
+			if !connector.KnownCongestionControl(u.CongestionControl) {
+				return nil, false, fmt.Errorf("coreconfig: unknown TUIC congestion control")
+			}
 			o["congestion_control"] = u.CongestionControl
 		}
 		if u.UDPRelayMode != "" {
+			if !connector.KnownUDPRelayMode(u.UDPRelayMode) {
+				return nil, false, fmt.Errorf("coreconfig: unknown TUIC UDP relay mode")
+			}
 			o["udp_relay_mode"] = u.UDPRelayMode
 		}
 		if u.ZeroRTT {
@@ -223,13 +240,18 @@ func bare(s *connector.Server, tlsAllowed bool) error {
 	return nil
 }
 
-// quic adds the TLS that Hysteria2 and TUIC always have; they carry no transport.
+// quic adds the TLS that Hysteria2 and TUIC always have; they carry no transport. Their TLS is that
+// of QUIC: no uTLS fingerprint and no REALITY (the parser ignores fp for them), so a server with
+// either is refused rather than rendered without it.
 func quic(o obj, s *connector.Server) error {
 	if err := bare(s, true); err != nil {
 		return err
 	}
-	if s.TLS == nil {
+	switch {
+	case s.TLS == nil:
 		return fmt.Errorf("coreconfig: the protocol of the server needs TLS")
+	case s.TLS.Fingerprint != "" || s.TLS.Reality != nil:
+		return fmt.Errorf("coreconfig: the protocol of the server has no uTLS and no REALITY")
 	}
 	t, err := renderTLS(s.TLS, nil)
 	if err != nil {
@@ -249,7 +271,7 @@ func stream(o obj, s *connector.Server) error {
 		o["tls"] = t
 	}
 	if s.Transport != nil {
-		t, err := renderTransport(s.Transport)
+		t, err := renderTransport(s.Transport, s.TLS)
 		if err != nil {
 			return err
 		}
@@ -274,6 +296,9 @@ func renderTLS(t *connector.TLS, tr *connector.Transport) (obj, error) {
 		o["alpn"] = alpn
 	}
 	if t.Fingerprint != "" {
+		if !connector.KnownFingerprint(t.Fingerprint) {
+			return nil, fmt.Errorf("coreconfig: unknown uTLS fingerprint")
+		}
 		o["utls"] = obj{"enabled": true, "fingerprint": t.Fingerprint}
 	}
 	if r := t.Reality; r != nil {
@@ -308,9 +333,14 @@ func laneALPN(alpn []string, tr *connector.Transport) []string {
 	return alpn
 }
 
-// renderTransport is the core's V2Ray transport. gRPC modes gun and multi are both the core's grpc
-// (gun): the parser keeps no mode.
-func renderTransport(tr *connector.Transport) (obj, error) {
+// renderTransport is the core's V2Ray transport; tls is the TLS under it, nil for none. gRPC modes
+// gun and multi are both the core's grpc (gun): the parser keeps no mode.
+//
+// A ws link without host: the core's ws then sends the server address as Host (sing-box 1.14.4 has
+// no fallback there, its httpupgrade falls back to the TLS server name), which a server behind a
+// name-based proxy or a CDN does not serve. So Host is the TLS server name when there is one, the
+// name the server's certificate is for. Not over REALITY: its server name is the site it mimics.
+func renderTransport(tr *connector.Transport, tls *connector.TLS) (obj, error) {
 	oneHost := func() (string, error) {
 		switch len(tr.Host) {
 		case 0:
@@ -327,6 +357,9 @@ func renderTransport(tr *connector.Transport) (obj, error) {
 		host, err := oneHost()
 		if err != nil {
 			return nil, err
+		}
+		if host == "" && tls != nil && tls.Reality == nil {
+			host = tls.ServerName
 		}
 		if host != "" {
 			o["headers"] = obj{"Host": host} // the core's ws has no host field of its own
