@@ -3,9 +3,11 @@ package pipe
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +28,9 @@ func TestAllowedFolderBoundary(t *testing.T) {
 		{`c:\program files\splitlane\SPLITLANE.EXE`, true},
 		{`C:\Program Files\SplitLaneX\a.exe`, false},
 		{`C:\Program Files\SplitLane`, false},
+		{"C:\\Program F\u0130les\\SplitLane\\x.exe", false}, // U+0130: another folder on NTFS
+		{"C:\\Program File\u017f\\SplitLane\\x.exe", false}, // U+017F folds to "s" in Go
+		{"C:\\Program Files\\Split\u212aane\\x.exe", false}, // U+212A folds to "k" in Go
 		{`SplitLane\SplitLane.exe`, false},
 		{``, false},
 	}
@@ -48,45 +53,51 @@ func TestAllowedElevated(t *testing.T) {
 	}
 }
 
-func TestClientOfThisProcess(t *testing.T) {
-	var got Caller
-	var gotErr error
-	var mu sync.Mutex
-	done := make(chan struct{})
+// accepted runs f on the server side of a test pipe connection from this very process, while a client
+// is connected to it.
+func accepted(t *testing.T, f func(conn net.Conn)) {
+	t.Helper()
 	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
 	l, err := winio.ListenPipe(name, &winio.PipeConfig{SecurityDescriptor: SDDL(currentSID(t))})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		conn, err := l.Accept()
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-		mu.Lock()
-		got, gotErr = ClientOf(conn)
-		mu.Unlock()
-		close(done)
+		f(conn)
 	}()
-	c := dial(t, name)
+	dial(t, name)
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("no client")
+		t.Fatal("no client came")
 	}
-	_ = c
-	mu.Lock()
-	defer mu.Unlock()
-	if gotErr != nil {
-		t.Fatal(gotErr)
-	}
+}
+
+func ownExe(t *testing.T) string {
+	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.EqualFold(got.Image, exe) {
+	return exe
+}
+
+func TestClientOfThisProcess(t *testing.T) {
+	var got Caller
+	var gotErr error
+	accepted(t, func(conn net.Conn) { got, gotErr = ClientOf(conn) })
+	if gotErr != nil {
+		t.Fatal(gotErr)
+	}
+	if exe := ownExe(t); !strings.EqualFold(got.Image, exe) {
 		t.Errorf("image %q, want %q", got.Image, exe)
 	}
 	if got.PID != uint32(os.Getpid()) {
@@ -105,18 +116,28 @@ func TestClientOfWithoutFd(t *testing.T) {
 	}
 }
 
-func servePolicy(t *testing.T, check Check) (*Server, *fakeHandler, string, *logLines) {
-	t.Helper()
-	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
-	h := &fakeHandler{}
-	ll := &logLines{}
-	s, err := Listen(name, currentSID(t), h, ll.add, check)
+// The folder of this test exe is the product folder: the process is inside it.
+func TestProductCheckAdmitsAnImageInsideTheFolder(t *testing.T) {
+	var err error
+	accepted(t, func(conn net.Conn) { err = ProductCheck(filepath.Dir(ownExe(t)))(conn) })
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("an image inside the folder is allowed: %v", err)
 	}
-	go s.Serve()
-	t.Cleanup(s.Close)
-	return s, h, name, ll
+}
+
+func TestProductCheckRefusalNamesOnlyTheBaseName(t *testing.T) {
+	if windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("the test process is elevated: it would be allowed")
+	}
+	var err error
+	accepted(t, func(conn net.Conn) { err = ProductCheck(`C:\nowhere\SplitLane`)(conn) })
+	if err == nil {
+		t.Fatal("refused expected")
+	}
+	want := fmt.Sprintf("not part of SplitLane: %s (process %d)", filepath.Base(ownExe(t)), os.Getpid())
+	if !strings.EqualFold(err.Error(), want) {
+		t.Fatalf("%q, want %q", err, want)
+	}
 }
 
 type logLines struct {
@@ -130,10 +151,14 @@ func (l *logLines) add(format string, a ...any) {
 	l.lines = append(l.lines, fmt.Sprintf(format, a...))
 }
 
-func (l *logLines) has(sub string) bool {
+func (l *logLines) all() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for _, s := range l.lines {
+	return append([]string(nil), l.lines...)
+}
+
+func (l *logLines) has(sub string) bool {
+	for _, s := range l.all() {
 		if strings.Contains(s, sub) {
 			return true
 		}
@@ -141,30 +166,54 @@ func (l *logLines) has(sub string) bool {
 	return false
 }
 
-func TestCheckErrorRejects(t *testing.T) {
-	_, h, name, ll := servePolicy(t, func(net.Conn) error { return errors.New("not part of SplitLane: evil.exe (process 7)") })
-	c := dial(t, name)
-	c.conn.Write([]byte(`{"id":1,"method":"hello","params":{"protocol":1}}` + "\n"))
-	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := c.r.ReadString('\n'); err == nil {
-		t.Fatal("a refused client must get no answer")
+// serveWith starts a server with the check on a pipe name of its own; the pipe disappears with the test.
+func serveWith(t *testing.T, check Check) (*fakeHandler, string, *logLines) {
+	t.Helper()
+	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
+	h := &fakeHandler{}
+	ll := &logLines{}
+	s, err := Listen(name, currentSID(t), h, ll.add, check)
+	if err != nil {
+		t.Fatal(err)
 	}
+	go s.Serve()
+	t.Cleanup(s.Close)
+	return h, name, ll
+}
+
+const helloLine = `{"id":1,"method":"hello","params":{"protocol":1}}` + "\n"
+
+// expectEOF sends hello and waits for the end of the stream: a refused client gets no answer.
+func expectEOF(t *testing.T, c *testClient) {
+	t.Helper()
+	c.conn.Write([]byte(helloLine))
+	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, err := c.r.ReadString('\n')
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("a refused client must see the end of the stream, got %q %v", line, err)
+	}
+}
+
+func TestCheckErrorRejects(t *testing.T) {
+	const refusal = "not part of SplitLane: evil.exe (process 7)"
+	h, name, ll := serveWith(t, func(net.Conn) error { return errors.New(refusal) })
+	expectEOF(t, dial(t, name))
 	deadline := time.Now().Add(2 * time.Second)
-	for !ll.has("pipe: refused a client: not part of SplitLane: evil.exe (process 7)") && time.Now().Before(deadline) {
+	for !ll.has("pipe: refused a client: "+refusal) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !ll.has("pipe: refused a client: not part of SplitLane: evil.exe (process 7)") {
-		t.Fatalf("log: %v", ll.lines)
+	if !ll.has("pipe: refused a client: " + refusal) {
+		t.Fatalf("log: %v", ll.all())
 	}
-	if h.count() != 0 {
-		t.Fatal("a refused client is not counted")
+	if calls := h.setCalls(); len(calls) != 0 {
+		t.Fatalf("a refused client does not change SetClients: %v", calls)
 	}
 }
 
 func TestRejectedClientDoesNotStopTheServer(t *testing.T) {
 	var mu sync.Mutex
 	n := 0
-	_, _, name, _ := servePolicy(t, func(net.Conn) error {
+	_, name, _ := serveWith(t, func(net.Conn) error {
 		mu.Lock()
 		defer mu.Unlock()
 		n++
@@ -173,12 +222,7 @@ func TestRejectedClientDoesNotStopTheServer(t *testing.T) {
 		}
 		return nil
 	})
-	first := dial(t, name)
-	first.conn.Write([]byte(`{"id":1,"method":"hello","params":{"protocol":1}}` + "\n"))
-	first.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := first.r.ReadString('\n'); err == nil {
-		t.Fatal("the first client was refused")
-	}
+	expectEOF(t, dial(t, name))
 	second := dial(t, name)
 	m := second.send(t, `{"id":2,"method":"hello","params":{"protocol":1}}`)
 	if _, ok := m["result"]; !ok {
@@ -187,68 +231,44 @@ func TestRejectedClientDoesNotStopTheServer(t *testing.T) {
 }
 
 func TestNilCheckAcceptsAll(t *testing.T) {
-	_, _, name, _ := servePolicy(t, nil)
+	_, name, _ := serveWith(t, nil)
 	c := dial(t, name)
 	if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`); m["result"] == nil {
 		t.Fatalf("hello: %v", m)
 	}
 }
 
-func TestProductCheckAllowsOwnProcessAsElevatedOrInside(t *testing.T) {
-	// The test process is not inside a product folder named after nothing, so only elevation can admit it.
+// Close while a client is still in its check: the client is not served afterwards and Close returns.
+func TestCloseDuringTheCheckServesNobody(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
 	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
-	l, err := winio.ListenPipe(name, &winio.PipeConfig{SecurityDescriptor: SDDL(currentSID(t))})
+	h := &fakeHandler{}
+	s, err := Listen(name, currentSID(t), h, nil, func(net.Conn) error {
+		close(entered)
+		<-release
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
-	exe, _ := os.Executable()
-	dir := exe[:strings.LastIndex(exe, `\`)]
-	errs := make(chan error, 1)
-	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			errs <- err
-			return
-		}
-		defer conn.Close()
-		errs <- ProductCheck(dir)(conn)
-	}()
-	dial(t, name)
-	if err := <-errs; err != nil {
-		t.Fatalf("an image inside the folder is allowed: %v", err)
+	go s.Serve()
+	c := dial(t, name)
+	<-entered
+	closed := make(chan struct{})
+	go func() { s.Close(); close(closed) }()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return")
 	}
-}
-
-func TestProductCheckRefusalNamesOnlyTheBaseName(t *testing.T) {
-	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
-	l, err := winio.ListenPipe(name, &winio.PipeConfig{SecurityDescriptor: SDDL(currentSID(t))})
-	if err != nil {
-		t.Fatal(err)
+	c.conn.Write([]byte(helloLine))
+	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if line, err := c.r.ReadString('\n'); !errors.Is(err, io.EOF) {
+		t.Fatalf("the client was served after Close: %q %v", line, err)
 	}
-	defer l.Close()
-	errs := make(chan error, 1)
-	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			errs <- err
-			return
-		}
-		defer conn.Close()
-		errs <- ProductCheck(`C:\nowhere\SplitLane`)(conn)
-	}()
-	dial(t, name)
-	err = <-errs
-	if windows.GetCurrentProcessToken().IsElevated() {
-		t.Skip("the test process is elevated: it would be allowed")
-	}
-	if err == nil {
-		t.Fatal("refused expected")
-	}
-	exe, _ := os.Executable()
-	base := exe[strings.LastIndex(exe, `\`)+1:]
-	want := fmt.Sprintf("not part of SplitLane: %s (process %d)", base, os.Getpid())
-	if !strings.EqualFold(err.Error(), want) {
-		t.Fatalf("%q, want %q", err, want)
+	if calls := h.setCalls(); len(calls) != 0 {
+		t.Fatalf("SetClients: %v", calls)
 	}
 }

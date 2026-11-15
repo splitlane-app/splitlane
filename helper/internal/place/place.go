@@ -161,3 +161,39 @@ func checkSID(sid string) error {
 	}
 	return nil
 }
+
+// asciiFold lower-cases the ASCII letters only. NTFS compares names with its own case table, and Go's
+// folding differs from it (U+0130 becomes "i", U+017F and U+212A fold to "s" and "k"): a folder named
+// with such a letter is another folder, yet would pass a Go comparison. Every other rune stays exact,
+// so a doubtful name never matches.
+func asciiFold(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+// PathEqual tells that a and b name the same file or folder: the paths are cleaned and compared with
+// ASCII-only case folding; a non-ASCII letter must match exactly (a mismatch fails closed).
+func PathEqual(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return asciiFold(filepath.Clean(a)) == asciiFold(filepath.Clean(b))
+}
+
+// PathInside tells that path lies strictly below the folder dir (dir itself is not inside; SplitLaneX is
+// not inside SplitLane). The same ASCII-only folding as PathEqual: non-ASCII letters must match exactly.
+func PathInside(path, dir string) bool {
+	if path == "" || dir == "" {
+		return false
+	}
+	p, d := asciiFold(filepath.Clean(path)), asciiFold(filepath.Clean(dir))
+	if !strings.HasSuffix(d, `\`) {
+		d += `\`
+	}
+	return len(p) > len(d) && strings.HasPrefix(p, d)
+}

@@ -556,5 +556,5 @@ func deviceName(o Options, read bool) string {
 	return o.Hostname + "-splitlane"
 }
 
-// sameDir tells that a and b are the same folder; names compare without case, as on Windows.
-func sameDir(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }
+// sameDir tells that a and b are the same folder; names compare with ASCII-only case folding (place.PathEqual).
+func sameDir(a, b string) bool { return place.PathEqual(a, b) }

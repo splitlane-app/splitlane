@@ -261,14 +261,10 @@ func run(args []string) int {
 		},
 		OnExit: func() { close(exit) },
 	})
-	var check pipe.Check // spec 5: the product serves SplitLane programs and elevated callers; --dev everyone
-	if !o.dev {
-		dir, err := productDir()
-		if err != nil {
-			logf("product folder: %v", err)
-			return exitInternal
-		}
-		check = pipe.ProductCheck(dir)
+	check, err := pipeCheck(o.dev)
+	if err != nil {
+		logf("product folder: %v", err)
+		return exitInternal
 	}
 	srv, err = pipe.Listen(o.pipe, userSID, eng, logf, check)
 	if err != nil {
@@ -312,6 +308,19 @@ func run(args []string) int {
 	watcher.Stop()
 	stopRoutes()
 	return exitOK
+}
+
+// pipeCheck is the caller check of the pipe (spec 5): the product serves SplitLane programs and
+// elevated callers; --dev serves everyone (nil).
+func pipeCheck(dev bool) (pipe.Check, error) {
+	if dev {
+		return nil, nil
+	}
+	dir, err := productDir()
+	if err != nil {
+		return nil, err
+	}
+	return pipe.ProductCheck(dir), nil
 }
 
 // appendWriter writes every line to the end of the file at path: it opens the file for the line and closes
@@ -412,7 +421,7 @@ func productPlace(helperPath, dataDir string, logf func(string, ...any)) (core, 
 		return "", "", exitInternal
 	}
 	want := filepath.Join(dir, "splitlane-helper.exe")
-	if !strings.EqualFold(filepath.Clean(helperPath), want) {
+	if !place.PathEqual(helperPath, want) {
 		logf("refused: the product runs only as %s, this is %s (spec 11); a development run takes --dev", want, helperPath)
 		return "", "", exitUsage
 	}

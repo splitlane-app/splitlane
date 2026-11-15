@@ -542,3 +542,21 @@ func TestSessionUserAndUserSidExclude(t *testing.T) {
 		t.Fatalf("exit code %d, %d calls, output %q", code, calls, out.String())
 	}
 }
+
+// The pipe check is the product's alone: --dev passes none, the product passes the check of its folder,
+// and a product folder that cannot be found is an error (the worker then exits with exitInternal).
+func TestPipeCheckByMode(t *testing.T) {
+	if c, err := pipeCheck(true); c != nil || err != nil {
+		t.Fatalf("--dev: %v %v", c != nil, err)
+	}
+	fakePlace(t)
+	if c, err := pipeCheck(false); c == nil || err != nil {
+		t.Fatalf("product: %v %v", c != nil, err)
+	}
+	old := productDir
+	defer func() { productDir = old }()
+	productDir = func() (string, error) { return "", errors.New("no product folder") }
+	if c, err := pipeCheck(false); c != nil || err == nil {
+		t.Fatalf("a failing product folder is an error: %v %v", c != nil, err)
+	}
+}

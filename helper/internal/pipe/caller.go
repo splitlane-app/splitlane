@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/sys/windows"
+
+	"splitlane/helper/internal/place"
 )
 
 // Caller is the program on the other end of a pipe connection.
@@ -21,17 +22,12 @@ type Caller struct {
 type Check func(conn net.Conn) error
 
 // Allowed admits an elevated client, or one whose image lies inside productDir (case does not
-// matter; productDir is a folder boundary: SplitLaneX is not inside SplitLane).
+// folds for ASCII letters only; productDir is a folder boundary: SplitLaneX is not inside SplitLane).
 func Allowed(c Caller, productDir string) bool {
 	if c.Elevated {
 		return true
 	}
-	dir := strings.ToLower(strings.TrimRight(productDir, `\/`))
-	img := strings.ToLower(c.Image)
-	if dir == "" || !filepath.IsAbs(c.Image) {
-		return false
-	}
-	return strings.HasPrefix(img, dir+`\`) && len(img) > len(dir)+1
+	return filepath.IsAbs(c.Image) && place.PathInside(c.Image, productDir)
 }
 
 // ProductCheck is the check of the product: the client is elevated or part of the product folder.
@@ -51,7 +47,8 @@ func ProductCheck(productDir string) Check {
 
 type fder interface{ Fd() uintptr }
 
-// ClientOf finds the process at the client end of a go-winio pipe connection.
+// ClientOf finds the process at the client end of a go-winio pipe connection. Known limitation: the image
+// comes as the system returns it; an 8.3 short name never matches the product folder (it fails closed).
 func ClientOf(conn net.Conn) (Caller, error) {
 	f, ok := conn.(fder)
 	if !ok {

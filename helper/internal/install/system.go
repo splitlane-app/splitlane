@@ -155,10 +155,9 @@ func imagePath(pid uint32) (string, bool) {
 	return windows.UTF16ToString(buf[:n]), true
 }
 
-// insideDir tells that path is below dir; names compare without case, as on Windows (filepath.Rel).
+// insideDir tells that path is below dir; names compare with ASCII-only case folding (place.PathInside).
 func insideDir(path, dir string) bool {
-	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return place.PathInside(path, dir)
 }
 
 // AccountName is DOMAIN\name of the SID, the user of the task.

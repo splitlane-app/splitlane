@@ -23,6 +23,7 @@ type fakeHandler struct {
 	mu      sync.Mutex
 	methods []string
 	clients int
+	calls   []int // every SetClients
 }
 
 func (f *fakeHandler) Handle(ctx context.Context, method string, params json.RawMessage) (any, *protocol.Error) {
@@ -43,6 +44,7 @@ func (f *fakeHandler) SetClients(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.clients = n
+	f.calls = append(f.calls, n)
 }
 
 func (f *fakeHandler) count() int {
@@ -376,4 +378,10 @@ func TestSecondListenFails(t *testing.T) {
 	if _, err := Listen(name, currentSID(t), &fakeHandler{}, nil, nil); err == nil {
 		t.Fatal("the pipe name is taken")
 	}
+}
+
+func (f *fakeHandler) setCalls() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.calls...)
 }

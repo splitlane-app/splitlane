@@ -114,7 +114,15 @@ func (s *Server) admit(c *client) {
 			return
 		}
 	}
+	s.mu.Lock()
+	if s.closing { // Close came while the check ran: nobody is served any more
+		s.mu.Unlock()
+		c.conn.Close()
+		s.wg.Done()
+		return
+	}
 	s.wg.Add(1)
+	s.mu.Unlock()
 	go s.write(c)
 	s.read(c)
 }

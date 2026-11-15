@@ -13,7 +13,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,6 +22,7 @@ import (
 
 	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/engine"
+	"splitlane/helper/internal/place"
 	"splitlane/helper/internal/protocol"
 	"splitlane/helper/internal/rules"
 	"splitlane/helper/internal/store"
@@ -215,7 +215,7 @@ func (d *Driver) Find(id store.CoreIdentity) (engine.CoreProc, bool) {
 		return nil, false
 	}
 	created, path, err := processInfo(h)
-	if err != nil || created != id.Created || !strings.EqualFold(path, id.Path) || !strings.EqualFold(path, filepath.Clean(d.Exe)) {
+	if err != nil || created != id.Created || !place.PathEqual(path, id.Path) || !place.PathEqual(path, d.Exe) {
 		windows.CloseHandle(h)
 		return nil, false
 	}
