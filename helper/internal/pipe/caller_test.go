@@ -17,43 +17,63 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestAllowedFolderBoundary(t *testing.T) {
-	dir := `C:\Program Files\SplitLane`
+// Only the window itself is served without elevation: the other programs of the product folder (the core,
+// elevate.exe, the uninstaller) run with any arguments a user gives them (final review, item 2).
+func TestAllowedOnlyTheWindow(t *testing.T) {
+	window := `C:\Program Files\SplitLane\SplitLane.exe`
 	cases := []struct {
 		image string
 		want  bool
 	}{
 		{`C:\Program Files\SplitLane\SplitLane.exe`, true},
-		{`C:\Program Files\SplitLane\helper\splitlane-helper.exe`, true},
 		{`c:\program files\splitlane\SPLITLANE.EXE`, true},
-		{`C:\Program Files\SplitLaneX\a.exe`, false},
+		{`C:\Program Files\SplitLane\.\SplitLane.exe`, true},
+		{`C:\Program Files\SplitLane\helper\sing-box.exe`, false},
+		{`C:\Program Files\SplitLane\helper\splitlane-helper.exe`, false},
+		{`C:\Program Files\SplitLane\resources\elevate.exe`, false},
+		{`C:\Program Files\SplitLane\Uninstall SplitLane.exe`, false},
+		{`C:\Program Files\SplitLane\helper\SplitLane.exe`, false},
+		{`C:\Program Files\SplitLane\SplitLane.exe\x.exe`, false},
+		{`C:\Program Files\SplitLaneX\SplitLane.exe`, false},
 		{`C:\Program Files\SplitLane`, false},
-		{"C:\\Program F\u0130les\\SplitLane\\x.exe", false}, // U+0130: another folder on NTFS
-		{"C:\\Program File\u017f\\SplitLane\\x.exe", false}, // U+017F folds to "s" in Go
+		{"C:\\Program F\u0130les\\SplitLane\\SplitLane.exe", false}, // U+0130: another folder on NTFS
+		{"C:\\Program File\u017f\\SplitLane\\SplitLane.exe", false}, // U+017F folds to "s" in Go
 		{`SplitLane\SplitLane.exe`, false},
 		{``, false},
 	}
 	for _, c := range cases {
-		if got := Allowed(Caller{PID: 1, Image: c.image}, dir); got != c.want {
+		if got := Allowed(Caller{PID: 1, Image: c.image}, window); got != c.want {
 			t.Errorf("Allowed(%q) = %v, want %v", c.image, got, c.want)
 		}
 	}
 	// U+212A (Kelvin) folds to "k" in Go, yet is another letter on NTFS.
-	if !Allowed(Caller{PID: 1, Image: `c:\work\kit\x.exe`}, `C:\Work\Kit`) ||
-		Allowed(Caller{PID: 1, Image: "C:\\Work\\\u212ait\\x.exe"}, `C:\Work\Kit`) {
+	if !Allowed(Caller{PID: 1, Image: `c:\work\kit\SplitLane.exe`}, `C:\Work\Kit\SplitLane.exe`) ||
+		Allowed(Caller{PID: 1, Image: "C:\\Work\\\u212ait\\SplitLane.exe"}, `C:\Work\Kit\SplitLane.exe`) {
 		t.Error("the Kelvin sign is not a K")
 	}
-	if Allowed(Caller{PID: 1, Image: `C:\x\a.exe`}, "") {
-		t.Error("an empty product folder allows nothing")
+	for _, w := range []string{"", "SplitLane.exe"} {
+		if Allowed(Caller{PID: 1, Image: `SplitLane.exe`}, w) || Allowed(Caller{PID: 1, Image: `C:\x\SplitLane.exe`}, w) {
+			t.Errorf("the window %q is not a full path: it allows nothing", w)
+		}
 	}
 }
 
 func TestAllowedElevated(t *testing.T) {
-	if !Allowed(Caller{PID: 1, Image: `C:\Temp\Setup.exe`, Elevated: true}, `C:\Program Files\SplitLane`) {
+	if !Allowed(Caller{PID: 1, Image: `C:\Temp\Setup.exe`, Elevated: true}, `C:\Program Files\SplitLane\SplitLane.exe`) {
 		t.Fatal("an elevated client is allowed from anywhere")
 	}
-	if Allowed(Caller{PID: 1, Image: `C:\Temp\Setup.exe`}, `C:\Program Files\SplitLane`) {
+	if Allowed(Caller{PID: 1, Image: `C:\Temp\Setup.exe`}, `C:\Program Files\SplitLane\SplitLane.exe`) {
 		t.Fatal("a plain client outside the product folder is refused")
+	}
+}
+
+// ProductCheck builds the window's path from the product folder: <productDir>\SplitLane.exe.
+func TestProductCheckNamesTheWindow(t *testing.T) {
+	if got := WindowExe(`C:\Program Files\SplitLane`); got != `C:\Program Files\SplitLane\SplitLane.exe` {
+		t.Fatalf("WindowExe: %q", got)
+	}
+	if got := WindowExe(""); got != "" {
+		t.Fatalf("WindowExe without a product folder: %q, want none", got)
 	}
 }
 
@@ -124,13 +144,25 @@ func TestClientOfWithoutFd(t *testing.T) {
 	}
 }
 
-// The folder of this test exe is the product folder: the process is inside it.
-func TestProductCheckAdmitsAnImageInsideTheFolder(t *testing.T) {
-	dir := filepath.Dir(ownExe(t))
+// This test exe plays the window: its own path is the window's.
+func TestWindowCheckAdmitsTheWindow(t *testing.T) {
 	var err error
-	accepted(t, func(conn net.Conn) { err = ProductCheck(dir)(conn) })
+	accepted(t, func(conn net.Conn) { err = windowCheck(ownExe(t))(conn) })
 	if err != nil {
-		t.Fatalf("an image inside the folder is allowed: %v", err)
+		t.Fatalf("the window is allowed: %v", err)
+	}
+}
+
+// The folder of this test exe is the product folder: the test exe lies inside it, but it is not
+// SplitLane.exe, so it is refused.
+func TestProductCheckRefusesAnotherProgramOfTheFolder(t *testing.T) {
+	if windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("the test process is elevated: it would be allowed")
+	}
+	var err error
+	accepted(t, func(conn net.Conn) { err = ProductCheck(filepath.Dir(ownExe(t)))(conn) })
+	if err == nil {
+		t.Fatal("a program of the product folder other than the window is refused")
 	}
 }
 
@@ -143,7 +175,7 @@ func TestProductCheckRefusalNamesOnlyTheBaseName(t *testing.T) {
 	if err == nil {
 		t.Fatal("refused expected")
 	}
-	want := fmt.Sprintf("not part of SplitLane: %s (process %d)", filepath.Base(ownExe(t)), os.Getpid())
+	want := fmt.Sprintf("not the SplitLane window: %s (process %d)", filepath.Base(ownExe(t)), os.Getpid())
 	if !strings.EqualFold(err.Error(), want) {
 		t.Fatalf("%q, want %q", err, want)
 	}
@@ -197,7 +229,7 @@ func expectEOF(t *testing.T, c *testClient) {
 }
 
 func TestCheckErrorRejects(t *testing.T) {
-	const refusal = "not part of SplitLane: evil.exe (process 7)"
+	const refusal = "not the SplitLane window: evil.exe (process 7)"
 	_, h, name, ll := serveWith(t, func(net.Conn) error { return errors.New(refusal) })
 	expectEOF(t, dial(t, name))
 	deadline := time.Now().Add(2 * time.Second)

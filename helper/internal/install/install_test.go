@@ -41,8 +41,19 @@ type fakeSys struct {
 	dirOwner string            // the owner CheckDir finds for a folder that is there; "" is the administrators
 	xml      string            // the XML of the task registered
 	session  string            // the user of the session (SessionUserSID); "" is a session without a user
+	sessErr  error             // when set, SessionUserSID fails with it
 	procs    [][]Proc          // the answers of ProductProcesses, one per call; none left is "no process"
 	stay     []Proc            // when set, every call of ProductProcesses answers this
+	data     string            // the data folder: a helper that ends saves its state.json there, "was on" off
+	sup      *supervisor       // when set, the supervisor of stage 2 answers ProductProcesses
+}
+
+// supervisor is the supervisor of stage 2 in its pause before a restart (spec 4): it runs, and from the call
+// restartAt of ProductProcesses on, a new worker of it has the pipe. That worker and the supervisor end only
+// after helper.shutdown.
+type supervisor struct {
+	restartAt, calls int
+	worker, ended    bool
 }
 
 func (f *fakeSys) add(format string, a ...any) { f.log = append(f.log, fmt.Sprintf(format, a...)) }
@@ -54,11 +65,26 @@ func (f *fakeSys) Token() (string, bool, error) {
 
 func (f *fakeSys) SessionUserSID() (string, error) {
 	f.add("sid session")
+	if f.sessErr != nil {
+		return "", f.sessErr
+	}
 	return f.session, nil
 }
 
 func (f *fakeSys) ProductProcesses(dir string) ([]Proc, error) {
 	f.add("wait procs %s", dir)
+	if s := f.sup; s != nil {
+		s.calls++
+		if s.ended {
+			return nil, nil
+		}
+		ps := []Proc{{PID: 20, Image: filepath.Join(dir, "helper", "splitlane-helper.exe")}}
+		if s.calls >= s.restartAt {
+			s.worker, f.helper = true, "ends"
+			ps = append(ps, Proc{PID: 21, Image: filepath.Join(dir, "helper", "splitlane-helper.exe")})
+		}
+		return ps, nil
+	}
 	if f.stay != nil {
 		return f.stay, nil
 	}
@@ -92,10 +118,25 @@ func (f *fakeSys) ReadFile(path string) ([]byte, error) {
 	return b, nil
 }
 
+// ShutdownHelper: a helper that ends does what cmdShutdown does: it saves state.json with "was on" off
+// (when its data folder is there), and it is gone; the supervisor ends with it.
 func (f *fakeSys) ShutdownHelper(wait time.Duration) (bool, error) {
 	f.add("stop shutdown %s", wait)
 	switch f.helper {
 	case "ends":
+		if _, err := os.Stat(f.data); f.data != "" && err == nil {
+			d := store.Dir{Path: f.data}
+			st, _ := d.LoadState()
+			st.WasOn = false
+			if err := d.SaveState(st); err != nil {
+				panic(err)
+			}
+			f.add("stop saved wasOn=false")
+		}
+		f.helper = "none"
+		if f.sup != nil && f.sup.worker {
+			f.sup.ended = true
+		}
 		return true, nil
 	case "stays":
 		return true, errors.New("the helper (process 4242) did not end within 2m0s; its last state: phase=stopping reason=restore_pending (exit node not confirmed)")
@@ -232,7 +273,7 @@ func setup(t *testing.T) (*fakeSys, Options, *strings.Builder) {
 		Out:         out,
 	}
 	f := &fakeSys{user: testSID, session: testSID, elevated: true, files: map[string][]byte{}, helper: "none",
-		sys: engine.SysStatus{Installed: true}}
+		sys: engine.SysStatus{Installed: true}, data: o.DataDir}
 	for _, name := range Files {
 		f.files[filepath.Join(o.ProgramDir, name)] = []byte("content of " + name)
 	}
@@ -636,7 +677,7 @@ func TestPurgeRemovesTheUserFolder(t *testing.T) {
 	if err := Uninstall(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	want := "sid token,stop check " + o.DataDir + ",stop shutdown 2m0s,wait procs " + o.ProductDir + ",task delete,remove " + o.DataDir + ",remove " + o.UserDataDir
+	want := "sid token,sid session,stop check " + o.DataDir + ",stop shutdown 2m0s,wait procs " + o.ProductDir + ",task delete,remove " + o.DataDir + ",remove " + o.UserDataDir
 	if got := strings.Join(f.log, ","); got != want {
 		t.Fatalf("log %s", got)
 	}
@@ -857,5 +898,205 @@ func TestPrepareRefusesAnUnconfirmedRestore(t *testing.T) {
 	}
 	if j, _ := d.LoadJournal(); j == nil {
 		t.Fatal("the journal went without a confirmed return")
+	}
+}
+
+// wasOnState saves a state.json with "was on" and a device name in the data folder.
+func wasOnState(t *testing.T, o Options, on bool) store.Dir {
+	t.Helper()
+	d := store.Dir{Path: o.DataDir}
+	st := store.Defaults()
+	st.WasOn, st.DeviceName = on, "desk-7-splitlane"
+	if err := d.SaveState(st); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func loadState(t *testing.T, d store.Dir) store.State {
+	t.Helper()
+	st, err := d.LoadState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// An update keeps splitting as it was (final review, item 1): helper.shutdown writes "was on" off, so
+// prepare reads state.json before it and writes "was on" back after the helper and its processes are
+// gone; the new worker then switches splitting on at its start (5.7). The rest of state.json stays.
+func TestPrepareKeepsSplittingOn(t *testing.T) {
+	f, o, out := setup(t)
+	f.helper = "ends"
+	d := wasOnState(t, o, true)
+	f.procs = [][]Proc{{{PID: 10, Image: filepath.Join(o.ProgramDir, "splitlane-helper.exe")}}}
+	if err := Prepare(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if err := inOrder(f.log, []string{"stop check " + o.DataDir, "stop shutdown 2m0s", "stop saved wasOn=false",
+		"wait procs " + o.ProductDir, "wait procs " + o.ProductDir}); err != nil {
+		t.Fatal(err)
+	}
+	if st := loadState(t, d); !st.WasOn || st.DeviceName != "desk-7-splitlane" {
+		t.Fatalf("state.json after prepare: wasOn %v, device %q", st.WasOn, st.DeviceName)
+	}
+	if !strings.Contains(out.String(), "PREPARE: splitting was on: state.json says so again; the helper of this version switches it on after its start\n") ||
+		lastLine(out.String()) != "PREPARE-OK" {
+		t.Fatalf("output:\n%s", out)
+	}
+
+	// install and uninstall leave "was on" as helper.shutdown wrote it.
+	for _, run := range []func(Options, Sys) error{Install, Uninstall} {
+		f, o, out := setup(t)
+		f.helper = "ends"
+		d := wasOnState(t, o, true)
+		if err := run(o, f); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if loadState(t, d).WasOn {
+			t.Fatalf("only prepare writes \"was on\" back:\n%s", out)
+		}
+	}
+}
+
+// Splitting was off: it stays off, and prepare writes nothing.
+func TestPrepareLeavesSplittingOff(t *testing.T) {
+	f, o, out := setup(t)
+	f.helper = "ends"
+	d := wasOnState(t, o, false)
+	if err := Prepare(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if loadState(t, d).WasOn || strings.Contains(out.String(), "splitting was on") {
+		t.Fatalf("splitting was off and is on after prepare:\n%s", out)
+	}
+}
+
+// state.json is read only from a data folder that passed CheckDir, and written back only into it: a folder
+// that is not there is not made, one of a user refuses prepare before anything (its file stays as it is).
+func TestPrepareDoesNotWriteStateWithoutCheckedFolder(t *testing.T) {
+	f, o, out := setup(t)
+	f.helper = "ends"
+	if err := Prepare(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := os.Lstat(o.DataDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("prepare made the data folder: %v", err)
+	}
+
+	f, o, out = setup(t)
+	f.helper, f.dirOwner = "ends", otherSID
+	wasOnState(t, o, true)
+	file := filepath.Join(o.DataDir, "state.json")
+	before, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Prepare(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()), "PREPARE-REFUSED: the data folder: ") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if after, err := os.ReadFile(file); err != nil || string(after) != string(before) || count(f.log, "stop shutdown") != 0 {
+		t.Fatalf("state.json of a user's folder: %v\n%s\nlog:\n%s", err, after, strings.Join(f.log, "\n"))
+	}
+}
+
+// state.json that cannot be read before the shutdown: "was on" is not known, nothing is written back, and
+// a line says so.
+func TestPrepareDoesNotWriteStateAfterAReadError(t *testing.T) {
+	f, o, out := setup(t)
+	f.helper = "ends"
+	d := store.Dir{Path: o.DataDir}
+	if err := os.MkdirAll(o.DataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(o.DataDir, "state.json"), []byte(`{"wasOn":true,`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Prepare(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "PREPARE: state.json: ") || !strings.Contains(out.String(), "; splitting is not switched on again after the update\n") ||
+		strings.Contains(out.String(), "splitting was on") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if loadState(t, d).WasOn {
+		t.Fatal("\"was on\" was written back without being read")
+	}
+}
+
+// The supervisor of stage 2 may start a new worker in its 5 s pause while prepare or uninstall waits for
+// the processes to end (final review, item 4): that worker takes the pipe and gets helper.shutdown too,
+// within the same 10 s, instead of making the command refuse.
+func TestWaitGoneStopsAWorkerStartedDuringTheWait(t *testing.T) {
+	for _, run := range []func(Options, Sys) error{Prepare, Uninstall} {
+		f, o, out := setup(t)
+		f.helper = "ends"
+		f.sup = &supervisor{restartAt: 3}
+		if err := run(o, f); err != nil {
+			t.Fatalf("%v\n%s\nlog:\n%s", err, out, strings.Join(f.log, "\n"))
+		}
+		if err := inOrder(f.log, []string{"stop shutdown 2m0s", "wait procs " + o.ProductDir, "stop shutdown 10s", "stop wait 500ms",
+			"wait procs " + o.ProductDir, "stop shutdown 9.5s", "stop wait 500ms", "wait procs " + o.ProductDir, "stop shutdown 9s",
+			"stop wait 500ms", "wait procs " + o.ProductDir}); err != nil {
+			t.Fatal(err)
+		}
+		if count(f.log, "stop shutdown") != 4 || count(f.log, "wait procs") != 4 ||
+			!strings.Contains(out.String(), ": a helper that took the pipe during the wait has ended\n") {
+			t.Fatalf("output:\n%s\nlog:\n%s", out, strings.Join(f.log, "\n"))
+		}
+	}
+
+	// That worker does not end: the command refuses with its reason, as for the first helper.
+	f, o, out := setup(t)
+	f.stay = []Proc{{PID: 10, Image: filepath.Join(o.ProgramDir, "splitlane-helper.exe")}}
+	f.helper = "stays"
+	err := waitGone(o, f, progress(o, "PREPARE"))
+	if err == nil || !strings.HasPrefix(err.Error(), "the helper that took the pipe during the wait did not end: ") ||
+		!strings.Contains(err.Error(), "reason=restore_pending") || count(f.log, "stop shutdown") != 1 {
+		t.Fatalf("%v\n%s\nlog:\n%s", err, out, strings.Join(f.log, "\n"))
+	}
+}
+
+// uninstall --purge under a UAC passed by another administrator (final review, item 10): %AppData% of this
+// process is that administrator's, not the signed-in user's, so it stays; the data folder goes. A session
+// without a user takes the user of the process (the folder goes); a session that cannot be found out keeps
+// the folder too.
+func TestPurgeUnderAnotherAdminKeepsTheUserFolder(t *testing.T) {
+	f, o, out := setup(t)
+	o.Purge = true
+	f.session = otherSID // the process runs as testSID
+	if err := Uninstall(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !slices.Contains(f.log, "remove "+o.DataDir) || slices.Contains(f.log, "remove "+o.UserDataDir) {
+		t.Fatalf("log:\n%s", strings.Join(f.log, "\n"))
+	}
+	if !strings.Contains(out.String(), "UNINSTALL: the window's settings of the signed-in user stay: UAC was passed under another account\n") ||
+		!strings.Contains(out.String(), "UNINSTALL-NOTE: ") || lastLine(out.String()) != "UNINSTALL-OK" {
+		t.Fatalf("output:\n%s", out)
+	}
+	if err := inOrder(f.log, []string{"sid token", "sid session", "stop check " + o.DataDir}); err != nil {
+		t.Fatal(err)
+	}
+
+	f, o, out = setup(t)
+	o.Purge = true
+	f.session = ""
+	if err := Uninstall(o, f); err != nil || !slices.Contains(f.log, "remove "+o.UserDataDir) {
+		t.Fatalf("a session without a user: %v\n%s\n%v", err, out, f.log)
+	}
+
+	f, o, out = setup(t)
+	o.Purge = true
+	f.sessErr = errors.New("WTSQuerySessionInformationW: access denied")
+	if err := Uninstall(o, f); err != nil || slices.Contains(f.log, "remove "+o.UserDataDir) || !slices.Contains(f.log, "remove "+o.DataDir) ||
+		!strings.Contains(out.String(), "UNINSTALL: the user of the session: WTSQuerySessionInformationW: access denied; the window's settings stay\n") {
+		t.Fatalf("%v\n%s\n%v", err, out, f.log)
+	}
+
+	// Without --purge the session is not looked at.
+	f, o, out = setup(t)
+	if err := Uninstall(o, f); err != nil || slices.Contains(f.log, "sid session") {
+		t.Fatalf("%v\n%s\n%v", err, out, f.log)
 	}
 }

@@ -208,7 +208,8 @@ func install(o Options, s Sys, say sayFunc) error {
 // any file is touched: the user as for install, the data folder, the stop of the helper that runs
 // (stopOld), then the wait until no process of the product is left. It changes no file of the program, no
 // access list and no task; stopOld may give the system exit node back, drop restore.json after a confirmed
-// return and stop a core left from an earlier run. It prints
+// return and stop a core left from an earlier run. An update keeps splitting as it was: helper.shutdown
+// writes "was on" off in state.json, so prepare reads it before and writes it back after (keepOn). It prints
 // PREPARE-OK, or PREPARE-REFUSED: <reason> and returns the error.
 func Prepare(o Options, s Sys) error {
 	return finish(o, "PREPARE", prepare(o, s, progress(o, "PREPARE")))
@@ -223,16 +224,53 @@ func prepare(o Options, s Sys, say sayFunc) error {
 	if err != nil {
 		return fmt.Errorf("the data folder: %w", err)
 	}
+	d := store.Dir{Path: o.DataDir}
+	wasOn := false
+	if there { // read and written only in a data folder that passed CheckDir
+		st, err := d.LoadState()
+		if err != nil {
+			say("state.json: %v; splitting is not switched on again after the update", err)
+		}
+		wasOn = err == nil && st.WasOn
+	}
 	if err := stopOld(o, s, there, say); err != nil {
 		return err
 	}
-	return waitGone(o, s, say)
+	if err := waitGone(o, s, say); err != nil {
+		return err
+	}
+	if wasOn {
+		keepOn(d, say)
+	}
+	return nil
+}
+
+// keepOn writes "was on" back into state.json after the helper that ran with splitting on has ended:
+// helper.shutdown wrote it off (cmdShutdown), and the helper of this version switches splitting on again
+// at its start, as after an abnormal end (5.2, 5.7 of spec 1). A state.json that cannot be read or written
+// now is a line, not a refusal: the old helper is stopped already, and splitting then stays off.
+func keepOn(d store.Dir, say sayFunc) {
+	st, err := d.LoadState()
+	if err == nil && st.WasOn {
+		return
+	}
+	if err == nil {
+		st.WasOn = true
+		err = d.SaveState(st)
+	}
+	if err != nil {
+		say("state.json: %v; splitting is not switched on again after the update", err)
+		return
+	}
+	say("splitting was on: state.json says so again; the helper of this version switches it on after its start")
 }
 
 // waitGone looks every 500 ms for processes of the product (spec 3 step 2): the supervisor and the worker
 // of this version, the helper and the core of stage 1. helper.shutdown waits only for the owner of the
-// pipe, so the supervisor and the core may still run, with their files busy. Some left after 10 s refuse
-// the command. A process that cannot be looked at counts as running.
+// pipe, so the supervisor and the core may still run, with their files busy. A supervisor of stage 2 may
+// start a new worker in its pause before a restart (spec 4): while processes are left, the pipe is asked
+// once per look, and a helper that took it gets helper.shutdown too, with the rest of the 10 s to end.
+// Some left after 10 s refuse the command. A process that cannot be looked at counts as running.
 func waitGone(o Options, s Sys, say sayFunc) error {
 	for attempt := 0; ; attempt++ {
 		ps, err := s.ProductProcesses(o.ProductDir)
@@ -247,6 +285,12 @@ func waitGone(o Options, s Sys, say sayFunc) error {
 		}
 		if attempt == 0 {
 			say("waiting for %s to end", imageNames(ps))
+		}
+		switch found, err := s.ShutdownHelper(waitWithin - time.Duration(attempt)*waitEvery); {
+		case found && err != nil:
+			return fmt.Errorf("the helper that took the pipe during the wait did not end: %v; nothing was changed", err)
+		case found:
+			say("a helper that took the pipe during the wait has ended")
 		}
 		<-s.After(waitEvery)
 	}
@@ -490,20 +534,24 @@ func ended(p engine.CoreProc) bool {
 // Uninstall is `uninstall [--purge]` (spec 3, Removal), in this order: this process is elevated; the same
 // stop as step 3 of install (refused while it is not confirmed; the files of a data folder that does not
 // pass CheckDir are not read, and the rest goes on); the wait until no process of the product is left;
-// the task; with Purge the data folder, the folder %AppData%\SplitLane of the user of this process and a
-// note that the embedded node stays a device of the Tailscale network. The files of the program folder
-// are the uninstaller's: it runs from there and removes nothing of it. It prints UNINSTALL-OK, or
-// UNINSTALL-REFUSED: <reason> and returns the error.
+// the task; with Purge the data folder, the folder %AppData%\SplitLane of the user of this process (only
+// when he is the signed-in user: ownSession) and a note that the embedded node stays a device of the
+// Tailscale network. The files of the program folder are the uninstaller's: it runs from there and removes
+// nothing of it. It prints UNINSTALL-OK, or UNINSTALL-REFUSED: <reason> and returns the error.
 func Uninstall(o Options, s Sys) error {
 	return finish(o, "UNINSTALL", uninstall(o, s, progress(o, "UNINSTALL")))
 }
 
 func uninstall(o Options, s Sys, say sayFunc) error {
-	switch _, elevated, err := s.Token(); {
+	user, elevated, err := s.Token()
+	switch {
 	case err != nil:
 		return fmt.Errorf("the user of this process: %w", err)
 	case !elevated:
 		return errors.New("uninstall runs elevated: the uninstaller or the window starts it with UAC (spec 4.3)")
+	}
+	if o.Purge && o.UserDataDir != "" && !ownSession(s, user, say) {
+		o.UserDataDir = "" // %AppData% of this process is not the signed-in user's: it stays
 	}
 	read, err := s.CheckDir(o.DataDir)
 	if err != nil {
@@ -543,6 +591,23 @@ func uninstall(o Options, s Sys, say sayFunc) error {
 	}
 	fmt.Fprintf(output(o), "UNINSTALL-NOTE: the device %s stays in your Tailscale network; remove it in the Tailscale admin console\n", device)
 	return nil
+}
+
+// ownSession tells that the user of this process, user, is the user of its session, as --session-user
+// finds him (resolveUser: a session without a user is the process's): only then is %AppData%\SplitLane of
+// this process the signed-in user's, the one --purge removes. A UAC passed under another account, or a
+// session that cannot be found out, says so in a line.
+func ownSession(s Sys, user string, say sayFunc) bool {
+	sid, err := resolveUser(Options{SessionUser: true}, s)
+	switch {
+	case err != nil:
+		say("%v; the window's settings stay", err)
+		return false
+	case sid != user:
+		say("the window's settings of the signed-in user stay: UAC was passed under another account")
+		return false
+	}
+	return true
 }
 
 // deviceName is the embedded node's device in the Tailscale network: the name state.json keeps (read

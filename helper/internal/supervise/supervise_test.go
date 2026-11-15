@@ -121,7 +121,7 @@ func TestRunLogsEveryDecision(t *testing.T) {
 		"supervisor: the helper ended with code 2; starting it again in 5s (restart 1 of 3 in 10m)",
 		"supervisor: the helper ended with code 2; starting it again in 5s (restart 2 of 3 in 10m)",
 		"supervisor: the helper ended with code 2; starting it again in 5s (restart 3 of 3 in 10m)",
-		"supervisor: the helper ended with code 0xC0000005 3 times within 10m; giving up",
+		"supervisor: the helper ended with code 0xC0000005; 3 restarts within 10m already; giving up",
 	}
 	if strings.Join(l.got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("log:\n%s", strings.Join(l.got, "\n"))

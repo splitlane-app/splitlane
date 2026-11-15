@@ -21,25 +21,37 @@ type Caller struct {
 // Check decides whether a connection is served; nil admits the client.
 type Check func(conn net.Conn) error
 
-// Allowed admits an elevated client, or one whose image lies inside productDir (case does not
-// folds for ASCII letters only; productDir is a folder boundary: SplitLaneX is not inside SplitLane).
-func Allowed(c Caller, productDir string) bool {
+// Allowed admits an elevated client, or the window: a client whose image is the file windowExe, a full
+// path (case folds for ASCII letters only, place.PathEqual). The other programs of the product folder are
+// not admitted: the core, elevate.exe and the uninstaller run with whatever arguments a user gives them.
+func Allowed(c Caller, windowExe string) bool {
 	if c.Elevated {
 		return true
 	}
-	return filepath.IsAbs(c.Image) && place.PathInside(c.Image, productDir)
+	return filepath.IsAbs(c.Image) && filepath.IsAbs(windowExe) && place.PathEqual(c.Image, windowExe)
 }
 
-// ProductCheck is the check of the product: the client is elevated or part of the product folder.
-// The error names the base name of the image and the PID, never a full path.
-func ProductCheck(productDir string) Check {
+// WindowExe is the window of the product, <productDir>\SplitLane.exe; "" without a product folder.
+func WindowExe(productDir string) string {
+	if productDir == "" {
+		return ""
+	}
+	return filepath.Join(productDir, "SplitLane.exe")
+}
+
+// ProductCheck is the check of the product: the client is elevated or the window
+// <productDir>\SplitLane.exe. The error names the base name of the image and the PID, never a full path.
+func ProductCheck(productDir string) Check { return windowCheck(WindowExe(productDir)) }
+
+// windowCheck admits an elevated client or the window windowExe (Allowed).
+func windowCheck(windowExe string) Check {
 	return func(conn net.Conn) error {
 		c, err := ClientOf(conn)
 		if err != nil {
 			return fmt.Errorf("the client process: %w", err)
 		}
-		if !Allowed(c, productDir) {
-			return fmt.Errorf("not part of SplitLane: %s (process %d)", filepath.Base(c.Image), c.PID)
+		if !Allowed(c, windowExe) {
+			return fmt.Errorf("not the SplitLane window: %s (process %d)", filepath.Base(c.Image), c.PID)
 		}
 		return nil
 	}
@@ -48,7 +60,7 @@ func ProductCheck(productDir string) Check {
 type fder interface{ Fd() uintptr }
 
 // ClientOf finds the process at the client end of a go-winio pipe connection. Known limitation: the image
-// comes as the system returns it; an 8.3 short name never matches the product folder (it fails closed).
+// comes as the system returns it; an 8.3 short name never matches the window's path (it fails closed).
 func ClientOf(conn net.Conn) (Caller, error) {
 	f, ok := conn.(fder)
 	if !ok {

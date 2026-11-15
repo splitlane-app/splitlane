@@ -310,10 +310,11 @@ func run(args []string) int {
 	return exitOK
 }
 
-// productCheck builds the check of the product folder; the tests watch what it is built from.
+// productCheck builds the check of the product (its window, elevated callers) from the product folder; the
+// tests watch what it is built from.
 var productCheck = pipe.ProductCheck
 
-// pipeCheck is the caller check of the pipe (spec 5): the product serves SplitLane programs and
+// pipeCheck is the caller check of the pipe (spec 5): the product serves the window SplitLane.exe and
 // elevated callers; --dev serves everyone (nil).
 func pipeCheck(dev bool) (pipe.Check, error) {
 	if dev {

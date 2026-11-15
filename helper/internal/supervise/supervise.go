@@ -79,7 +79,7 @@ func Run(start func(restarted bool) (Worker, error), c Clock, logf func(format s
 			logf("supervisor: the helper ended with code %s; not starting it again", codeText(code))
 			return code
 		case !Decide(code, restarts, now):
-			logf("supervisor: the helper ended with code %s %d times within %s; giving up", codeText(code), MaxRestarts, windowText)
+			logf("supervisor: the helper ended with code %s; %d restarts within %s already; giving up", codeText(code), MaxRestarts, windowText)
 			return code
 		}
 		restarts = append(within(restarts, now), now)
