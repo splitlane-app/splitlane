@@ -5,8 +5,8 @@ import type { Lane } from '../../shared/protocol'
 import { ADD_ROW, CARD, CARD_SENSORS } from '../dnd/BoardDnd'
 import { CloseIcon } from '../icons/builtin'
 import { t } from '../i18n/t'
-import { installedRows, onlineRows, type AddRow } from '../model/addRows'
-import { boardView, type CardVM } from '../model/board'
+import { installedRows, onlineRows, searchRows, type AddRow } from '../model/addRows'
+import { boardView, fileName, type CardVM } from '../model/board'
 import { addPrograms, moveTo, pin } from '../model/layout'
 import { useApp, useServices } from '../services'
 import { effectiveLayout, isLivePhase } from '../store/appStore'
@@ -35,54 +35,79 @@ interface RowProps {
 }
 
 /**
- * A row of the panel: the program (it can be dragged onto a lane) and its buttons. A button of the lane the
- * program is in already is disabled.
+ * A row of the panel: the program (it can be dragged onto a lane) with its file and lane under its name, and its
+ * buttons. A button of the lane the program is in already is disabled. A program of a built-in rule has neither a
+ * drag nor buttons.
  */
 function Row({ row, card, idPrefix = '', onAct }: RowProps): React.JSX.Element {
   const program: Program = { exe: row.exe, name: row.name }
+  const lane = row.currentLane
+  const status =
+    lane === null
+      ? row.builtin
+        ? t('card.builtin')
+        : null
+      : t(row.builtin ? 'add.builtinIn' : row.pinned ? 'add.pinnedIn' : 'add.here', { lane: laneName(lane) })
   const { ref, handleRef } = useDraggable({
     id: `add:${idPrefix}${row.key}`,
     data: card ?? program,
     type: card !== undefined ? CARD : ADD_ROW,
+    // a program of a built-in rule goes to no lane: the helper would reject it
+    disabled: row.builtin,
     sensors: CARD_SENSORS
   })
   return (
-    <li ref={ref} className={styles.row} data-add-row={row.key} data-drag-id={`add:${idPrefix}${row.key}`}>
+    <li
+      ref={ref}
+      className={styles.row}
+      data-add-row={row.key}
+      data-drag-id={`add:${idPrefix}${row.key}`}
+      data-builtin={row.builtin}
+    >
       <div ref={handleRef} className={styles.info} title={row.exe}>
         <ExeIcon exe={row.exe} />
         <span className={styles.text}>
           <span className={styles.name}>{row.name}</span>
           <span className={styles.path}>
-            {row.currentLane !== null
-              ? t(row.pinned ? 'add.pinnedIn' : 'add.here', { lane: laneName(row.currentLane) })
-              : shortPath(row.exe)}
+            {status === null ? (
+              shortPath(row.exe)
+            ) : (
+              <>
+                <span>{fileName(row.exe)}</span>
+                {t('sep')}
+                <span>{status}</span>
+              </>
+            )}
           </span>
         </span>
       </div>
-      <div className={styles.buttons}>
-        {row.actions.map((a) => (
-          <button
-            key={a}
-            type="button"
-            className={styles.act}
-            data-lane={a === 'pin' ? undefined : a}
-            disabled={a !== 'pin' && row.currentLane === a && row.pinned}
-            aria-label={`${t(a === 'pin' ? 'pin' : a === 'vpn' ? 'lane.vpn' : 'lane.direct')}: ${row.name}`}
-            onClick={() => onAct(row, a, card)}
-          >
-            {t(a === 'pin' ? 'pin' : a === 'vpn' ? 'lane.vpn' : 'lane.direct')}
-          </button>
-        ))}
-      </div>
+      {row.actions.length > 0 && (
+        <div className={styles.buttons}>
+          {row.actions.map((a) => (
+            <button
+              key={a}
+              type="button"
+              className={styles.act}
+              data-lane={a === 'pin' ? undefined : a}
+              disabled={a !== 'pin' && row.currentLane === a && row.pinned}
+              aria-label={`${t(a === 'pin' ? 'pin' : a === 'vpn' ? 'lane.vpn' : 'lane.direct')}: ${row.name}`}
+              onClick={() => onAct(row, a, card)}
+            >
+              {t(a === 'pin' ? 'pin' : a === 'vpn' ? 'lane.vpn' : 'lane.direct')}
+            </button>
+          ))}
+        </div>
+      )}
     </li>
   )
 }
 
 /**
- * The «+ Добавить» panel (spec 9.3), docked beside the lanes so that a row can be dragged onto either of them. «Сейчас в
- * сети»: the unpinned programs of the live activity (nothing while the routing is off). «Установленные»: the programs
- * of the Start menu and the Store, asked of the main process once each time the panel opens. «Выбрать файл…» picks
- * an .exe and shows it at the top, so the lane is chosen explicitly.
+ * The «+ Добавить» panel (spec 9.3), docked beside the lanes so that a row can be dragged onto either of them (in a
+ * narrow window it lies over the lanes). «Сейчас в сети»: the unpinned programs of the live activity (nothing while
+ * the routing is off). «Установленные»: the programs of the Start menu and the Store, asked of the main process once
+ * each time the panel opens. Both lists follow the search of the header. «Выбрать файл…» picks an .exe and shows it
+ * at the top, so the lane is chosen explicitly.
  */
 export function AddPanel(): React.JSX.Element {
   const { store, bridge } = useServices()
@@ -90,6 +115,7 @@ export function AddPanel(): React.JSX.Element {
   const activity = useApp((s) => s.activity)
   const addresses = useApp((s) => s.snapshot?.state?.addresses ?? null)
   const live = useApp((s) => isLivePhase(s.snapshot?.state?.phase))
+  const search = useApp((s) => s.search)
   const [tab, setTab] = useState<Tab>('online')
   const [installed, setInstalled] = useState<Program[] | 'failed' | null>(null)
   const [picked, setPicked] = useState<Program | null>(null)
@@ -116,17 +142,19 @@ export function AddPanel(): React.JSX.Element {
         : boardView(layout.apps, layout.defaultLane, activity, addresses, ''),
     [layout, addresses, activity]
   )
-  const online = useMemo(() => (view === null || !live ? [] : onlineRows(view)), [view, live])
+  const onlineAll = useMemo(() => (view === null || !live ? [] : onlineRows(view)), [view, live])
+  const online = useMemo(() => searchRows(onlineAll, search), [onlineAll, search])
   const cards = useMemo(() => {
     const map = new Map<string, CardVM>()
     for (const c of view?.vpn.unpinned ?? []) map.set(c.key, c)
     for (const c of view?.direct.unpinned ?? []) map.set(c.key, c)
     return map
   }, [view])
-  const installedList = useMemo(
+  const installedAll = useMemo(
     () => (layout === null || !Array.isArray(installed) ? [] : installedRows(installed, layout)),
     [layout, installed]
   )
+  const installedList = useMemo(() => searchRows(installedAll, search), [installedAll, search])
   const pickedRow = useMemo(
     () => (layout === null || picked === null ? null : installedRows([picked], layout)[0]),
     [layout, picked]
@@ -205,8 +233,10 @@ export function AddPanel(): React.JSX.Element {
         {tab === 'online' ? (
           !live ? (
             <p className={styles.note}>{t('add.onlineOff')}</p>
-          ) : online.length === 0 ? (
+          ) : onlineAll.length === 0 ? (
             <p className={styles.note}>{t('add.onlineEmpty')}</p>
+          ) : online.length === 0 ? (
+            <p className={styles.note}>{t('add.searchEmpty')}</p>
           ) : (
             <ul className={styles.list}>
               {online.map((row) => (
@@ -218,8 +248,10 @@ export function AddPanel(): React.JSX.Element {
           <p className={styles.note}>{t('add.installedLoading')}</p>
         ) : installed === 'failed' ? (
           <p className={styles.note}>{t('add.installedFailed')}</p>
-        ) : installedList.length === 0 ? (
+        ) : installedAll.length === 0 ? (
           <p className={styles.note}>{t('add.installedEmpty')}</p>
+        ) : installedList.length === 0 ? (
+          <p className={styles.note}>{t('add.searchEmpty')}</p>
         ) : (
           <ul className={styles.list}>
             {installedList.map((row) => (

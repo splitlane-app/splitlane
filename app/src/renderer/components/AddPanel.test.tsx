@@ -1,5 +1,5 @@
 import { DragDropProvider } from '@dnd-kit/react'
-import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { Program } from '../../shared/programs'
 import { activity, entry, fakeBridge, renderWith, rule, servicesFor, snap } from '../testing'
@@ -61,6 +61,59 @@ test('AddPanel asks for the installed programs once and marks pinned ones', asyn
   fireEvent.click(screen.getByRole('tab', { name: 'Сейчас в сети' }))
   fireEvent.click(screen.getByRole('tab', { name: 'Установленные' }))
   expect(installedPrograms).toHaveBeenCalledTimes(1)
+})
+
+test('AddPanel rows name the program file, a protected program offers no lane', async () => {
+  const TS_IPN = 'C:\\Program Files\\Tailscale\\tailscale-ipn.exe'
+  setup({
+    installedPrograms: async () => [
+      { exe: MAIL, name: 'Mail' },
+      { exe: TS_IPN, name: 'Tailscale' }
+    ]
+  })
+  const online = document.querySelector<HTMLElement>(`[data-add-row="${CSS.escape(GAME_DIR)}"]`)!
+  expect(within(online).getByText('game.exe')).toBeTruthy()
+  expect(within(online).getByText('сейчас: Через VPN')).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Установленные' }))
+  await screen.findByText('Tailscale')
+  const mail = document.querySelector<HTMLElement>(`[data-add-row="${CSS.escape(MAIL)}"]`)!
+  expect(within(mail).getByText('mail.exe')).toBeTruthy()
+  const ts = document.querySelector<HTMLElement>(`[data-add-row="${CSS.escape(TS_IPN)}"]`)!
+  expect(within(ts).getByText('tailscale-ipn.exe')).toBeTruthy()
+  expect(within(ts).getByText('встроенное правило: Напрямую')).toBeTruthy()
+  // no lane buttons (the drag handle of the row has the role of a button too)
+  expect(ts.querySelectorAll('button')).toHaveLength(0)
+  expect(within(mail).getAllByRole('button', { name: /: Mail$/ })).toHaveLength(2)
+})
+
+test('AddPanel lists follow the search of the header', async () => {
+  const NOTES = 'C:\\Apps\\Notes\\notes.exe'
+  const { services } = setup({
+    installedPrograms: async () => [
+      { exe: MAIL, name: 'Mail' },
+      { exe: NOTES, name: 'Заметки' }
+    ]
+  })
+  const search = (q: string): void => act(() => services.store.getState().setSearch(q))
+
+  search('GAME.exe')
+  expect(screen.getByText('Game')).toBeTruthy()
+  search('заметки')
+  expect(screen.queryByText('Game')).toBeNull()
+  expect(screen.getByText('Ничего не найдено')).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Установленные' }))
+  await screen.findByText('Заметки')
+  expect(screen.queryByText('Mail')).toBeNull()
+  search('c:\\apps\\mail')
+  expect(screen.getByText('Mail')).toBeTruthy()
+  expect(screen.queryByText('Заметки')).toBeNull()
+  search('нет такой')
+  expect(screen.getByText('Ничего не найдено')).toBeTruthy()
+  search('')
+  expect(screen.getByText('Mail')).toBeTruthy()
+  expect(screen.getByText('Заметки')).toBeTruthy()
 })
 
 test('AddPanel shows the picked file with both lane buttons, and closes with Escape', async () => {

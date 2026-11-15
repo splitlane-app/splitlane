@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Activity, ActivityApp, AppRule, Lane, Traffic } from '../../shared/protocol'
 import { t } from '../i18n/t'
-import { boardView } from './board'
+import { boardView, fileName, protectedLane } from './board'
 
 const GAME = String.raw`C:\Games\Game\game.exe`
 const BROWSER = String.raw`C:\Apps\Browser\browser.exe`
@@ -58,7 +58,8 @@ describe('boardView', () => {
         down: 1000,
         up: 24,
         connections: 3,
-        movable: true
+        movable: true,
+        builtin: false
       },
       {
         key: 'r3',
@@ -71,7 +72,8 @@ describe('boardView', () => {
         down: 0,
         up: 0,
         connections: 0,
-        movable: true
+        movable: true,
+        builtin: false
       }
     ])
     expect(board.direct.pinned).toEqual([
@@ -86,7 +88,8 @@ describe('boardView', () => {
         down: 50,
         up: 5,
         connections: 1,
-        movable: true
+        movable: true,
+        builtin: false
       }
     ])
     expect(board.vpn).toMatchObject({ lane: 'vpn', isDefault: true, down: 1100, up: 30, address: addresses.vpn })
@@ -96,23 +99,24 @@ describe('boardView', () => {
       down: 60,
       up: 6,
       address: addresses.direct,
-      unpinned: []
+      unpinned: [],
+      builtin: []
     })
   })
 
-  it('unpinned programs and special tiles sit in the default lane', () => {
+  it('unpinned programs sit in the default lane by name, the special tiles last', () => {
     const act = activity([
-      unattributedTile({ down: 900, connections: 4 }),
+      unattributedTile({ lane: 'direct', down: 900, connections: 4 }),
       entry(BETA_DIR, { name: 'Beta', exe: `${BETA_DIR}beta.exe`, lane: 'direct', down: 500, connections: 2 }),
-      entry(GAMMA_DIR, { name: 'Gamma', exe: `${GAMMA_DIR}gamma.exe`, lane: 'direct', down: 10 }),
+      entry(GAMMA_DIR, { name: 'gamma', exe: `${GAMMA_DIR}gamma.exe`, lane: 'direct', down: 10 }),
       entry(ALPHA_DIR, { name: 'Alpha', exe: `${ALPHA_DIR}alpha.exe`, lane: 'direct', down: 4, up: 6 }),
-      systemTile({ down: 5, connections: 1 })
+      systemTile({ lane: 'direct', down: 5, connections: 1 })
     ])
     const board = boardView([], 'direct', act, addresses, '')
 
     expect(board.vpn.unpinned).toEqual([])
-    expect(board.direct.unpinned.map((c) => c.key)).toEqual([BETA_DIR, ALPHA_DIR, GAMMA_DIR, 'system', 'unattributed'])
-    expect(board.direct.unpinned[0]).toEqual({
+    expect(board.direct.unpinned.map((c) => c.key)).toEqual([ALPHA_DIR, BETA_DIR, GAMMA_DIR, 'system', 'unattributed'])
+    expect(board.direct.unpinned[1]).toEqual({
       key: BETA_DIR,
       ruleId: null,
       kind: 'app',
@@ -123,7 +127,8 @@ describe('boardView', () => {
       down: 500,
       up: 0,
       connections: 2,
-      movable: true
+      movable: true,
+      builtin: false
     })
     expect(board.direct.unpinned[3]).toEqual({
       key: 'system',
@@ -136,7 +141,8 @@ describe('boardView', () => {
       down: 5,
       up: 0,
       connections: 1,
-      movable: true
+      movable: true,
+      builtin: false
     })
     expect(board.direct.unpinned[4]).toMatchObject({
       key: 'unattributed',
@@ -155,6 +161,95 @@ describe('boardView', () => {
     ])
     expect(off.direct.unpinned).toEqual([])
     expect(off.vpn).toMatchObject({ down: 0, up: 0, address: null })
+  })
+
+  it('the order of the cards does not follow their traffic from one second to the next', () => {
+    const CURL_DIR = 'C:\\Tools\\Curl\\'
+    // two copies of one program: the same description, told apart by the file
+    const tick = (busy: 'vpn' | 'direct' | 'alpha'): Activity => {
+      const speed = (who: typeof busy): number => (who === busy ? 5000 : 1)
+      return activity(
+        [
+          entry(`${CURL_DIR}curl-vpn.exe`, {
+            name: 'The curl executable',
+            exe: `${CURL_DIR}curl-vpn.exe`,
+            down: speed('vpn')
+          }),
+          entry(`${CURL_DIR}curl-direct.exe`, {
+            name: 'The curl executable',
+            exe: `${CURL_DIR}curl-direct.exe`,
+            down: speed('direct')
+          }),
+          entry(ALPHA_DIR, { name: 'Alpha', exe: `${ALPHA_DIR}alpha.exe`, down: speed('alpha') }),
+          unattributedTile({ down: 2 }),
+          systemTile({ down: 3 })
+        ].sort((a, b) => b.down - a.down) // the helper's order: the busiest first
+      )
+    }
+    const want = [ALPHA_DIR, `${CURL_DIR}curl-direct.exe`, `${CURL_DIR}curl-vpn.exe`, 'system', 'unattributed']
+    for (const busy of ['vpn', 'direct', 'alpha'] as const) {
+      expect(boardView([], 'vpn', tick(busy), addresses, '').vpn.unpinned.map((c) => c.key), busy).toEqual(want)
+    }
+  })
+
+  it('a program of a built-in rule sits in its own lane and never moves', () => {
+    const TS_DIR = 'C:\\Program Files\\Tailscale\\'
+    const TS = `${TS_DIR}tailscaled.exe`
+    const SL_DIR = 'C:\\Program Files\\SplitLane\\'
+    const ODD_DIR = 'C:\\Tools\\Odd\\'
+    const act = activity([
+      // the helper puts every program of no rule on its main lane (that of the special tiles): the protected
+      // files are known by name; a program the helper reports in the other lane goes by a rule of its own
+      entry(TS_DIR, { name: 'Tailscale service', exe: TS, lane: 'vpn', down: 30, connections: 2 }),
+      entry(SL_DIR, { name: 'SplitLane helper', exe: `${SL_DIR}splitlane-helper.exe`, lane: 'vpn', down: 3 }),
+      entry(ODD_DIR, { name: 'Odd', exe: `${ODD_DIR}odd.exe`, lane: 'direct', down: 7 }),
+      entry(EDITOR_DIR, { name: 'Редактор', exe: EDITOR }),
+      systemTile(),
+      unattributedTile()
+    ])
+    const board = boardView([], 'vpn', act, addresses, '')
+
+    expect(board.direct.builtin.map((c) => c.key)).toEqual([ODD_DIR, TS_DIR])
+    expect(board.direct.builtin[1]).toEqual({
+      key: TS_DIR,
+      ruleId: null,
+      kind: 'app',
+      name: 'Tailscale service',
+      exe: TS,
+      lane: 'direct',
+      pinned: false,
+      down: 30,
+      up: 0,
+      connections: 2,
+      movable: false,
+      builtin: true
+    })
+    expect(board.vpn.builtin.map((c) => [c.key, c.lane, c.movable, c.builtin])).toEqual([[SL_DIR, 'vpn', false, true]])
+    expect(board.vpn.unpinned.map((c) => c.key)).toEqual([EDITOR_DIR, 'system', 'unattributed'])
+    expect(board.direct.unpinned).toEqual([])
+    expect(boardView([], 'vpn', act, addresses, 'TAILSCALED').direct.builtin.map((c) => c.key)).toEqual([TS_DIR])
+
+    // in «всё напрямую» the helper's main lane is direct, the tiles' too: an unpinned program on it is no built-in one
+    const allDirect = activity([
+      entry(EDITOR_DIR, { name: 'Редактор', exe: EDITOR, lane: 'direct' }),
+      systemTile({ lane: 'direct' }),
+      unattributedTile({ lane: 'direct' })
+    ])
+    const b = boardView([], 'vpn', allDirect, addresses, '')
+    expect(b.vpn.unpinned.map((c) => c.key)).toEqual([EDITOR_DIR, 'system', 'unattributed'])
+    expect([...b.vpn.builtin, ...b.direct.builtin]).toEqual([])
+  })
+
+  it('protectedLane knows the protected files by name, fileName takes the last part of a path', () => {
+    expect(protectedLane('C:\\Program Files\\Tailscale\\TailScaled.EXE')).toBe('direct')
+    expect(protectedLane('C:\\Program Files\\Tailscale\\tailscale-ipn.exe')).toBe('direct')
+    expect(protectedLane('C:\\Program Files\\SplitLane\\splitlane-helper.exe')).toBe('vpn')
+    expect(protectedLane('C:\\Program Files\\SplitLane\\sing-box.exe')).toBeNull()
+    expect(protectedLane(GAME)).toBeUndefined()
+    expect(protectedLane('')).toBeUndefined()
+    expect(fileName(GAME)).toBe('game.exe')
+    expect(fileName('C:/x/y.exe')).toBe('y.exe')
+    expect(fileName('')).toBe('')
   })
 
   it('the system tile disappears while a system rule is pinned', () => {
@@ -176,7 +271,8 @@ describe('boardView', () => {
         down: 70,
         up: 0,
         connections: 0,
-        movable: true
+        movable: true,
+        builtin: false
       }
     ])
     expect(board.vpn.unpinned.map((c) => c.key)).toEqual(['unattributed'])
@@ -239,7 +335,8 @@ describe('boardView', () => {
         down: 300,
         up: 0,
         connections: 2,
-        movable: true
+        movable: true,
+        builtin: false
       }
     ])
     expect(board.vpn.unpinned.map((c) => c.key)).toEqual(['system', 'unattributed'])

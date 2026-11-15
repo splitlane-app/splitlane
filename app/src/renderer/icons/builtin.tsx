@@ -70,6 +70,17 @@ export function SearchIcon(props: IconProps): React.JSX.Element {
   )
 }
 
+/** The settings button of the header: an outlined gear (the filled cog is the «Службы Windows» tile). */
+export function SettingsIcon(props: IconProps): React.JSX.Element {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="5.7" fill="none" stroke="currentColor" strokeWidth="2.2" strokeDasharray="2.24 2.24" />
+      <circle cx="8" cy="8" r="4.1" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="8" cy="8" r="1.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+    </Svg>
+  )
+}
+
 /** The cross that closes a notice. */
 export function CloseIcon(props: IconProps): React.JSX.Element {
   return (

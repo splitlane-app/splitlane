@@ -14,7 +14,9 @@
   display: none;
 }
 
+/* the lanes and the add panel: docked beside them, or over them in a narrow window (AddPanel.module.css) */
 .content {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -22,7 +24,7 @@
 
 .lanes {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 1fr) minmax(240px, 1fr);
   gap: 12px;
   flex: 1;
   min-width: 0;

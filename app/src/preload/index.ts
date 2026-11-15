@@ -15,6 +15,8 @@ const bridge: SplitLaneBridge = {
   snapshot: () => ipcRenderer.invoke(IPC.snapshot),
   onSnapshot: (cb) => listen(IPC.snapshotChanged, cb),
   onActivity: (cb) => listen(IPC.activity, cb),
+  // nothing of the push reaches the page: only that it came
+  onOpenSettings: (cb) => listen<unknown>(IPC.openSettings, () => cb()),
   command: (c) => ipcRenderer.invoke(IPC.command, c),
   setActivityDetail: (key) => ipcRenderer.invoke(IPC.setActivityDetail, key),
   installHelper: () => ipcRenderer.invoke(IPC.installHelper),

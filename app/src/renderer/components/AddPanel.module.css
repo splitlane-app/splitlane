@@ -12,6 +12,18 @@
   background: var(--panel);
 }
 
+/* a narrow window: the panel lies over the lanes instead of squeezing them */
+@media (max-width: 1059px) {
+  .panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    box-shadow: 0 20px 50px rgb(0 0 0 / 55%);
+  }
+}
+
 .head {
   display: flex;
   align-items: center;
@@ -131,6 +143,10 @@
   min-width: 0;
   cursor: grab;
   user-select: none;
+}
+
+.row[data-builtin='true'] .info {
+  cursor: default;
 }
 
 .text {

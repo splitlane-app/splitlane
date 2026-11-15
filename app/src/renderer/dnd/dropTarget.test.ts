@@ -26,6 +26,7 @@ function card(over: Partial<CardVM>): CardVM {
     up: 0,
     connections: 0,
     movable: true,
+    builtin: false,
     ...over
   }
 }

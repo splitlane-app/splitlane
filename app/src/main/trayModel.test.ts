@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { HelperState, Phase, ReasonCode } from '../shared/protocol'
 import type { LinkStatus } from '../shared/status'
-import { circleBitmap, trayIconFor, trayMenuModel, type TrayIcon } from './trayModel'
+import { laneGlyphBitmap, trayIconFor, trayMenuModel, type TrayIcon } from './trayModel'
 
 const ready: LinkStatus = { kind: 'ready', hello: { protocol: 1, helper: 'x', core: 'y' } }
 function st(phase: Phase, code?: ReasonCode, allDirect = false): HelperState {
@@ -57,11 +57,60 @@ describe('trayModel', () => {
     expect(trayMenuModel(ready, null).toggle).toBeNull()
   })
 
-  it('circleBitmap has the size and a transparent corner', () => {
-    const b = circleBitmap(16, [0x8b, 0x7c, 0xff])
-    expect(b.length).toBe(16 * 16 * 4)
-    expect(b[3]).toBe(0)
-    const c = (8 * 16 + 8) * 4
-    expect([b[c], b[c + 1], b[c + 2], b[c + 3]]).toEqual([0xff, 0x7c, 0x8b, 255])
+  describe('laneGlyphBitmap', () => {
+    const VPN: [number, number, number] = [0x8b, 0x7c, 0xff]
+    const WARN: [number, number, number] = [0xff, 0xb4, 0x54]
+    const px = (b: Buffer, size: number, x: number, y: number): number[] => {
+      const i = (y * size + x) * 4
+      return [b[i], b[i + 1], b[i + 2], b[i + 3]]
+    }
+
+    it('has the size, BGRA, and transparent corners', () => {
+      for (const size of [16, 20, 24, 32, 48]) {
+        const b = laneGlyphBitmap(size, VPN)
+        expect(b.length, `${size}`).toBe(size * size * 4)
+        for (const [x, y] of [
+          [0, 0],
+          [size - 1, 0],
+          [0, size - 1],
+          [size - 1, size - 1]
+        ]) {
+          expect(px(b, size, x, y)[3], `${size}: ${x},${y}`).toBe(0)
+        }
+      }
+    })
+
+    it('paints the glyph in the state colour', () => {
+      for (const rgb of [VPN, WARN]) {
+        const b = laneGlyphBitmap(16, rgb)
+        // the road below the split, and the tops of the two lanes
+        for (const [x, y] of [
+          [7, 11],
+          [8, 11],
+          [4, 4],
+          [11, 4]
+        ]) {
+          expect(px(b, 16, x, y), `${x},${y}`).toEqual([rgb[2], rgb[1], rgb[0], 255])
+        }
+        // between the two lanes nothing is painted
+        expect(px(b, 16, 8, 3)[3]).toBeLessThan(64)
+      }
+      const big = laneGlyphBitmap(32, VPN)
+      expect(px(big, 32, 15, 22)).toEqual([VPN[2], VPN[1], VPN[0], 255])
+    })
+
+    it('has a darker outline for a light taskbar', () => {
+      const b = laneGlyphBitmap(16, VPN)
+      // left of the road: solid, darker than the glyph in every channel
+      const edge = px(b, 16, 6, 11)
+      expect(edge[3]).toBe(255)
+      expect(edge[0]).toBeLessThan(VPN[2])
+      expect(edge[1]).toBeLessThan(VPN[1])
+      expect(edge[2]).toBeLessThan(VPN[0])
+      const outside = px(b, 16, 5, 11)
+      expect(outside[3]).toBeGreaterThan(0)
+      expect(outside[3]).toBeLessThan(255)
+      expect(outside.slice(0, 3)).toEqual([VPN[2], VPN[1], VPN[0]].map((c) => Math.round(c * 0.35)))
+    })
   })
 })

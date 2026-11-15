@@ -3,7 +3,7 @@ import { useCallback, useRef, useState, type KeyboardEvent, type MouseEvent } fr
 import { CARD, CARD_SENSORS } from '../dnd/BoardDnd'
 import { MachinesIcon, PinIcon, ProgramIcon, ServicesIcon } from '../icons/builtin'
 import { t } from '../i18n/t'
-import type { CardVM } from '../model/board'
+import { fileName, type CardVM } from '../model/board'
 import { formatSpeed } from '../model/format'
 import { pin, unpin } from '../model/layout'
 import { useApp, useIcon, useServices } from '../services'
@@ -29,9 +29,11 @@ function CardIcon({ card }: { card: CardVM }): React.JSX.Element {
 }
 
 /**
- * A program on the board (spec 9.1, 9.2): icon, name, speed or «тихо», activity bars and the pin. A pinned card has
- * a solid frame and its pin; an unpinned one a dashed frame, its pin shows on hover and focus. The tile of WSL and
- * virtual machines never moves, so it has no pin, no drag and no menu.
+ * A program on the board (spec 9.1, 9.2): icon, name with the program's file under it, speed or «тихо», activity
+ * bars and the pin. A pinned card has a solid frame and its pin; an unpinned one a dashed frame, its pin shows on
+ * hover and focus. The tile of WSL and virtual machines never moves, so it has no pin, no drag and no menu; nor
+ * does a program of a built-in rule of the helper, marked «встроенное правило» under its name. In a narrow lane the
+ * bars go first, then the speed gives up its column; the name always shows, cut with an ellipsis.
  *
  * The card is a frame with two controls side by side: the card itself (focusable, named by the program and its
  * lane) and the pin. A click or Enter on the card opens the program card; Space takes it for a keyboard drag
@@ -93,10 +95,14 @@ export function AppCard({ card, onOpen }: { card: CardVM; onOpen(key: string): v
     e.preventDefault()
     openMenu({ x: e.clientX, y: e.clientY })
   }
-  const label = t(card.pinned ? 'card.label' : 'card.labelUnpinned', {
+  const label = t(card.pinned ? 'card.label' : card.builtin ? 'card.labelBuiltin' : 'card.labelUnpinned', {
     name: card.name,
     lane: t(card.lane === 'vpn' ? 'lane.vpn' : 'lane.direct')
   })
+  // two copies of one program have the same description: the file tells them apart; the note of a built-in rule
+  // comes first, so that a narrow card cuts the file, not the reason it has no pin
+  const file = card.kind === 'app' ? fileName(card.exe) : ''
+  const second = card.builtin ? [t('card.builtin'), file].filter((s) => s !== '').join(t('sep')) : file
 
   return (
     <>
@@ -108,6 +114,7 @@ export function AppCard({ card, onOpen }: { card: CardVM; onOpen(key: string): v
         data-kind={card.kind}
         data-name={card.name}
         data-pinned={card.pinned}
+        data-builtin={card.builtin}
         onContextMenu={onContextMenu}
       >
         <div
@@ -123,11 +130,20 @@ export function AppCard({ card, onOpen }: { card: CardVM; onOpen(key: string): v
           onKeyDown={onKeyDown}
         >
           <CardIcon card={card} />
-          <span className={styles.name}>{card.name}</span>
+          <span className={styles.text}>
+            <span className={styles.name}>{card.name}</span>
+            {second !== '' && (
+              <span className={styles.file} data-card-file="">
+                {second}
+              </span>
+            )}
+          </span>
           <span className={styles.speed} data-quiet={speed === ''}>
             {speed !== '' ? speed : t('card.quiet')}
           </span>
-          <ActivityBars points={points} />
+          <span className={styles.bars}>
+            <ActivityBars points={points} />
+          </span>
         </div>
         {movable ? (
           <button

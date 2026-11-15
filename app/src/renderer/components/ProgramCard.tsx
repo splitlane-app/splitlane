@@ -3,7 +3,7 @@ import type { Lane } from '../../shared/protocol'
 import { otherLane } from '../dnd/dropTarget'
 import { CloseIcon } from '../icons/builtin'
 import { t } from '../i18n/t'
-import { boardView, type CardVM } from '../model/board'
+import { boardView, fileName, type CardVM } from '../model/board'
 import { formatSpeed } from '../model/format'
 import { moveTo, pin, setWholeFolder, unpin } from '../model/layout'
 import { useApp, useServices } from '../services'
@@ -19,13 +19,14 @@ const MAX_CONNECTIONS = 500
 const laneName = (lane: Lane): string => t(lane === 'vpn' ? 'lane.vpn' : 'lane.direct')
 
 function stateText(card: CardVM): string {
+  if (card.builtin) return t(card.lane === 'vpn' ? 'program.stateBuiltinVpn' : 'program.stateBuiltinDirect')
   if (!card.pinned) return t('program.stateUnpinned')
   return t(card.lane === 'vpn' ? 'program.statePinnedVpn' : 'program.statePinnedDirect')
 }
 
 /**
- * The program card (spec 9.4), a dialog over the board for the card whose key is `ui.cardKey`: the name, the icon
- * and the state, the buttons that change its lane or unpin it, what counts as this program (the «Вся папка
+ * The program card (spec 9.4), a dialog over the board for the card whose key is `ui.cardKey`: the name, the icon,
+ * the program's file and the state, the buttons that change its lane or unpin it, what counts as this program (the «Вся папка
  * программы» switch, the path, the files seen) and its connections now. While it is open the page subscribes to the
  * activity detail of its key (8.4).
  */
@@ -57,7 +58,14 @@ function CardDialog({ cardKey }: { cardKey: string }): React.JSX.Element | null 
   const cards = useMemo(() => {
     if (layout === null || addresses === null) return null
     const view = boardView(layout.apps, layout.defaultLane, activity, addresses, '')
-    return [...view.vpn.pinned, ...view.direct.pinned, ...view.vpn.unpinned, ...view.direct.unpinned]
+    return [
+      ...view.vpn.pinned,
+      ...view.direct.pinned,
+      ...view.vpn.builtin,
+      ...view.direct.builtin,
+      ...view.vpn.unpinned,
+      ...view.direct.unpinned
+    ]
   }, [layout, addresses, activity])
   const found = cards?.find((c) => c.key === cardKey)
   if (found !== undefined) last.current = found
@@ -94,6 +102,7 @@ function CardDialog({ cardKey }: { cardKey: string }): React.JSX.Element | null 
   const target = otherLane(card.lane)
   const path = rule !== undefined ? rule.matcher.value : card.kind === 'app' ? card.key : ''
   const canSwitch = kind === 'folder' || kind === 'file'
+  const file = card.kind === 'app' ? fileName(card.exe) : ''
 
   return (
     <div className={styles.backdrop} onMouseDown={(e) => e.target === e.currentTarget && close()}>
@@ -112,6 +121,7 @@ function CardDialog({ cardKey }: { cardKey: string }): React.JSX.Element | null 
             <h2 id={titleId} className={styles.name}>
               {card.name}
             </h2>
+            {file !== '' && <p className={styles.file}>{file}</p>}
             <p className={styles.state}>{stateText(card)}</p>
           </div>
           <button type="button" className={styles.close} aria-label={t('program.close')} onClick={close}>

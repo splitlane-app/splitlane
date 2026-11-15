@@ -9,6 +9,8 @@
   border-radius: 8px;
   background: var(--card);
   user-select: none;
+  /* the parts of the card give way by the card's own width (below) */
+  container-type: inline-size;
   transition:
     border-color 140ms ease,
     background-color 140ms ease;
@@ -53,6 +55,15 @@
   color: var(--text);
 }
 
+/* a program of a built-in rule: fixed in its lane like a pinned one, quiet like an unpinned one */
+.card[data-builtin='true'],
+.card[data-builtin='true']:hover {
+  border-style: solid;
+  border-color: var(--line2);
+  background: transparent;
+  color: var(--muted);
+}
+
 .icon {
   display: flex;
   align-items: center;
@@ -79,12 +90,34 @@
   color: var(--text);
 }
 
-.name {
+/* the name and, under it, the program's file */
+.text {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
+  line-height: 1.2;
+}
+
+.name,
+.file {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.file {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.card[data-pinned='false'] .file {
+  color: var(--dim);
+}
+
+.bars {
+  display: flex;
+  flex-shrink: 0;
 }
 
 .speed {
@@ -101,6 +134,19 @@
 .speed[data-quiet='true'] {
   color: var(--dim);
   font-family: var(--font-ui);
+}
+
+/* a narrow card: the bars go first (the name keeps about 110px), then the speed gives up its column (about 80px) */
+@container (max-width: 350px) {
+  .bars {
+    display: none;
+  }
+}
+
+@container (max-width: 220px) {
+  .speed {
+    min-width: 0;
+  }
 }
 
 .pin {

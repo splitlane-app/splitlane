@@ -7,10 +7,11 @@ import type { AppState } from './store/appStore'
  * push callback (the layout queue relies on the state of a lanes.set arriving before its answer, see layoutQueue.ts);
  * the activity goes to setActivity while the link is ready, and is dropped whenever it is not. The snapshot the page
  * asks for at start is taken only when no push came first: a push is never older than an answer it overtook, and a
- * change after the answer comes as a push of its own. Returns the unsubscribe.
+ * change after the answer comes as a push of its own. «Настройки…» of the tray opens «Подключение». Returns the
+ * unsubscribe.
  */
 export function connectBridge(
-  bridge: Pick<SplitLaneBridge, 'snapshot' | 'onSnapshot' | 'onActivity'>,
+  bridge: Pick<SplitLaneBridge, 'snapshot' | 'onSnapshot' | 'onActivity' | 'onOpenSettings'>,
   store: StoreApi<AppState>
 ): () => void {
   let pushed = false
@@ -28,6 +29,7 @@ export function connectBridge(
     const st = store.getState()
     st.setActivity(st.snapshot?.link.kind === 'ready' ? a : null)
   })
+  const offSettings = bridge.onOpenSettings(() => store.getState().showConnection(true))
   bridge.snapshot().then(
     (s) => {
       if (!pushed && !stopped) apply(s)
@@ -39,6 +41,7 @@ export function connectBridge(
     stopped = true
     offSnapshot()
     offActivity()
+    offSettings()
   }
 }
 

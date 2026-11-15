@@ -67,6 +67,53 @@ test('Lane shows pinned cards, the line and unpinned cards in the default lane',
   expect(within(lane).queryByText('Перетащите сюда программу или ярлык')).toBeNull()
 })
 
+test('a program card names its file under its name, a special tile has no second line', () => {
+  const { services, view } = setup(board, live)
+  renderWith(<Lane vm={view.vpn} onMakeDefault={() => {}} />, services)
+  const lane = screen.getByRole('region', { name: 'Через VPN' })
+  const card = (name: string): HTMLElement => lane.querySelector<HTMLElement>(`[data-name="${name}"]`)!
+  expect(within(card('Mail')).getByText('mail.exe')).toBeTruthy()
+  expect(within(card('Game')).getByText('game.exe')).toBeTruthy()
+  for (const tile of ['Службы Windows', 'WSL и виртуальные машины']) {
+    expect(card(tile).querySelector('[data-card-file]'), tile).toBeNull()
+  }
+})
+
+test('a program of a built-in rule sits in its own lane with a note, without a pin or a menu', () => {
+  const TS_DIR = 'C:\\Program Files\\Tailscale\\'
+  const a = activity([
+    entry(TS_DIR, { name: 'Tailscale service', exe: `${TS_DIR}tailscaled.exe`, down: 30 }),
+    entry(GAME_DIR, { name: 'Game', exe: GAME, down: 4096 }),
+    entry('unattributed', { kind: 'unattributed' })
+  ])
+  const { services, view } = setup(board, a)
+  renderWith(
+    <>
+      <Lane vm={view.vpn} onMakeDefault={() => {}} />
+      <Lane vm={view.direct} onMakeDefault={() => {}} />
+    </>,
+    services
+  )
+  expect(cardNames(screen.getByRole('region', { name: 'Через VPN' }))).toEqual([
+    'Mail',
+    'Game',
+    'Службы Windows',
+    'WSL и виртуальные машины'
+  ])
+  const direct = screen.getByRole('region', { name: 'Напрямую' })
+  expect(cardNames(direct)).toEqual(['Browser', 'Tailscale service'])
+  const card = direct.querySelector<HTMLElement>('[data-name="Tailscale service"]')!
+  expect(card.dataset.builtin).toBe('true')
+  expect(card.dataset.pinned).toBe('false')
+  expect(within(card).getByText('встроенное правило · tailscaled.exe')).toBeTruthy()
+  expect(within(card).getByRole('button', { name: 'Tailscale service, Напрямую, встроенное правило' })).toBeTruthy()
+  expect(within(card).queryByRole('button', { name: /Закрепить|Открепить/ })).toBeNull()
+  fireEvent.contextMenu(card)
+  expect(screen.queryByRole('menu')).toBeNull()
+  // above the drop zone, like the pinned cards
+  expect(follows(card, within(direct).getByText('Перетащите сюда программу или ярлык'))).toBe(true)
+})
+
 test('Lane explains the unpinned programs while routing is off', () => {
   const { services, view } = setup(snap({ ...board.state!, phase: 'off' }), null)
   renderWith(<Lane vm={view.vpn} onMakeDefault={() => {}} />, services)
@@ -105,7 +152,8 @@ test('AppCard shows «тихо» without traffic', () => {
     down: 0,
     up: 0,
     connections: 0,
-    movable: true
+    movable: true,
+    builtin: false
   }
   const opened: string[] = []
   const { unmount } = renderWith(<AppCard card={quiet} onOpen={(key) => opened.push(key)} />, services)

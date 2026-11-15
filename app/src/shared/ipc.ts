@@ -38,6 +38,8 @@ export interface SplitLaneBridge {
   snapshot(): Promise<Snapshot>
   onSnapshot(cb: (s: Snapshot) => void): () => void
   onActivity(cb: (a: Activity) => void): () => void
+  /** «Настройки…» of the tray: the page opens «Подключение». The push carries nothing. */
+  onOpenSettings(cb: () => void): () => void
   command(c: Command): Promise<CommandResult>
   setActivityDetail(key: string | null): Promise<void>
   installHelper(): Promise<void>
@@ -53,7 +55,7 @@ export interface SplitLaneBridge {
   quit(): Promise<void>
 }
 
-/** IPC channel names: requests go through ipcMain.handle, the two pushes through webContents.send. */
+/** IPC channel names: requests go through ipcMain.handle, the three pushes through webContents.send. */
 export const IPC = {
   snapshot: 'splitlane:snapshot',
   command: 'splitlane:command',
@@ -71,5 +73,7 @@ export const IPC = {
   /** main to page: a new Snapshot */
   snapshotChanged: 'splitlane:snapshot-changed',
   /** main to page: an Activity event of the helper */
-  activity: 'splitlane:activity'
+  activity: 'splitlane:activity',
+  /** main to page: «Настройки…» in the tray menu, no data */
+  openSettings: 'splitlane:open-settings'
 } as const

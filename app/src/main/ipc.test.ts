@@ -327,7 +327,8 @@ test('registerIpc checks the sender and every argument from the page', async () 
   const h = ipcHarness()
   expect([...h.handlers.keys()].sort()).toEqual(
     Object.values(IPC)
-      .filter((c) => c !== IPC.snapshotChanged && c !== IPC.activity)
+      // the pushes from main to the page have no handler: the page cannot send on them
+      .filter((c) => c !== IPC.snapshotChanged && c !== IPC.activity && c !== IPC.openSettings)
       .sort()
   )
 

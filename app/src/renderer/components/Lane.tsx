@@ -97,7 +97,8 @@ function useFileDrop(lane: LaneName): {
 
 /**
  * One lane of the board (spec 9.1): the title in the lane's colour with the total speed, «основная» or
- * «сделать основной», the explanation line, the pinned cards; in the default lane the line «остальные программы»
+ * «сделать основной», the explanation line, the pinned cards and after them the programs that a built-in rule of the
+ * helper sends this way; in the default lane the line «остальные программы»
  * with the unpinned cards and the special tiles below it — only while the core runs (8.4), an explanation
  * otherwise; in the other lane the zone to drop programs on.
  *
@@ -140,9 +141,12 @@ export function Lane({ vm, onMakeDefault }: { vm: LaneVM; onMakeDefault(): void 
       </header>
       <Sees lane={vm.lane} address={vm.address} />
       <div className={styles.body}>
-        {vm.pinned.length > 0 && (
+        {(vm.pinned.length > 0 || vm.builtin.length > 0) && (
           <div className={styles.cards}>
             {vm.pinned.map((card) => (
+              <AppCard key={card.key} card={card} onOpen={open} />
+            ))}
+            {vm.builtin.map((card) => (
               <AppCard key={card.key} card={card} onOpen={open} />
             ))}
           </div>

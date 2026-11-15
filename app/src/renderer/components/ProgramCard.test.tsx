@@ -37,6 +37,8 @@ test('ProgramCard subscribes to detail on open and unsubscribes on close', () =>
   expect(setActivityDetail).toHaveBeenCalledWith(ID1)
   const dialog = screen.getByRole('dialog', { name: 'Mail' })
   expect(within(dialog).getByText('закреплена · через VPN')).toBeTruthy()
+  // the file under the name tells two programs of one description apart
+  expect(within(dialog).getByText('mail.exe')).toBeTruthy()
 
   fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }))
   expect(services.store.getState().ui.cardKey).toBeNull()
@@ -101,6 +103,29 @@ test('ProgramCard follows the program to its new key after pin', async () => {
   expect(sw.getAttribute('aria-checked')).toBe('true')
   expect(services.store.getState().ui.cardKey).not.toBe(GAME_DIR)
   expect(screen.getByRole('dialog', { name: 'Game' })).toBeTruthy()
+})
+
+test('ProgramCard of a program of a built-in rule says so and offers no move', () => {
+  const TS_DIR = 'C:\\Program Files\\Tailscale\\'
+  const fake = fakeBridge()
+  const services = servicesFor(fake.bridge, snap({ apps: [] }))
+  services.store
+    .getState()
+    .setActivity(
+      activity([
+        entry(TS_DIR, { name: 'Tailscale service', exe: `${TS_DIR}tailscaled.exe`, down: 5 }),
+        entry('unattributed', { kind: 'unattributed' })
+      ])
+    )
+  services.store.getState().openCard(TS_DIR)
+  renderWith(<ProgramCard />, services)
+  const dialog = screen.getByRole('dialog', { name: 'Tailscale service' })
+  expect(within(dialog).getByText('tailscaled.exe')).toBeTruthy()
+  expect(within(dialog).getByText('встроенное правило · напрямую')).toBeTruthy()
+  for (const name of ['Закрепить', 'Пустить через VPN', 'Пустить напрямую']) {
+    expect(within(dialog).queryByRole('button', { name }), name).toBeNull()
+  }
+  expect(services.store.getState().ui.cardKey).toBe(TS_DIR)
 })
 
 test('ProgramCard keeps an unpinned program that went quiet', () => {

@@ -81,3 +81,33 @@
 .add:hover {
   background: #ffffff;
 }
+
+/* the gear of «Настройки и подключение», beside «+ Добавить» */
+.settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-left: -6px;
+  padding: 0;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.settings:hover {
+  background: var(--line2);
+  color: var(--text);
+}
+
+.settings svg {
+  width: 15px;
+  height: 15px;
+}

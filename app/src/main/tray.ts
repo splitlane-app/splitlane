@@ -1,11 +1,12 @@
-import { Menu, Tray, nativeImage, type NativeImage } from 'electron'
+import { Menu, Tray, nativeImage, screen, type NativeImage } from 'electron'
 import type { HelperState } from '../shared/protocol'
 import type { LinkStatus } from '../shared/status'
-import { circleBitmap, trayIconFor, trayMenuModel, type TrayIcon } from './trayModel'
+import { laneGlyphBitmap, trayIconFor, trayMenuModel, type TrayIcon } from './trayModel'
 
 /** The main process's own strings (the page's dictionary lives in the renderer). */
 export const MAIN_TEXT = {
   open: 'Открыть',
+  settings: 'Настройки…',
   enable: 'Включить',
   disable: 'Выключить',
   quit: 'Выход',
@@ -20,7 +21,7 @@ const COLORS: Record<TrayIcon, [number, number, number]> = {
   'vpn-down': [0xff, 0x6b, 0x6b]
 }
 
-/** createFromBitmap and addRepresentation take premultiplied BGRA; circleBitmap gives straight alpha. */
+/** createFromBitmap takes premultiplied BGRA; laneGlyphBitmap gives straight alpha. */
 function premultiplied(bgra: Buffer): Buffer {
   const out = Buffer.from(bgra)
   for (let i = 0; i < out.length; i += 4) {
@@ -32,20 +33,34 @@ function premultiplied(bgra: Buffer): Buffer {
   return out
 }
 
-function trayImage(icon: TrayIcon): NativeImage {
-  const rgb = COLORS[icon]
-  const img = nativeImage.createFromBitmap(premultiplied(circleBitmap(16, rgb)), { width: 16, height: 16, scaleFactor: 1 })
-  img.addRepresentation({ scaleFactor: 2, width: 32, height: 32, buffer: premultiplied(circleBitmap(32, rgb)) })
-  return img
+/**
+ * The glyph as an image of `logical` pixels at the scale of the primary display. On Windows Electron makes the icon
+ * of a tray or a window from the image's 1x bitmap alone (other representations are not used), so that bitmap is
+ * drawn at the size the shell shows: 16 px for the tray and 32 px for the window at 100 %, more on a scaled display.
+ */
+function glyphImage(rgb: [number, number, number], logical: number): NativeImage {
+  const size = Math.max(logical, Math.round(logical * screen.getPrimaryDisplay().scaleFactor))
+  return nativeImage.createFromBitmap(premultiplied(laneGlyphBitmap(size, rgb)), {
+    width: size,
+    height: size,
+    scaleFactor: 1
+  })
+}
+
+/** The icon of the window and its taskbar button: the glyph in the VPN colour. */
+export function windowIcon(): NativeImage {
+  return glyphImage(COLORS.working, 32)
 }
 
 export interface TrayActions {
   open(): void
+  /** Shows the window on «Подключение» with the settings. */
+  settings(): void
   toggle(to: 'enable' | 'disable'): void
   quit(): void
 }
 
-/** The tray icon and its menu (spec 9.6): Открыть, Включить or Выключить, Выход. */
+/** The tray icon and its menu (spec 9.6): Открыть, Настройки…, Включить or Выключить, Выход. */
 export class AppTray {
   private readonly tray: Tray
   private readonly images = new Map<TrayIcon, NativeImage>()
@@ -72,6 +87,7 @@ export class AppTray {
     this.tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: MAIN_TEXT.open, click: () => this.actions.open() },
+        { label: MAIN_TEXT.settings, click: () => this.actions.settings() },
         {
           label: toggle === 'disable' ? MAIN_TEXT.disable : MAIN_TEXT.enable,
           enabled: toggle !== null,
@@ -92,7 +108,7 @@ export class AppTray {
   private image(icon: TrayIcon): NativeImage {
     let img = this.images.get(icon)
     if (img === undefined) {
-      img = trayImage(icon)
+      img = glyphImage(COLORS[icon], 16)
       this.images.set(icon, img)
     }
     return img

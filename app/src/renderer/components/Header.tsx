@@ -1,5 +1,5 @@
 import type { Phase } from '../../shared/protocol'
-import { SearchIcon } from '../icons/builtin'
+import { SearchIcon, SettingsIcon } from '../icons/builtin'
 import type { Key } from '../i18n/ru'
 import { t } from '../i18n/t'
 import { sendCommand, useApp, useServices } from '../services'
@@ -18,7 +18,10 @@ const CAPTION: Record<Phase, Key> = {
   stopping: 'header.stopping'
 }
 
-/** The header of the board (spec 9.1): name, routing switch, connection pill, search, «+ Добавить». */
+/**
+ * The header of the board (spec 9.1): name, routing switch, connection pill, search, «+ Добавить» and the gear that
+ * opens «Подключение» with the settings of the window (as the pill does).
+ */
 export function Header(): React.JSX.Element {
   const services = useServices()
   const state = useApp((s) => s.snapshot?.state ?? null)
@@ -71,6 +74,15 @@ export function Header(): React.JSX.Element {
       </label>
       <button type="button" className={styles.add} onClick={() => openAdd(true)}>
         {t('header.add')}
+      </button>
+      <button
+        type="button"
+        className={styles.settings}
+        aria-label={t('header.settings')}
+        title={t('header.settings')}
+        onClick={() => showConnection(true)}
+      >
+        <SettingsIcon />
       </button>
     </header>
   )

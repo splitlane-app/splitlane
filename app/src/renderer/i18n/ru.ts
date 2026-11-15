@@ -12,6 +12,7 @@ export const ru = {
   'header.stopping': 'Выключается…',
   'header.search': 'Найти программу',
   'header.add': '+ Добавить',
+  'header.settings': 'Настройки и подключение',
   'pill.tailscale': 'Tailscale',
   'pill.direct': 'прямое соединение',
   'pill.relay': 'через ретранслятор',
@@ -33,9 +34,12 @@ export const ru = {
   unpin: 'Открепить',
   pin: 'Закрепить',
   'card.quiet': 'тихо',
+  // a program the helper routes by a rule of its own (the system Tailscale, SplitLane itself): it never moves
+  'card.builtin': 'встроенное правило',
   // what a screen reader says of a card: its name and lane, its kind; the menu of its actions
   'card.label': '{name}, {lane}',
   'card.labelUnpinned': '{name}, {lane}, не закреплена',
+  'card.labelBuiltin': '{name}, {lane}, встроенное правило',
   'card.role': 'карточка программы',
   'menu.label': 'Действия: {name}',
 
@@ -55,12 +59,17 @@ export const ru = {
   'add.dragHint': 'Строку можно перетащить на дорожку',
   'add.here': 'сейчас: {lane}',
   'add.pinnedIn': 'закреплена: {lane}',
+  'add.builtinIn': 'встроенное правило: {lane}',
+  // the header's search hides every row of the list
+  'add.searchEmpty': 'Ничего не найдено',
 
   // the program card (spec 9.4)
   'program.close': 'Закрыть',
   'program.statePinnedVpn': 'закреплена · через VPN',
   'program.statePinnedDirect': 'закреплена · напрямую',
   'program.stateUnpinned': 'не закреплена · по основной дорожке',
+  'program.stateBuiltinVpn': 'встроенное правило · через VPN',
+  'program.stateBuiltinDirect': 'встроенное правило · напрямую',
   'program.identity': 'Что считается этой программой',
   'program.wholeFolder': 'Вся папка программы',
   'program.wholeFolderOn': 'Все файлы из этой папки считаются этой программой',

@@ -20,7 +20,7 @@ import { SettingsFile } from './settingsFile'
 import { encodePowerShell, helperSourceDir, installAfterLink, installHelper } from './setup'
 import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
 import { runTask, systemTools, taskRegistered, type Exec } from './task'
-import { AppTray, MAIN_TEXT } from './tray'
+import { AppTray, MAIN_TEXT, windowIcon } from './tray'
 
 /** schtasks and whoami answer at once; the Store listing takes about a second. */
 const QUICK_EXEC_TIMEOUT_MS = 30_000
@@ -386,6 +386,7 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#0e1014',
     title: 'SplitLane',
+    icon: windowIcon(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -467,6 +468,10 @@ async function main(): Promise<void> {
   })
   tray = new AppTray({
     open: showWindow,
+    settings: () => {
+      showWindow()
+      send(IPC.openSettings, null)
+    },
     toggle: (to) => {
       autoEnable.stop()
       void runCommand(link, { method: to === 'enable' ? 'routing.enable' : 'routing.disable' }).then((r) => {

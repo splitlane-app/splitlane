@@ -83,6 +83,28 @@ test('connectBridge drops the activity while the link is not ready', () => {
   expect(store.getState().snapshot?.state?.phase).toBe('on')
 })
 
+test('connectBridge opens the connection screen when the tray asks for the settings', () => {
+  let openSettings: () => void = () => {}
+  const { bridge } = fakeBridge({
+    onOpenSettings: (cb) => {
+      openSettings = cb
+      return () => (openSettings = () => {})
+    }
+  })
+  const store = createAppStore({ command: (c) => bridge.command(c) })
+  const stop = connectBridge(bridge, store)
+  store.getState().setSnapshot(snap({ phase: 'on' }))
+  expect(store.getState().ui.screen).toBe('board')
+
+  openSettings()
+  expect(store.getState().ui.screen).toBe('connection')
+
+  stop()
+  store.getState().showConnection(false)
+  openSettings()
+  expect(store.getState().ui.screen).toBe('board')
+})
+
 test('IconCache asks for each program once and keeps only image data', async () => {
   const asked: string[] = []
   const icons = new IconCache(async (exe) => {

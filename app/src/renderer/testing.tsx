@@ -63,6 +63,7 @@ export function fakeBridge(over: Partial<SplitLaneBridge> = {}, answer: CommandR
     snapshot: () => new Promise<Snapshot>(() => {}),
     onSnapshot: () => () => {},
     onActivity: () => () => {},
+    onOpenSettings: () => () => {},
     command: async (c) => {
       commands.push(c)
       return answer

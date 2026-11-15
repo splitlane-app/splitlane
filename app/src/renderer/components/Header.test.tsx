@@ -66,3 +66,16 @@ test('Header shows the connection, searches and opens the add panel', () => {
   fireEvent.click(screen.getByRole('button', { name: '+ Добавить' }))
   expect(services.store.getState().ui.addOpen).toBe(true)
 })
+
+test('Header settings button opens the connection screen with the settings', () => {
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, snap({ phase: 'off' }))
+  renderWith(<Header />, services)
+
+  const settings = screen.getByRole('button', { name: 'Настройки и подключение' })
+  expect(settings.getAttribute('title')).toBe('Настройки и подключение')
+  // next to «+ Добавить»
+  expect(settings.previousElementSibling).toBe(screen.getByRole('button', { name: '+ Добавить' }))
+  fireEvent.click(settings)
+  expect(services.store.getState().ui.screen).toBe('connection')
+})
