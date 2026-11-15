@@ -11,6 +11,7 @@ test('systemTools names the programs of Windows by full path under SystemRoot', 
   expect(TOOLS).toEqual({
     schtasks: 'D:\\Win\\System32\\schtasks.exe',
     whoami: 'D:\\Win\\System32\\whoami.exe',
+    reg: 'D:\\Win\\System32\\reg.exe',
     powershell: 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
   })
   expect(systemTools({ SystemRoot: 'C:\\WINDOWS\\' }).schtasks).toBe('C:\\WINDOWS\\System32\\schtasks.exe')

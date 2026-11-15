@@ -304,7 +304,9 @@ function ipcHarness() {
     setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, ...p })),
     installedPrograms: vi.fn(async () => []),
     pickProgram: vi.fn(async () => null),
-    resolveDropped: vi.fn((paths: string[]) => paths.map((p) => ({ kind: 'skipped' as const, name: p }))),
+    resolveDropped: vi.fn(async (paths: string[]) =>
+      paths.map((p) => ({ kind: 'skipped' as const, name: p, reason: 'notProgram' as const }))
+    ),
     icon: vi.fn(async (_exe: string): Promise<string | null> => 'data:image/png;base64,AA=='),
     openExternal: vi.fn(async (_url: string) => {}),
     saveDiagnostics: vi.fn(async () => ({ saved: false })),
@@ -366,7 +368,9 @@ test('registerIpc checks the sender and every argument from the page', async () 
   ])
 
   // drops, detail and settings
-  expect(await h.invoke(IPC.resolveDropped, ['notes.txt'])).toEqual([{ kind: 'skipped', name: 'notes.txt' }])
+  expect(await h.invoke(IPC.resolveDropped, ['notes.txt'])).toEqual([
+    { kind: 'skipped', name: 'notes.txt', reason: 'notProgram' }
+  ])
   await expect(h.invoke(IPC.resolveDropped, 'C:\\a.exe')).rejects.toThrow()
   await h.invoke(IPC.setActivityDetail, ID1)
   await h.invoke(IPC.setActivityDetail, null)
@@ -399,6 +403,29 @@ test('installed programs merge the Start menu and the Store', () => {
   // the Start-menu entry wins a duplicate; the Russian order puts Cyrillic first
   expect(mergePrograms(start, store).map((p) => p.name)).toEqual(['Заметки', 'Редактор', 'Atlas', 'Viewer'])
   expect(mergePrograms([], [])).toEqual([])
+})
+
+test('installed programs take in the Steam and Epic games', () => {
+  const start = [
+    { exe: 'C:\\Tools\\viewer.exe', name: 'Viewer' },
+    // a game shortcut of the Start menu, resolved to the same exe as the Steam list
+    { exe: 'D:\\Games\\SteamLibrary\\steamapps\\common\\Starfall\\bin\\starfall.exe', name: 'Звёздная тактика' }
+  ]
+  const store = [{ exe: 'C:\\Program Files\\WindowsApps\\Vendor.Atlas_2.0.0.0_x64__abcdefghijk\\atlas.exe', name: 'Atlas' }]
+  const games = [
+    { exe: 'd:\\games\\steamlibrary\\steamapps\\common\\starfall\\bin\\STARFALL.EXE', name: 'Starfall (Steam)' },
+    { exe: 'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Nebula Drift\\Nebula.exe', name: 'Nebula Drift' },
+    { exe: 'C:\\Program Files\\Epic Games\\LumenRush\\Binaries\\Win64\\LumenRush.exe', name: 'Lumen Rush' },
+    { exe: 'C:\\Program Files\\Epic Games\\Aurora\\Aurora.exe', name: 'Аврора' }
+  ]
+  expect(mergePrograms(start, store, games)).toEqual([
+    { exe: 'C:\\Program Files\\Epic Games\\Aurora\\Aurora.exe', name: 'Аврора' },
+    { exe: 'D:\\Games\\SteamLibrary\\steamapps\\common\\Starfall\\bin\\starfall.exe', name: 'Звёздная тактика' },
+    { exe: 'C:\\Program Files\\WindowsApps\\Vendor.Atlas_2.0.0.0_x64__abcdefghijk\\atlas.exe', name: 'Atlas' },
+    { exe: 'C:\\Program Files\\Epic Games\\LumenRush\\Binaries\\Win64\\LumenRush.exe', name: 'Lumen Rush' },
+    { exe: 'C:\\Program Files (x86)\\Steam\\steamapps\\common\\Nebula Drift\\Nebula.exe', name: 'Nebula Drift' },
+    { exe: 'C:\\Tools\\viewer.exe', name: 'Viewer' }
+  ])
 })
 
 test('exportPath takes the archive path from diagnostics.export', () => {

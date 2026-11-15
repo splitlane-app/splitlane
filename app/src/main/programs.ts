@@ -1,4 +1,4 @@
-import type { Dropped, Program } from '../shared/programs'
+import type { Dropped, Program, SkipReason } from '../shared/programs'
 
 export function startMenuDirs(env: Record<string, string | undefined>): string[] {
   const tail = '\\Microsoft\\Windows\\Start Menu\\Programs'
@@ -14,7 +14,12 @@ export interface ProgramsFs {
   /** Lists files under a folder, recursively. */
   listFiles(dir: string): Promise<string[]>
   readShortcut(lnk: string): { target: string } | null
+  /** A `.url` file: the program of its game, 'game' for a game that is not found, null for no game shortcut. */
+  readUrl(path: string): Promise<Program | 'game' | null>
 }
+
+/** What a drop from Explorer (or the file dialog) reads of the shortcuts. */
+export type DropReaders = Pick<ProgramsFs, 'readShortcut' | 'readUrl'>
 
 const DRIVE_PATH = /^[A-Za-z]:\\/
 
@@ -35,9 +40,26 @@ function safeRead(fs: Pick<ProgramsFs, 'readShortcut'>['readShortcut'], lnk: str
   }
 }
 
+/** The game of a `.url` file as a program (its exe a drive path), 'game', or null; a failure is null. */
+async function safeUrl(readUrl: ProgramsFs['readUrl'], path: string): Promise<Program | 'game' | null> {
+  try {
+    const r = await readUrl(path)
+    return r === 'game' || r === null || isExePath(r.exe) ? r : null
+  } catch {
+    return null
+  }
+}
+
+/** The programs of the Start-menu shortcuts: `.lnk` to an exe (named after the shortcut) and game `.url` files. */
 export async function installedPrograms(fs: ProgramsFs, dirs: string[]): Promise<Program[]> {
   const seen = new Set<string>()
   const out: Program[] = []
+  const add = (p: Program): void => {
+    const key = p.exe.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(p)
+  }
   for (const dir of dirs) {
     let files: string[]
     try {
@@ -46,50 +68,57 @@ export async function installedPrograms(fs: ProgramsFs, dirs: string[]): Promise
       continue
     }
     for (const file of files) {
-      if (!file.toLowerCase().endsWith('.lnk')) continue
-      const link = safeRead((p) => fs.readShortcut(p), file)
-      if (link === null || !isExePath(link.target)) continue
-      const key = link.target.toLowerCase()
-      if (seen.has(key)) continue
-      seen.add(key)
-      out.push({ exe: link.target, name: baseName(file).slice(0, -'.lnk'.length) })
+      const lower = file.toLowerCase()
+      if (lower.endsWith('.lnk')) {
+        const link = safeRead((p) => fs.readShortcut(p), file)
+        if (link !== null && isExePath(link.target)) add({ exe: link.target, name: baseName(file).slice(0, -'.lnk'.length) })
+      } else if (lower.endsWith('.url')) {
+        const game = await safeUrl((p) => fs.readUrl(p), file)
+        if (game !== null && game !== 'game') add({ exe: game.exe, name: game.name })
+      }
     }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
 }
 
 /** The file picked in the dialog as one dropped from Explorer: its program, or its name when it is none. */
-export function pickedFile(path: string, readShortcut: ProgramsFs['readShortcut']): Dropped {
-  return resolveDropped([path], readShortcut)[0] ?? { kind: 'skipped', name: baseName(path) }
+export async function pickedFile(path: string, readers: DropReaders): Promise<Dropped> {
+  return (await resolveDropped([path], readers))[0] ?? { kind: 'skipped', name: baseName(path), reason: 'notProgram' }
 }
 
-export function resolveDropped(paths: string[], readShortcut: ProgramsFs['readShortcut']): Dropped[] {
+/**
+ * Files dropped from Explorer: an .exe is the program, a `.lnk` its exe target (named after the shortcut), a game
+ * `.url` the game's exe (named after the game). The rest is skipped by name: a game shortcut whose game is not found
+ * as 'game' (without `.url`), anything else as 'notProgram'.
+ */
+export async function resolveDropped(paths: string[], readers: DropReaders): Promise<Dropped[]> {
   const seen = new Set<string>()
   const out: Dropped[] = []
   for (const path of paths) {
     const name = baseName(path)
-    let exe: string | null = null
-    let programName = ''
+    let program: Program | null = null
+    let reason: SkipReason = 'notProgram'
     if (DRIVE_PATH.test(path)) {
       const lower = path.toLowerCase()
       if (lower.endsWith('.exe')) {
-        exe = path
+        program = { exe: path, name: '' }
       } else if (lower.endsWith('.lnk')) {
-        const link = safeRead(readShortcut, path)
-        if (link !== null && isExePath(link.target)) {
-          exe = link.target
-          programName = name.slice(0, -'.lnk'.length)
-        }
+        const link = safeRead(readers.readShortcut, path)
+        if (link !== null && isExePath(link.target)) program = { exe: link.target, name: name.slice(0, -'.lnk'.length) }
+      } else if (lower.endsWith('.url')) {
+        const game = await safeUrl(readers.readUrl, path)
+        if (game === 'game') reason = 'game'
+        else if (game !== null) program = { exe: game.exe, name: game.name }
       }
     }
-    if (exe === null) {
-      out.push({ kind: 'skipped', name })
+    if (program === null) {
+      out.push({ kind: 'skipped', name: reason === 'game' ? name.slice(0, -'.url'.length) : name, reason })
       continue
     }
-    const key = exe.toLowerCase()
+    const key = program.exe.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-    out.push({ kind: 'program', program: { exe, name: programName } })
+    out.push({ kind: 'program', program })
   }
   return out
 }

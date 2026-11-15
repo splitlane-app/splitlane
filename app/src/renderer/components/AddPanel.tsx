@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { Program } from '../../shared/programs'
 import type { Lane } from '../../shared/protocol'
 import { ADD_ROW, CARD, CARD_SENSORS } from '../dnd/BoardDnd'
+import { skippedNotice } from '../dnd/explorerDrop'
 import { CloseIcon } from '../icons/builtin'
 import { t } from '../i18n/t'
 import { installedRows, onlineRows, searchRows, type AddRow } from '../model/addRows'
@@ -105,9 +106,9 @@ function Row({ row, card, idPrefix = '', onAct }: RowProps): React.JSX.Element {
 /**
  * The «+ Добавить» panel (spec 9.3), docked beside the lanes so that a row can be dragged onto either of them (in a
  * narrow window it lies over the lanes). «Сейчас в сети»: the unpinned programs of the live activity (nothing while
- * the routing is off). «Установленные»: the programs of the Start menu and the Store, asked of the main process once
- * each time the panel opens. Both lists follow the search of the header. «Выбрать файл…» picks an .exe and shows it
- * at the top, so the lane is chosen explicitly.
+ * the routing is off). «Установленные»: the programs of the Start menu and the Store and the Steam and Epic games,
+ * asked of the main process once each time the panel opens. Both lists follow the search of the header. «Выбрать
+ * файл…» picks an .exe (or a game shortcut) and shows it at the top, so the lane is chosen explicitly.
  */
 export function AddPanel(): React.JSX.Element {
   const { store, bridge } = useServices()
@@ -174,9 +175,13 @@ export function AddPanel(): React.JSX.Element {
     bridge.pickProgram().then(
       (p) => {
         if (p === null) return // cancelled
-        // a file that is no program (a network path, say) is named as for a drop from Explorer
-        if (p.kind === 'program') setPicked(p.program)
-        else store.getState().showNotice(t('notice.notProgram', { names: p.name }))
+        // a file that is no program (a network path, a shortcut of a game not found) is named as for a drop
+        if (p.kind === 'program') {
+          setPicked(p.program)
+          return
+        }
+        const notice = skippedNotice([p])
+        if (notice !== null) store.getState().showNotice(notice)
       },
       () => {}
     )

@@ -128,11 +128,22 @@ test('AddPanel shows the picked file with both lane buttons, and closes with Esc
 })
 
 test('AddPanel names a picked file that is not a program', async () => {
-  const { services } = setup({ pickProgram: async () => ({ kind: 'skipped', name: 'tool.exe' }) })
+  const { services } = setup({ pickProgram: async () => ({ kind: 'skipped', name: 'tool.exe', reason: 'notProgram' }) })
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл…' }))
   })
   expect(services.store.getState().notice).toBe('Не программа: tool.exe')
+  expect(screen.queryByText('Выбранный файл')).toBeNull()
+})
+
+test('AddPanel explains a picked game shortcut whose game is not found', async () => {
+  const { services } = setup({ pickProgram: async () => ({ kind: 'skipped', name: 'Старая игра', reason: 'game' }) })
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл…' }))
+  })
+  expect(services.store.getState().notice).toBe(
+    'Старая игра: это ярлык игры — запустите игру, и она появится в «Сейчас в сети»'
+  )
   expect(screen.queryByText('Выбранный файл')).toBeNull()
 })
 

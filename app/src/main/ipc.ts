@@ -214,7 +214,7 @@ export function exportPath(result: unknown): string {
   return p
 }
 
-/** Start-menu programs and Store apps in one list: one entry per exe (the first wins), Russian order. */
+/** Start-menu programs, Store apps and games in one list: one entry per exe (the first wins), Russian order. */
 export function mergePrograms(...lists: Program[][]): Program[] {
   const seen = new Set<string>()
   const out: Program[] = []
@@ -252,7 +252,7 @@ export interface IpcDeps {
   setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings>
   installedPrograms(): Promise<Program[]>
   pickProgram(): Promise<Dropped | null>
-  resolveDropped(paths: string[]): Dropped[]
+  resolveDropped(paths: string[]): Promise<Dropped[]>
   icon(exe: string): Promise<string | null>
   openExternal(url: string): Promise<void>
   saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError }>

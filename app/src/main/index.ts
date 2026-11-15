@@ -9,13 +9,14 @@ import { PIPE_NAME, type HelperError, type HelperState } from '../shared/protoco
 import { DEFAULT_SETTINGS, type WindowSettings } from '../shared/settings'
 import type { InstallOutcome, LinkStatus } from '../shared/status'
 import { AutoEnable } from './autoEnable'
+import { Games, type GamesFs } from './games'
 import { IconCache, type IconFs } from './icons'
 import { exportPath, mergePrograms, registerIpc, runCommand, toHelperError } from './ipc'
 import { HelperLink, SHUTDOWN_TIMEOUT_MS } from './link'
 import { loginItemSettings, startupLoginItem } from './loginItem'
 import { PageCrashReload } from './pageCrash'
 import { dialPipe } from './pipe'
-import { installedPrograms, pickedFile, resolveDropped, startMenuDirs, type ProgramsFs } from './programs'
+import { installedPrograms, pickedFile, resolveDropped, startMenuDirs, type DropReaders, type ProgramsFs } from './programs'
 import { SettingsFile } from './settingsFile'
 import { encodePowerShell, helperSourceDir, installAfterLink, installHelper } from './setup'
 import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
@@ -121,7 +122,7 @@ app.setAppUserModelId('SplitLane')
 
 const startHidden = process.argv.includes('--hidden')
 const exec = execText(QUICK_EXEC_TIMEOUT_MS)
-/** schtasks, whoami and powershell by full path under %SystemRoot%\System32, never through PATH. */
+/** schtasks, whoami, reg and powershell by full path under %SystemRoot%\System32, never through PATH. */
 const tools = systemTools(process.env)
 
 let win: BrowserWindow | null = null
@@ -163,9 +164,38 @@ const autoEnable = new AutoEnable({
   now: () => Date.now()
 })
 
+const gamesFs: GamesFs = {
+  readBytes: (p) => readFile(p),
+  readDir: async (p) => {
+    const entries = await readdir(p, { withFileTypes: true })
+    return entries.flatMap((e) => (e.isDirectory() || e.isFile() ? [{ name: e.name, dir: e.isDirectory() }] : []))
+  },
+  fileSize: async (p) => {
+    try {
+      const s = await stat(p)
+      return s.isFile() ? s.size : null
+    } catch {
+      return null
+    }
+  }
+}
+
+/** Steam and Epic games: listed once per run, like the Store apps; reg.exe by full path. */
+const games = new Games({ fs: gamesFs, exec, regExe: tools.reg, programData: process.env['ProgramData'], log })
+
+const readShortcut: ProgramsFs['readShortcut'] = (lnk) => ({ target: shell.readShortcutLink(lnk).target })
+
+/** The Start menu: its game shortcuts answer from the game lists of this run. */
 const programsFs: ProgramsFs = {
   listFiles,
-  readShortcut: (lnk) => ({ target: shell.readShortcutLink(lnk).target })
+  readShortcut,
+  readUrl: (p) => games.readUrl(p, false)
+}
+
+/** A drop or a picked file: a game shortcut reads the launchers' files again (the game may be new). */
+const dropReaders: DropReaders = {
+  readShortcut,
+  readUrl: (p) => games.readUrl(p, true)
 }
 
 /** Store apps once per run; the script prints UTF-8 so that Cyrillic names survive (no progress records). */
@@ -330,11 +360,12 @@ function startInstall(): Promise<void> {
 async function pickProgram(): Promise<Dropped | null> {
   const options = {
     properties: ['openFile' as const],
-    filters: [{ name: MAIN_TEXT.programsFilter, extensions: ['exe'] }]
+    // .url: the shortcuts of Steam and Epic games
+    filters: [{ name: MAIN_TEXT.programsFilter, extensions: ['exe', 'url'] }]
   }
   const r = win !== null ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
   if (r.canceled || r.filePaths.length === 0) return null
-  return pickedFile(r.filePaths[0], programsFs.readShortcut)
+  return pickedFile(r.filePaths[0], dropReaders)
 }
 
 async function saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError }> {
@@ -452,14 +483,15 @@ async function main(): Promise<void> {
     installHelper: startInstall,
     setSettings,
     installedPrograms: async () => {
-      const [start, store] = await Promise.all([
+      const [start, store, played] = await Promise.all([
         installedPrograms(programsFs, startMenuDirs(process.env)),
-        storeApps.get()
+        storeApps.get(),
+        games.installed()
       ])
-      return mergePrograms(start, store)
+      return mergePrograms(start, store, played)
     },
     pickProgram,
-    resolveDropped: (paths) => resolveDropped(paths, programsFs.readShortcut),
+    resolveDropped: (paths) => resolveDropped(paths, dropReaders),
     icon: (exe) => icons.get(exe),
     openExternal: (url) => shell.openExternal(url),
     saveDiagnostics,

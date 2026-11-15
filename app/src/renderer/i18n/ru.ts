@@ -180,6 +180,9 @@ export const ru = {
   'notice.logSaved': 'Журнал сохранён',
   // files from Explorer that are neither programs nor shortcuts to them, joined with ", "
   'notice.notProgram': 'Не программа: {names}',
+  // shortcuts (.url) of Steam or Epic games that are not found on this PC, joined with ", "; one and several
+  'notice.gameLink': '{names}: это ярлык игры — запустите игру, и она появится в «Сейчас в сети»',
+  'notice.gameLinks': '{names}: это ярлыки игр — запустите игры, и они появятся в «Сейчас в сети»',
   'notice.close': 'Закрыть',
 
   // the screens of the link (spec 4.3, 5.1)

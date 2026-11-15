@@ -226,8 +226,9 @@ test('files dropped from Explorer are pinned in that lane, the rest named in a n
       asked.push(files)
       return [
         { kind: 'program', program: { exe: GAME, name: 'Game' } },
-        { kind: 'skipped', name: 'notes' },
-        { kind: 'skipped', name: 'Документы' }
+        { kind: 'skipped', name: 'notes', reason: 'notProgram' },
+        { kind: 'skipped', name: 'Документы', reason: 'notProgram' },
+        { kind: 'skipped', name: 'Старая игра', reason: 'game' }
       ]
     }
   })
@@ -237,7 +238,12 @@ test('files dropped from Explorer are pinned in that lane, the rest named in a n
   renderWith(<Lane vm={view.direct} onMakeDefault={() => {}} />, services)
 
   const lane = screen.getByRole('region', { name: 'Напрямую' })
-  const files = [new File([''], 'Game.lnk'), new File([''], 'notes.txt'), new File([''], 'Документы')]
+  const files = [
+    new File([''], 'Game.lnk'),
+    new File([''], 'notes.txt'),
+    new File([''], 'Документы'),
+    new File([''], 'Старая игра.url')
+  ]
   const dataTransfer = { types: ['Files'], files, dropEffect: 'none' }
   // a drag of text is not for the lane
   const text = { types: ['text/plain'], files: [], dropEffect: 'none' }
@@ -261,5 +267,7 @@ test('files dropped from Explorer are pinned in that lane, the rest named in a n
     ['Browser', BROWSER, 'direct'],
     ['Game', GAME, 'direct']
   ])
-  expect(services.store.getState().notice).toBe('Не программа: notes, Документы')
+  expect(services.store.getState().notice).toBe(
+    'Не программа: notes, Документы; Старая игра: это ярлык игры — запустите игру, и она появится в «Сейчас в сети»'
+  )
 })
