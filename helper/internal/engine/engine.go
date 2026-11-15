@@ -95,7 +95,7 @@ type Engine struct {
 
 	act liveActivity // the live activity (spec 8.4, activity.go)
 
-	exporting sync.Mutex // diagnostics.export one at a time: the pipe answers it beside other requests
+	exporting sync.Mutex // held while diagnostics.export writes: a second one meanwhile is busy (cmdExport)
 }
 
 // coreRun is one running core with its ports, the rule files it reads now and its API service.

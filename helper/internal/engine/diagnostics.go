@@ -32,7 +32,11 @@ func (e *Engine) cmdExport(params json.RawMessage) (any, *protocol.Error) {
 	if err := noParams(params); err != nil {
 		return nil, err
 	}
-	e.exporting.Lock() // two at once would write one name and prune each other's archives
+	// One at a time, and a second one is busy rather than waiting: the pipe answers it beside other
+	// requests, so they would pile up; two at once would also write one name and prune each other's archives.
+	if !e.exporting.TryLock() {
+		return nil, protocol.Errorf(protocol.CodeBusy, "a diagnostics archive is being written")
+	}
 	defer e.exporting.Unlock()
 	now := e.d.Clock.Now().Local()
 	e.mu.Lock()

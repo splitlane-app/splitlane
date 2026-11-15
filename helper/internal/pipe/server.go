@@ -294,9 +294,14 @@ func (s *Server) read(c *client) {
 		case err != nil || req.Method == "":
 			s.reply(c, protocol.EncodeError(req.ID, protocol.Errorf(protocol.CodeBadRequest, "not a request")))
 		case concurrent[req.Method]:
+			// The hello rules are applied here, in the order of the lines: the goroutine only handles.
+			if refused := s.gate(c, req); refused != nil {
+				s.reply(c, refused)
+				break
+			}
 			go func() {
 				defer s.answering.Done()
-				s.reply(c, s.answer(ctx, c, req))
+				s.reply(c, s.handle(ctx, req))
 			}()
 			continue
 		default:
@@ -306,12 +311,34 @@ func (s *Server) read(c *client) {
 	}
 }
 
-// answer applies the hello rules of 5.1, answers activity.subscribe itself (activity.go) and passes
-// everything else to the handler, with ctx.
-func (s *Server) answer(ctx context.Context, c *client, req protocol.Request) []byte {
+// gate is the hello rule of 5.1 for every request but hello: before a hello, "the first message must be
+// hello"; after a mismatch, only helper.shutdown. nil: the request may be answered.
+func (s *Server) gate(c *client, req protocol.Request) []byte {
 	s.mu.Lock()
 	hello, mismatch := c.hello, c.mismatch
 	s.mu.Unlock()
+	switch {
+	case mismatch && req.Method != protocol.MethodShutdown:
+		return protocol.EncodeError(req.ID, &protocol.Error{Code: protocol.CodeProtocolMismatch,
+			Message: "only helper.shutdown is accepted after a protocol mismatch", Protocol: protocol.Version})
+	case !hello && !mismatch:
+		return protocol.EncodeError(req.ID, protocol.Errorf(protocol.CodeBadRequest, "the first message must be hello"))
+	}
+	return nil
+}
+
+// handle passes a request that passed the gate to the handler, with ctx.
+func (s *Server) handle(ctx context.Context, req protocol.Request) []byte {
+	res, err := s.h.Handle(ctx, req.Method, req.Params)
+	if err != nil {
+		return protocol.EncodeError(req.ID, err)
+	}
+	return protocol.EncodeResult(req.ID, res)
+}
+
+// answer applies the hello rules of 5.1 (gate), answers activity.subscribe itself (activity.go) and
+// passes everything else to the handler, with ctx.
+func (s *Server) answer(ctx context.Context, c *client, req protocol.Request) []byte {
 	if req.Method == protocol.MethodHello {
 		var p protocol.HelloParams
 		if err := protocol.DecodeParams(req.Params, &p); err != nil {
@@ -329,18 +356,11 @@ func (s *Server) answer(ctx context.Context, c *client, req protocol.Request) []
 		s.h.SetClients(s.countHello())
 		return protocol.EncodeResult(req.ID, s.h.Hello())
 	}
-	switch {
-	case mismatch && req.Method != protocol.MethodShutdown:
-		return protocol.EncodeError(req.ID, &protocol.Error{Code: protocol.CodeProtocolMismatch,
-			Message: "only helper.shutdown is accepted after a protocol mismatch", Protocol: protocol.Version})
-	case !hello && !mismatch:
-		return protocol.EncodeError(req.ID, protocol.Errorf(protocol.CodeBadRequest, "the first message must be hello"))
-	case req.Method == protocol.MethodActivitySubscribe:
+	if refused := s.gate(c, req); refused != nil {
+		return refused
+	}
+	if req.Method == protocol.MethodActivitySubscribe {
 		return s.subscribe(c, req)
 	}
-	res, err := s.h.Handle(ctx, req.Method, req.Params)
-	if err != nil {
-		return protocol.EncodeError(req.ID, err)
-	}
-	return protocol.EncodeResult(req.ID, res)
+	return s.handle(ctx, req)
 }

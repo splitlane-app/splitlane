@@ -56,8 +56,9 @@ func (f *fakeHandler) Handle(ctx context.Context, method string, params json.Raw
 func (f *fakeHandler) holdDownloads() (entered, cancelled chan struct{}, release func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.hold, f.entered, f.cancelled = make(chan struct{}), make(chan struct{}, 8), make(chan struct{}, 8)
-	return f.entered, f.cancelled, sync.OnceFunc(func() { close(f.hold) })
+	hold := make(chan struct{}) // this call's own: a later holdDownloads must not change what release closes
+	f.hold, f.entered, f.cancelled = hold, make(chan struct{}, 8), make(chan struct{}, 8)
+	return f.entered, f.cancelled, sync.OnceFunc(func() { close(hold) })
 }
 
 func (f *fakeHandler) Hello() protocol.HelloResult {
@@ -225,6 +226,28 @@ func TestLongRequestsAreAnsweredConcurrently(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close does not give the download up")
+	}
+}
+
+// The hello rules hold for the methods answered concurrently too, in the order of the lines: before a hello
+// "the first message must be hello", after a mismatch protocol_mismatch; the handler never sees them.
+func TestConcurrentMethodsWaitForHello(t *testing.T) {
+	_, h, name := serve(t)
+	c := dial(t, name)
+	for i, m := range []string{protocol.MethodProxyAdd, protocol.MethodProxyRefresh, protocol.MethodDiagnosticsExport} {
+		line := fmt.Sprintf(`{"id":%d,"method":"%s","params":{}}`, i+1, m)
+		if r := c.send(t, line); errCode(r) != protocol.CodeBadRequest || !strings.Contains(fmt.Sprint(r["error"]), "the first message must be hello") {
+			t.Fatalf("%s before hello: %v", m, r)
+		}
+	}
+	c.send(t, `{"id":9,"method":"hello","params":{"protocol":1}}`)
+	if r := c.send(t, `{"id":10,"method":"proxy.add","params":{"text":"x"}}`); errCode(r) != protocol.CodeProtocolMismatch {
+		t.Fatalf("after a mismatch: %v", r)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.methods) != 0 {
+		t.Fatalf("the handler was called: %v", h.methods)
 	}
 }
 

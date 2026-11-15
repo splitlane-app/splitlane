@@ -640,7 +640,9 @@ func (e *Engine) cmdProxyRemove(params json.RawMessage) *protocol.Error {
 // cmdProxySelect is proxy.select (stage 3 part 1, section 4): the server becomes the selected one and the
 // connector proxy; while routing is live it disables and enables again, as tailscale.setExitNode does
 // (reconnectLocked); in off and error a change to proxy stops the setup mode (stopSetupIfProxy). The same
-// server with the connector already proxy changes nothing.
+// server with the connector already proxy changes nothing. Stopping the setup mode waits for its core to end
+// (stopProc: the graceful signal, then the forced end), so the answer, and the queue with it, may take up to
+// about 2 × stopWait (10 s); a logout under way is finished first.
 func (e *Engine) cmdProxySelect(params json.RawMessage) *protocol.Error {
 	var p protocol.ProxyIDParams
 	if err := protocol.DecodeParams(params, &p); err != nil {

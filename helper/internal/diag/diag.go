@@ -108,10 +108,14 @@ func coreLog(name string) bool {
 	return strings.EqualFold(name, filepath.Base(p.CoreLog)) || strings.EqualFold(name, filepath.Base(p.SetupLog))
 }
 
-// maskCoreLog is connector.Mask over each line of a core log that may hold what Mask hides: a link or an
-// address ("://"), a key, a query or a line of a .conf ('='), JSON ('"'), or a UUID. Mask changes no other
-// line (every one of its rules needs one of these), so those are copied as they are; each masked line comes
-// out as Mask makes it on its own. Mask over the whole of an 8 MiB log takes about 2 s.
+// maskCoreLog is connector.Mask per line, over each line of a core log that may hold what Mask hides: a
+// link or an address ("://"), a key, a query or a line of a .conf ('='), JSON ('"'), or a UUID. Mask
+// changes no other line (every one of its rules needs one of these), so those are copied as they are; each
+// masked line comes out as Mask makes it on its own. Per line is enough for the core: sing-box writes every
+// entry on one line. A value split across lines would not be caught by the rules for .conf keys and JSON
+// fields, which need the key and the value on one line; a WireGuard or Shadowsocks key on a line of its own
+// is still masked (its padding '=' takes the line in, and the key rule needs no name). Mask over the whole
+// of an 8 MiB log takes about 2 s; this, at level info, about 40 ms.
 func maskCoreLog(text []byte) []byte {
 	var out bytes.Buffer
 	out.Grow(len(text))

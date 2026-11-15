@@ -289,6 +289,26 @@ func TestExportBadParams(t *testing.T) {
 	}
 }
 
+// The pipe answers diagnostics.export beside other requests: a second one while one is written is busy
+// instead of waiting behind it, and writes nothing.
+func TestExportOneAtATime(t *testing.T) {
+	h := newHarness(t)
+	data := exportData(h)
+	h.load()
+	h.e.exporting.Lock() // an export under way
+	_, err := export(h, nil)
+	h.e.exporting.Unlock()
+	if err == nil || err.Code != protocol.CodeBusy {
+		t.Fatalf("a second export: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(data, "export")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("a busy export writes nothing: %v", statErr)
+	}
+	if _, err := export(h, nil); err != nil {
+		t.Fatalf("once the first is done: %v", err)
+	}
+}
+
 // Spec 3, 11: servers.json holds links and subscription addresses; the archive never has it.
 func TestExportLeavesServersOut(t *testing.T) {
 	h := newHarness(t)
