@@ -49,6 +49,8 @@ func TestParseText(t *testing.T) {
 			[]string{"🇩🇪 Germany", "Trojan", "Outline"}, []rej{{6, CodeBadLink}, {7, CodePlugin}}, ""},
 		{"one link", linkHy2, []string{"hy2"}, nil, ""},
 		{"duplicate links count once", linkTrojan + "\n" + linkTrojan + "\n  " + linkTrojan, []string{"Trojan"}, nil, ""},
+		{"the same server under two names counts once", linkTrojan + "\n" + strings.Replace(linkTrojan, "#Trojan", "#Trojan 2", 1), []string{"Trojan"}, nil, ""},
+		{"a line that is not utf-8", linkTrojan + "\n\xff\xfe\n" + linkSS, []string{"Trojan", "Outline"}, []rej{{2, CodeBadLink}}, ""},
 		{"subscription address alone", "\n  https://sub.example.com/api/v1/client/subscribe?token=abc123  \n", nil, nil,
 			"https://sub.example.com/api/v1/client/subscribe?token=abc123"},
 		{"subscription address with a comment", "# my provider\nhttps://sub.example.com/s/x\n", nil, nil, "https://sub.example.com/s/x"},
@@ -66,7 +68,7 @@ func TestParseText(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			servers, rejected, sub := ParseText(c.text)
+			servers, rejected, sub := ParseText(c.text, "")
 			if got := names(servers); !reflect.DeepEqual(got, c.servers) {
 				t.Errorf("servers %q, want %q", got, c.servers)
 			}
@@ -85,8 +87,31 @@ func TestParseText(t *testing.T) {
 	}
 }
 
+func TestParseTextConfName(t *testing.T) {
+	cases := []struct{ conf, want string }{
+		{"office", "office"},
+		{"home.conf", "home"},
+		{"Дом.CONF", "Дом"},
+		{"configs/sub/home.conf", "home"},
+		{`configs\home.conf`, "home"},
+		{"  ", "vpn.example.com:51820"},
+		{"", "vpn.example.com:51820"},
+	}
+	for _, c := range cases {
+		servers, rejected, _ := ParseText(wgConf, c.conf)
+		if len(servers) != 1 || len(rejected) != 0 || servers[0].Name != c.want {
+			t.Errorf("confName %q: servers %q, rejected %v, want %q", c.conf, names(servers), rejected, c.want)
+		}
+	}
+	// links keep their own names
+	servers, _, _ := ParseText(linkTrojan, "office")
+	if len(servers) != 1 || servers[0].Name != "Trojan" {
+		t.Errorf("links: %q", names(servers))
+	}
+}
+
 func TestParseTextKeepsEachServersOwnText(t *testing.T) {
-	servers, _, _ := ParseText(linkVLESS + "\n" + linkSS)
+	servers, _, _ := ParseText(linkVLESS+"\n"+linkSS, "")
 	if len(servers) != 2 || servers[0].Text != linkVLESS || servers[1].Text != linkSS {
 		t.Fatalf("texts: %s", dump(servers))
 	}
@@ -139,13 +164,27 @@ func TestParseSubscription(t *testing.T) {
 			[]rej{{3, CodeUnsupportedProtocol}}},
 		{"duplicates count once", list + list, all, nil},
 		{"clash yaml", "proxies:\n  - name: a\n    type: ss\n    server: 192.0.2.1\n", nil, []rej{{0, CodeUnsupportedProtocol}}},
+		{"clash yaml with addresses inside",
+			"proxy-providers:\n  p:\n    type: http\n    url: https://sub.example.com/clash?token=x\n" +
+				"proxies:\n  - {name: a, type: vless, server: 192.0.2.1, ws-opts: {path: /ws}}\nrule-providers:\n  r:\n    url: \"https://example.com/rules.yaml\"\n" +
+				"  - https://example.com/list.txt\n#  - vless://" + uuid1 + "@example.com:443\n",
+			nil, []rej{{0, CodeUnsupportedProtocol}}},
 		{"sing-box json", `{"outbounds":[{"type":"vless","server":"192.0.2.1"}]}`, nil, []rej{{0, CodeUnsupportedProtocol}}},
+		{"sing-box json with addresses inside, one line",
+			`{"outbounds":[{"type":"vless","server":"192.0.2.1"}],"route":{"rule_set":[{"type":"remote","url":"https://example.com/geosite.srs"}]}}`,
+			nil, []rej{{0, CodeUnsupportedProtocol}}},
+		{"sing-box json with addresses inside, pretty",
+			"{\n  \"route\": {\n    \"rule_set\": [\n      {\n        \"url\": \"https://example.com/geosite.srs\",\n        \"download_detour\": \"direct\"\n      }\n    ]\n  }\n}\n",
+			nil, []rej{{0, CodeUnsupportedProtocol}}},
 		{"wireguard file is not a subscription", wgConf, nil, []rej{{0, CodeUnsupportedProtocol}}},
 		{"subscription address inside a subscription", "https://sub.example.com/next\n" + linkTrojan, []string{"Trojan"}, []rej{{1, CodeUnsupportedProtocol}}},
 		{"empty", "", nil, nil},
 		{"whitespace", " \r\n\t\n", nil, nil},
 		{"too long", strings.Repeat("#", MaxSubscriptionLen+1), nil, []rej{{0, CodeTooLong}}},
-		{"not utf-8", linkTrojan + "\n\xff\xfe\n", nil, []rej{{0, CodeBadLink}}},
+		{"a line that is not utf-8", linkTrojan + "\n\xff\xfe\n" + linkSS, []string{"Trojan", "Outline"}, []rej{{2, CodeBadLink}}},
+		{"a base64 line that is not utf-8", base64.StdEncoding.EncodeToString([]byte(linkTrojan + "\nvless://\xff\n" + linkSS)), []string{"Trojan", "Outline"},
+			[]rej{{2, CodeBadLink}}},
+		{"the same server under two names counts once", linkTrojan + "\n" + strings.Replace(linkTrojan, "#Trojan", "#Trojan | 3 GB left", 1), []string{"Trojan"}, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

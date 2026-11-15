@@ -1,22 +1,23 @@
 package connector
 
 import (
-	"errors"
 	"net/url"
 	"strings"
-	"unicode/utf8"
 )
 
 // ParseText reads the text of proxy.add. It is one of:
-//   - a WireGuard .conf, when a line is "[Interface]": one server or one rejection;
+//   - a WireGuard .conf, when a line is "[Interface]": one server or one rejection; the server is
+//     named confName (a base name the caller supplies, never a path; see ParseWireGuardConf), or
+//     host:port when it is empty;
 //   - a subscription address: a single https:// line (with nothing else but blank and comment
 //     lines), returned as subscriptionURL for the caller to fetch;
 //   - share links, one per line.
 //
 // Blank lines and lines starting with '#' are skipped (comments, and the "#profile-title:" headers
-// some subscriptions carry). A link that repeats an earlier one counts once. A rejection carries the
-// 1-based line number; an https:// line among links is bad_link (an address goes alone).
-func ParseText(text string) (servers []Server, rejected []Rejection, subscriptionURL string) {
+// some subscriptions carry). A link with the id of an earlier one (the same server, whatever its
+// name) counts once. A rejection carries the 1-based line number; an https:// line among links is
+// bad_link (an address goes alone).
+func ParseText(text, confName string) (servers []Server, rejected []Rejection, subscriptionURL string) {
 	if len(text) > MaxTextLen {
 		return nil, []Rejection{{Code: CodeTooLong, Detail: "text"}}, ""
 	}
@@ -24,10 +25,8 @@ func ParseText(text string) (servers []Server, rejected []Rejection, subscriptio
 	lines := splitLines(text)
 	for _, l := range lines {
 		if strings.EqualFold(strings.TrimSpace(l), "[interface]") {
-			s, err := ParseWireGuardConf([]byte(text), "")
-			if err != nil {
-				var r *Rejection
-				errors.As(err, &r)
+			s, r := parseConf([]byte(text), confName)
+			if r != nil {
 				return nil, []Rejection{*r}, ""
 			}
 			return []Server{s}, nil, ""
@@ -52,8 +51,9 @@ func ParseText(text string) (servers []Server, rejected []Rejection, subscriptio
 
 // ParseSubscription reads a subscription response: links one per line, either as plain text or the
 // whole list in base64 (standard or URL alphabet, with or without padding, wrapped or not). Blank
-// and '#' lines are skipped; a link that repeats an earlier one counts once; line numbers are those
-// of the decoded list. A body with no link at all (Clash YAML, sing-box JSON, a .conf) is one
+// and '#' lines are skipped; a link with the id of an earlier one counts once; a line that is not
+// UTF-8 is rejected alone; line numbers are those of the decoded list. A body where no line starts
+// with scheme:// (Clash YAML, sing-box JSON, a .conf, even with addresses inside) is one
 // unsupported_protocol rejection with line 0.
 func ParseSubscription(body []byte) ([]Server, []Rejection) {
 	if len(body) > MaxSubscriptionLen {
@@ -63,9 +63,6 @@ func ParseSubscription(body []byte) ([]Server, []Rejection) {
 	if decoded, ok := decodeSubscription(text); ok {
 		text = decoded
 	}
-	if !utf8.ValidString(text) {
-		return nil, []Rejection{{Code: CodeBadLink, Detail: "not UTF-8"}}
-	}
 	lines := splitLines(text)
 	content, links := false, false
 	for _, l := range lines {
@@ -73,7 +70,7 @@ func ParseSubscription(body []byte) ([]Server, []Rejection) {
 			continue
 		}
 		content = true
-		if strings.Contains(l, "://") {
+		if i := strings.Index(l, "://"); i > 0 && validScheme(l[:i]) {
 			links = true
 			break
 		}
@@ -134,6 +131,8 @@ func validSubscriptionURL(u string) bool {
 }
 
 // decodeSubscription decodes a body that is base64 and nothing else (line breaks and spaces aside).
+// The result need not be UTF-8 throughout: a bad line is rejected alone. Plain text is never taken
+// for base64 by mistake when it holds links: ':' is not a base64 character.
 func decodeSubscription(text string) (string, bool) {
 	s := strings.Map(func(r rune) rune {
 		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
@@ -148,7 +147,7 @@ func decodeSubscription(text string) (string, bool) {
 		}
 	}
 	b, ok := decodeBase64(s)
-	if !ok || !utf8.Valid(b) {
+	if !ok {
 		return "", false
 	}
 	return string(b), true

@@ -1,6 +1,8 @@
 package connector
 
 import (
+	"encoding/base64"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -33,6 +35,19 @@ func TestMask(t *testing.T) {
 		{"subscription userinfo", "https://user:pa55@sub.example.com/s", "https://•••@sub.example.com/s"},
 		{"subscription token in the path", "GET https://sub.example.com/sub/aB3dE5fG7hJ9kL1mN0pQ?flag=1", "GET https://sub.example.com/sub/•••?flag=1"},
 		{"subscription uuid in the path", "https://sub.example.com/" + uuid1, "https://sub.example.com/•••"},
+		{"subscription query values", "https://sub.example.com/s?client=abc&format=json&flag=1&target=clash&ID=42&Tok3nTok3n&empty=",
+			"https://sub.example.com/s?client=•••&format=json&flag=1&target=clash&ID=•••&•••&empty="},
+		{"subscription query without a path", "get https://sub.example.com?sub=abc#frag done", "get https://sub.example.com?sub=•••#frag done"},
+		{"shadowrocket vless base64", "vless://" + base64.StdEncoding.EncodeToString([]byte("auto:"+uuid1+"@example.com:443")) + "?remarks=x&tls=1",
+			"vless://•••?remarks=x&tls=1"},
+		{"ssr base64", "ssr://" + base64.RawURLEncoding.EncodeToString([]byte("192.0.2.1:443:origin:aes-256-cfb:plain:cGFzcw/?remarks=eA")), "ssr://•••"},
+		{"vmess base64 in quotes", `"vmess://eyJpZCI6IngifQ=="`, `"vmess://•••"`},
+		{"core json path and service name", `{"type":"ws","path":"/secret?ed=2048","service_name":"grpc-svc","host":"example.com"}`,
+			`{"type":"ws","path":"•••","service_name":"•••","host":"example.com"}`},
+		{"bare 16-byte key", "key " + ss128 + " used", "key ••• used"},
+		{"bare 16-byte multi-user keys", "password " + ss128 + ":" + ss128, "password •••:•••"},
+		{"long base64 run masked whole", "blob " + strings.Repeat("Ab3/", 22) + "==" + " end", "blob ••• end"},
+		{"short padded value stays", "count=3 name=x1= ok", "count=3 name=x1= ok"},
 
 		{"plain log line", "core started on 127.0.0.1:9090 in 12 ms", "core started on 127.0.0.1:9090 in 12 ms"},
 		{"probe address", "probe https://api.ipify.org?format=json via vpn", "probe https://api.ipify.org?format=json via vpn"},
@@ -77,18 +92,47 @@ func TestMaskHidesSampleSecrets(t *testing.T) {
 			secrets = []string{s.TUIC.UUID, s.TUIC.Password}
 		}
 		if s.TLS != nil && s.TLS.Reality != nil {
-			secrets = append(secrets, s.TLS.Reality.PublicKey, s.TLS.Reality.ShortID)
+			k := s.TLS.Reality.PublicKey
+			secrets = append(secrets, k, strings.NewReplacer("-", "+", "_", "/").Replace(k)+"=", s.TLS.Reality.ShortID)
 		}
 		for _, sec := range secrets {
-			if len(sec) >= 4 && strings.Contains(m, sec) {
-				t.Errorf("%s: masked link %q still holds %q", c.name, m, sec)
+			for _, form := range rawForms(sec) {
+				if len(form) >= 4 && strings.Contains(m, form) {
+					t.Errorf("%s: masked link %q still holds %q", c.name, m, form)
+				}
 			}
 		}
 	}
-	m := Mask(wgConf)
-	for _, sec := range []string{wgPriv, wgPub, wgPSK} {
-		if strings.Contains(m, sec) {
-			t.Errorf("masked .conf still holds %q", sec)
+	for _, conf := range []string{wgConf, strings.ReplaceAll(wgConf, "\n", "\r\n"), strings.ReplaceAll(wgConf, " = ", "=")} {
+		m := Mask(conf)
+		for _, sec := range []string{wgPriv, wgPub, wgPSK} {
+			if strings.Contains(m, sec) {
+				t.Errorf("masked .conf still holds %q", sec)
+			}
+		}
+	}
+}
+
+// rawForms: a secret as it may stand in a link, decoded or percent-encoded either way, and a UUID in
+// upper case.
+func rawForms(sec string) []string {
+	return []string{sec, url.PathEscape(sec), url.QueryEscape(sec), strings.ToUpper(sec),
+		strings.ReplaceAll(sec, "=", "%3D"), strings.ReplaceAll(sec, "@", "%40"), strings.ReplaceAll(sec, ":", "%3A")}
+}
+
+// Inputs where one rule's mask could open another rule's match: Mask still settles.
+func TestMaskIsIdempotent(t *testing.T) {
+	for _, s := range []string{
+		`{"url": "https://h/?k=\"`,
+		`{"text": "vless://a@b?path=\"x`,
+		"a://AAAAAAAAAAAAAAAAAAAAAA==BBBBBBBBBBBBBBBBBBBBBB==",
+		"PrivateKey =\nhttps://u@h/?x=" + wgPub,
+		"https://h/" + uuid1 + "?token=" + ss128 + "&flag=" + wgPriv,
+		"ss://" + strings.Repeat("A", 30) + "#" + uuid1 + "@x",
+	} {
+		m := Mask(s)
+		if Mask(m) != m {
+			t.Errorf("%q -> %q -> %q", s, m, Mask(m))
 		}
 	}
 }

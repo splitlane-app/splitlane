@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -40,10 +41,16 @@ import (
 //     Sec-WebSocket-Protocol unless eh names another header; "?ed=N" is cut from an httpupgrade
 //     path too (an Xray server ignores the query and the core has no early data there);
 //   - grpc mode gun and multi are both accepted and the core speaks gun: an Xray server serves both
-//     methods (Tun and TunMulti) whatever its own multiMode says; a custom path (serviceName
-//     starting with "/") and an authority other than the server name are unsupported_transport;
+//     methods (Tun and TunMulti) whatever its own multiMode says; on an IP address with tls and no
+//     sni the authority (v2rayN's "host") is the server name; a custom path (serviceName starting
+//     with "/") and an authority other than the server name are unsupported_transport;
 //   - type tcp and raw are plain TCP; headerType must be none (the http header is not supported);
-//     h2 and http are HTTP/2; xhttp, splithttp, kcp and anything else are unsupported_transport.
+//     h2 and http are HTTP/2; xhttp, splithttp, kcp and anything else are unsupported_transport;
+//   - the name after '#' may hold raw spaces; anywhere else a space is bad_link, and a control
+//     character is bad_link everywhere, as is a path with one after percent-decoding, or any text
+//     that is not UTF-8 (raw or decoded);
+//   - the address may be a name or an IP address, loopback included; 0.0.0.0, :: and multicast
+//     are bad_link (pseudo-entries of panels).
 func ParseLink(line string) (Server, error) {
 	s, r := parseLink(line)
 	if r != nil {
@@ -60,8 +67,17 @@ func parseLink(line string) (Server, *Rejection) {
 	if line == "" {
 		return Server{}, reject(CodeBadLink, "empty")
 	}
+	if !utf8.ValidString(line) {
+		return Server{}, reject(CodeBadLink, "not UTF-8")
+	}
+	// Spaces are allowed in the name only (some clients write it unescaped); control characters
+	// nowhere.
+	name := strings.IndexByte(line, '#')
+	if name < 0 {
+		name = len(line)
+	}
 	for i := 0; i < len(line); i++ {
-		if c := line[i]; c <= ' ' || c == 0x7f {
+		if c := line[i]; c < ' ' || c == 0x7f || (c == ' ' && i < name) {
 			return Server{}, reject(CodeBadLink, "space or control character")
 		}
 	}
@@ -168,12 +184,19 @@ func linkName(fragment string) string {
 	return cleanName(s)
 }
 
+// unescape percent-decodes ('+' stays '+': links carry base64 values) and wants UTF-8 back: the
+// value goes into core JSON, which would silently rewrite invalid bytes.
+func unescape(s string) (string, bool) {
+	d, err := url.PathUnescape(s)
+	return d, err == nil && utf8.ValidString(d)
+}
+
 func userUUID(p parts) (string, *Rejection) {
 	if !p.hasUser || p.user == "" {
 		return "", reject(CodeMissingField, "uuid")
 	}
-	u, err := url.PathUnescape(p.user)
-	if err != nil {
+	u, ok := unescape(p.user)
+	if !ok {
 		return "", reject(CodeBadLink, "uuid")
 	}
 	id, ok := parseUUID(u)
@@ -187,8 +210,8 @@ func userPassword(p parts) (string, *Rejection) {
 	if !p.hasUser || p.user == "" {
 		return "", reject(CodeMissingField, "password")
 	}
-	pw, err := url.PathUnescape(p.user)
-	if err != nil {
+	pw, ok := unescape(p.user)
+	if !ok {
 		return "", reject(CodeBadLink, "password")
 	}
 	return pw, nil
@@ -212,9 +235,9 @@ func parseParams(q string) (*params, *Rejection) {
 			continue
 		}
 		k, v, _ := strings.Cut(kv, "=")
-		k, err1 := url.PathUnescape(k)
-		v, err2 := url.PathUnescape(v) // '+' stays '+': links carry base64 values
-		if err1 != nil || err2 != nil {
+		k, ok1 := unescape(k)
+		v, ok2 := unescape(v)
+		if !ok1 || !ok2 {
 			return nil, reject(CodeBadLink, "percent-encoding")
 		}
 		k = strings.ToLower(k)
@@ -371,11 +394,22 @@ func stream(q *params, host, defaultSecurity string) (*TLS, *Transport, *Rejecti
 		return nil, nil, reject(CodeBadLink, "quic without tls")
 	}
 	if tr != nil && tr.Type == TransportGRPC && authority != "" {
+		a, ok := cleanHost(authority)
+		if !ok {
+			return nil, nil, reject(CodeBadLink, "authority")
+		}
+		// v2rayN writes the domain of a gRPC server on an address into "host" (the authority)
+		// and leaves sni empty: the authority is then the server name.
+		if tls != nil && tls.Reality == nil && tls.ServerName == "" {
+			if _, err := netip.ParseAddr(host); err == nil {
+				tls.ServerName = a
+			}
+		}
 		name := host
 		if tls != nil && tls.ServerName != "" {
 			name = tls.ServerName
 		}
-		if !strings.EqualFold(authority, name) {
+		if a != name {
 			return nil, nil, reject(CodeUnsupportedTransport, "grpc authority")
 		}
 	}
@@ -396,6 +430,9 @@ func transport(q *params) (*Transport, string, *Rejection) {
 	q.get("key")   // the key of QUIC encryption, which must be none
 	q.get("seed")  // kcp, refused below
 	q.get("extra") // xhttp, refused below
+	if !cleanText(path) {
+		return nil, "", reject(CodeBadLink, "path")
+	}
 
 	switch typ {
 	case "", "tcp", "raw":
@@ -469,6 +506,19 @@ func transport(q *params) (*Transport, string, *Rejection) {
 		return &Transport{Type: TransportQUIC}, "", nil
 	}
 	return nil, "", reject(CodeUnsupportedTransport, detail("transport", typ))
+}
+
+// cleanText: valid UTF-8 without control characters (a path goes into an HTTP request line).
+func cleanText(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func cleanPath(p string) string {
@@ -939,8 +989,8 @@ func ssUser(u string, plain bool) (string, string, *Rejection) {
 	s := u
 	if !plain {
 		if strings.Contains(s, "%") {
-			d, err := url.PathUnescape(s)
-			if err != nil {
+			d, ok := unescape(s)
+			if !ok {
 				return "", "", reject(CodeBadLink, "userinfo")
 			}
 			s = d
@@ -1097,16 +1147,16 @@ func parseTUIC(body string) (Server, *Rejection) {
 		return Server{}, reject(CodeMissingField, "uuid")
 	}
 	rawID, rawPw, _ := strings.Cut(p.user, ":")
-	u, err := url.PathUnescape(rawID)
-	if err != nil {
+	u, ok := unescape(rawID)
+	if !ok {
 		return Server{}, reject(CodeBadLink, "uuid")
 	}
 	id, ok := parseUUID(u)
 	if !ok {
 		return Server{}, reject(CodeBadLink, "uuid")
 	}
-	pw, err := url.PathUnescape(rawPw)
-	if err != nil {
+	pw, ok := unescape(rawPw)
+	if !ok {
 		return Server{}, reject(CodeBadLink, "password")
 	}
 	if pw == "" {

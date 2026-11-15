@@ -9,8 +9,10 @@
 package connector
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net"
 	"net/netip"
 	"strconv"
@@ -211,12 +213,49 @@ func reject(code, detail string) *Rejection {
 	return &Rejection{Code: code, Detail: detail}
 }
 
-// ServerID is the id of a server: the first 8 bytes of the SHA-256 of its normalized text, in hex.
-// Leading and trailing spaces of every line, line endings, blank lines and a byte order mark do not
-// change it.
+// ServerID is the id of a server: the first 8 bytes, in hex, of the SHA-256 of its normalized text
+// without its name. Leading and trailing spaces of every line, line endings, blank lines and a byte
+// order mark do not change it, and neither does the name: a link is taken without the part from its
+// first '#', a vmess:// base64 link as its JSON without "ps" (keys sorted). So a subscription that
+// writes changing things into its names (traffic left, a load mark) keeps the ids of its servers
+// across refreshes; the name itself is still kept in Text and shown. A .conf carries no name (the
+// name is the file's), so it is taken whole.
 func ServerID(text string) string {
-	sum := sha256.Sum256([]byte(normalize(text)))
+	n := normalize(text)
+	if !strings.Contains(n, "\n") {
+		n = withoutName(n)
+	}
+	sum := sha256.Sum256([]byte(n))
 	return hex.EncodeToString(sum[:8])
+}
+
+// withoutName cuts the name out of one link for ServerID.
+func withoutName(link string) string {
+	link, _, _ = strings.Cut(link, "#")
+	i := strings.Index(link, "://")
+	if i <= 0 || !strings.EqualFold(link[:i], "vmess") || strings.ContainsAny(link[i+3:], "@?") {
+		return link // the Xray URI form of vmess has its name in the fragment only
+	}
+	raw, ok := decodeBase64(link[i+3:])
+	if !ok {
+		return link
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var m map[string]any
+	if dec.Decode(&m) != nil || m == nil {
+		return link
+	}
+	for k := range m {
+		if strings.EqualFold(k, "ps") {
+			delete(m, k)
+		}
+	}
+	b, err := json.Marshal(m) // map keys come out sorted
+	if err != nil {
+		return link
+	}
+	return "vmess-json:" + string(b)
 }
 
 // normalize trims every line, drops blank lines and joins the rest with "\n".
@@ -282,11 +321,27 @@ func detail(note, word string) string {
 	return note
 }
 
+// confBaseName makes the server name of a .conf from the name its caller gives (a file's base
+// name): only the part after the last '/' or '\' counts (a path is never wanted here), ".conf" is
+// cut.
+func confBaseName(name string) string {
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	name = strings.TrimSpace(name)
+	if len(name) >= 5 && strings.EqualFold(name[len(name)-5:], ".conf") {
+		name = name[:len(name)-5]
+	}
+	return cleanName(name)
+}
+
 // cleanHost checks a server address: an IP address without a zone, or an ASCII DNS name. It returns
-// the canonical form (lower case; IPv6 compressed).
+// the canonical form (lower case; IPv6 compressed). The unspecified addresses (0.0.0.0, ::) and
+// multicast are refused: panels put them into pseudo-entries that carry text, not a server.
+// Loopback stays allowed (test servers).
 func cleanHost(h string) (string, bool) {
 	if a, err := netip.ParseAddr(h); err == nil {
-		if a.Zone() != "" {
+		if u := a.Unmap(); a.Zone() != "" || u.IsUnspecified() || u.IsMulticast() {
 			return "", false
 		}
 		return a.String(), true
@@ -361,10 +416,14 @@ func splitHostPort(hp string) (host, port string, r *Rejection) {
 			}
 		}
 		a, err := netip.ParseAddr(hp[1:end])
-		if err != nil || !a.Is6() || a.Zone() != "" {
+		if err != nil || !a.Is6() {
 			return "", "", reject(CodeBadLink, "host")
 		}
-		return a.String(), port, nil
+		h, ok := cleanHost(a.String())
+		if !ok {
+			return "", "", reject(CodeBadLink, "host")
+		}
+		return h, port, nil
 	}
 	if strings.Count(hp, ":") > 1 {
 		return "", "", reject(CodeBadLink, "IPv6 address without brackets")

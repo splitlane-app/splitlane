@@ -111,6 +111,8 @@ func TestParseWireGuardConfRejects(t *testing.T) {
 		{"duplicate private key", iface + "PrivateKey = " + wgPriv + "\n" + peer, CodeBadWireGuard, 4},
 		{"bad endpoint port", strings.Replace(iface+peer, ":51820", ":0", 1), CodeBadWireGuard, 6},
 		{"endpoint without port", strings.Replace(iface+peer, ":51820", "", 1), CodeBadWireGuard, 6},
+		{"unspecified endpoint", strings.Replace(iface+peer, "vpn.example.com", "0.0.0.0", 1), CodeBadWireGuard, 6},
+		{"multicast endpoint", strings.Replace(iface+peer, "vpn.example.com", "[ff05::2]", 1), CodeBadWireGuard, 6},
 		{"bad address", strings.Replace(iface, "10.0.0.2/32", "10.0.0.300/32", 1) + peer, CodeBadWireGuard, 3},
 		{"empty address item", strings.Replace(iface, "10.0.0.2/32", "10.0.0.2/32,,", 1) + peer, CodeBadWireGuard, 3},
 		{"bad allowed ips", strings.Replace(iface+peer, "0.0.0.0/0", "0.0.0.0/33", 1), CodeBadWireGuard, 7},

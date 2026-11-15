@@ -20,8 +20,8 @@ func TestServerID(t *testing.T) {
 			t.Errorf("ServerID(%q) differs from the trimmed link", same)
 		}
 	}
-	if ServerID(linkTrojan+"x") == id || ServerID(linkSS) == id {
-		t.Error("different texts share an id")
+	if ServerID(strings.Replace(linkTrojan, "sni=example.com", "sni=other.example.com", 1)) == id || ServerID(linkSS) == id {
+		t.Error("different servers share an id")
 	}
 
 	conf := ServerID(wgConf)
@@ -37,6 +37,57 @@ func TestServerID(t *testing.T) {
 	}
 	if ServerID(strings.Replace(wgConf, "MTU = 1420", "MTU = 1280", 1)) == conf {
 		t.Error("a changed .conf keeps its id")
+	}
+}
+
+// The name is not part of the id: a subscription that writes changing things into its names keeps
+// its ids; any other change is a different server.
+func TestServerIDLeavesTheNameOut(t *testing.T) {
+	trojan := "trojan://Pa55-w0rd@example.com:443?sni=example.com"
+	vmessJSON := func(ps, port string) string {
+		return vmessLink(`{"v":"2","ps":"` + ps + `","add":"example.com","port":"` + port + `","id":"` + uuid1 + `","net":"ws","path":"/vm","tls":"tls"}`)
+	}
+	groups := [][]string{
+		{trojan, trojan + "#A", trojan + "#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%7C%2012.3%20GB%20left", trojan + "#"},
+		{vmessJSON("A", "443"), vmessJSON("B | 3 days left", "443"), vmessJSON("", "443") + "#C",
+			vmessLinkURL(`{"v":"2","ps":"D","add":"example.com","port":"443","id":"` + uuid1 + `","net":"ws","path":"/vm","tls":"tls"}`),
+			vmessLink(`{"id":"` + uuid1 + `","add":"example.com","PS":"E","v":"2","port":"443","tls":"tls","net":"ws","path":"/vm"}`)},
+		{"vmess://" + uuid1 + "@example.com:443?type=ws#A", "vmess://" + uuid1 + "@example.com:443?type=ws#B"},
+		{"ss://YWVzLTI1Ni1nY206cGFzcw@192.0.2.5:8388#A", "ss://YWVzLTI1Ni1nY206cGFzcw@192.0.2.5:8388#B"},
+	}
+	var ids []string
+	for _, g := range groups {
+		id := ServerID(g[0])
+		for _, l := range g[1:] {
+			if ServerID(l) != id {
+				t.Errorf("%s: id differs from %s", l, g[0])
+			}
+			s, err := ParseLink(l)
+			if err == nil && s.ID != id {
+				t.Errorf("%s: parsed id differs", l)
+			}
+		}
+		ids = append(ids, id)
+	}
+	different := []string{
+		trojan + "&allowInsecure=1#A",
+		"trojan://Pa55-w0rd@example.com:8443?sni=example.com#A",
+		vmessJSON("A", "8443"),
+		"vmess://" + uuid1 + "@example.com:443?type=ws&path=%2Fx#A",
+		"ss://YWVzLTI1Ni1nY206cGFzcw@192.0.2.6:8388#A",
+	}
+	for _, l := range different {
+		for _, id := range ids {
+			if ServerID(l) == id {
+				t.Errorf("%s shares an id with another server", l)
+			}
+		}
+	}
+	// the name is still kept and shown
+	a, _ := ParseLink(trojan + "#A")
+	b, _ := ParseLink(trojan + "#B")
+	if a.Name != "A" || b.Name != "B" || a.Text == b.Text || a.ID != b.ID {
+		t.Errorf("names %q %q, texts %q %q", a.Name, b.Name, a.Text, b.Text)
 	}
 }
 

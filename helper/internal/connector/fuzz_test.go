@@ -28,8 +28,13 @@ func FuzzParseLink(f *testing.F) {
 	for _, s := range []string{"", "vless://", "ss://", "vmess://e30", "hy2://@:", "tuic://:@[::1]:1", "ss://YQ@x:1", "trojan://a@[::]:65535#%"} {
 		f.Add(s)
 	}
+	f.Add(`{"url": "https://h/?k=\"`)
+	f.Add("a://AAAAAAAAAAAAAAAAAAAAAA==BBBBBBBBBBBBBBBBBBBBBB==")
+	f.Add("https://u:p@h/aB3dE5fG7hJ9kL1mN0pQ?token=x&format=json#f vmess://eyJpZCI6IngifQ== PrivateKey = k")
 	f.Fuzz(func(t *testing.T, link string) {
-		_ = Mask(link)
+		if m := Mask(link); Mask(m) != m {
+			t.Fatalf("Mask is not idempotent: %q -> %q -> %q", link, m, Mask(m))
+		}
 		s, err := ParseLink(link)
 		if err != nil {
 			checkRejection(t, err)
@@ -88,6 +93,6 @@ func FuzzParseSubscription(f *testing.F) {
 			}
 		}
 		// ParseText is the same machinery with a .conf and a subscription address on top
-		_, _, _ = ParseText(string(body))
+		_, _, _ = ParseText(string(body), "x.conf")
 	})
 }

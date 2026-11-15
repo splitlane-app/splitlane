@@ -24,9 +24,9 @@ var ignoredInterfaceKeys = map[string]bool{
 
 // ParseWireGuardConf parses a WireGuard .conf with one [Interface] and exactly one [Peer]. Keys and
 // section names are case-insensitive, '#' starts a comment, Address and AllowedIPs may repeat and
-// hold comma lists, a bare address is a host prefix. name is the file name (".conf" is cut); when
-// it is empty the server is called host:port. The error is always a *Rejection; Line is the line
-// of the problem, 0 when it is the whole file.
+// hold comma lists, a bare address is a host prefix. name is the file's base name (".conf" is cut,
+// and so is anything up to a '/' or '\'); when it is empty the server is called host:port. The
+// error is always a *Rejection; Line is the line of the problem, 0 when it is the whole file.
 func ParseWireGuardConf(text []byte, name string) (Server, error) {
 	s, r := parseConf(text, name)
 	if r != nil {
@@ -166,11 +166,7 @@ func parseConf(text []byte, name string) (Server, *Rejection) {
 	case len(wg.Peer.AllowedIPs) == 0:
 		return fail(0, CodeMissingField, "AllowedIPs")
 	}
-	name = strings.TrimSpace(name)
-	if len(name) >= 5 && strings.EqualFold(name[len(name)-5:], ".conf") {
-		name = name[:len(name)-5]
-	}
-	if name = cleanName(name); name == "" {
+	if name = confBaseName(name); name == "" {
 		name = hostPortName(host, port)
 	}
 	return Server{ID: ServerID(src), Name: name, Protocol: ProtocolWireGuard, Host: host, Port: port,
