@@ -2,7 +2,9 @@ package install
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -199,5 +201,89 @@ func TestShutdownHelperOnATestPipe(t *testing.T) {
 	found, err = s.ShutdownHelper(time.Minute)
 	if !found || err == nil || !strings.Contains(err.Error(), "refused helper.shutdown: internal: test") {
 		t.Fatalf("a refused shutdown: %v %v", found, err)
+	}
+}
+
+// Review Focus 5: %AppData%\SplitLane is a junction to a folder of somebody else. --purge removes the
+// junction itself and never what it points to (os.RemoveAll takes a link away without going into it).
+// The junction is made by mklink /J inside a temporary folder, which needs no administrator.
+func TestPurgeDoesNotFollowAJunction(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(filepath.Join(target, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(target, "sub", "keep.txt")
+	if err := os.WriteFile(keep, []byte("not yours"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "SplitLane")
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink /J: %v: %s", err, out)
+	}
+	if err := (&System{}).RemoveAll(link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(link); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the junction is still there: %v", err)
+	}
+	if b, err := os.ReadFile(keep); err != nil || string(b) != "not yours" {
+		t.Fatalf("the target lost its file: %q %v", b, err)
+	}
+
+	// A junction inside the folder is removed as a link too.
+	dir := filepath.Join(root, "Data")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", filepath.Join(dir, "inner"), target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink /J: %v: %s", err, out)
+	}
+	if err := (&System{}).RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(keep); err != nil || string(b) != "not yours" {
+		t.Fatalf("the target lost its file through an inner junction: %q %v", b, err)
+	}
+
+	// A folder that is not there is no error.
+	if err := (&System{}).RemoveAll(filepath.Join(root, "missing")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ProductProcesses lists the processes of the two images under the product folder, never this process
+// itself. The images are replaced by the name of the test's own exe, which lies under the "product".
+func TestProductProcessesSkipsItself(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := productImages
+	productImages = []string{filepath.Base(self)}
+	t.Cleanup(func() { productImages = old })
+
+	ps, err := (&System{}).ProductProcesses(filepath.Dir(self))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		if p.PID == uint32(os.Getpid()) {
+			t.Fatalf("this process is in the list: %+v", ps)
+		}
+	}
+	if ps, err = (&System{}).ProductProcesses(t.TempDir()); err != nil || len(ps) != 0 {
+		t.Fatalf("a folder without processes: %v %v", ps, err)
+	}
+}
+
+// The session user: the real API answers without an error; the SID is empty or plain S-1-....
+func TestSessionUserSIDAnswers(t *testing.T) {
+	sid, err := (&System{}).SessionUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sid != "" && !strings.HasPrefix(sid, "S-1-") {
+		t.Fatalf("SID %q", sid)
 	}
 }

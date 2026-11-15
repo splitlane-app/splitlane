@@ -1,10 +1,11 @@
-// Package install is the commands install and uninstall of splitlane-helper.exe (spec 4.3, points 2
-// and 4); stage 1 has no installer (spec 13): the window runs them with UAC. install puts the helper,
-// the unchanged core with its library and the licence texts into the program folder, makes the data
-// folder with its access list (4.2), writes setup.json and registers the scheduled task; uninstall
-// takes them away again. A helper that runs is stopped first, and nothing is replaced or removed
-// until it has given the system exit node back and ended (Review Focus 4 of plan 1B). Every effect on
-// the system sits behind Sys, so the tests run on a fake; System is the real one.
+// Package install is the commands prepare, install and uninstall of splitlane-helper.exe (spec 3 of
+// stage 2; 4.3 of stage 1). The installer puts the files into the program folder; prepare, before it
+// touches them, stops the helper of an earlier version and waits for its processes to end; install, run
+// from the program folder, makes the data folder with its access list (4.2), writes setup.json and
+// registers the scheduled task; uninstall stops the helper, waits and takes the task away (the files are
+// the uninstaller's). A helper that runs is stopped first, and nothing is replaced or removed until it
+// has given the system exit node back and ended (Review Focus 4 of plan 1B). Every effect on the system
+// sits behind Sys, so the tests run on a fake; System is the real one.
 package install
 
 import (
@@ -15,6 +16,8 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,9 +29,9 @@ import (
 	"splitlane/helper/internal/store"
 )
 
-// Files are what install copies from the folder of the running exe (dist\helper) into the program
-// folder, in this order (spec 4.2, 14): the helper, the unchanged core and its library under their
-// own names, the core's licence, the licence texts of SplitLane.
+// Files are what the installer puts into the program folder, in this order (spec 4.2, 14): the helper,
+// the unchanged core and its library under their own names, the core's licence, the licence texts of
+// SplitLane. install reads them there and checks the core and its library.
 var Files = []string{"splitlane-helper.exe", "sing-box.exe", "libcronet.dll", "sing-box-LICENSE", "LICENSE", "THIRD-PARTY.md"}
 
 // CronetSHA256 is the SHA-256 of libcronet.dll from sing-box-1.14.4-windows-amd64.zip: the core loads
@@ -52,28 +55,47 @@ const (
 	restoreEvery  = 5 * time.Second   // 5.4 step 1: the return of the system exit node is tried this often
 	restoreWithin = 30 * time.Second  // ... and is refused when not confirmed within this
 	restoreTries  = int(restoreWithin / restoreEvery)
-	stopWait      = 5 * time.Second  // 5.4 step 2: the graceful stop of the core, then the forced end
-	callTimeout   = 10 * time.Second // one call of tailscale.exe
+	stopWait      = 5 * time.Second        // 5.4 step 2: the graceful stop of the core, then the forced end
+	callTimeout   = 10 * time.Second       // one call of tailscale.exe
+	waitEvery     = 500 * time.Millisecond // spec 3 step 2: the processes of the product are looked at this often
+	waitWithin    = 10 * time.Second       // ... and the command is refused when some stay this long
+	waitTries     = int(waitWithin / waitEvery)
 )
 
 // Options are what the command line and the system give install and uninstall.
 type Options struct {
-	UserSID    string    // install: the setup user, plain S-1-... (--user-sid); the pipe and export\ give him access
-	Purge      bool      // uninstall: remove the data folder too (--purge)
-	Exe        string    // the running splitlane-helper.exe: install copies the files of its folder
-	ProgramDir string    // %ProgramFiles%\SplitLane\helper (place.ProgramDir)
-	DataDir    string    // %ProgramData%\SplitLane (place.DataDir)
-	Hostname   string    // the computer's name: the device <Hostname>-splitlane of the uninstall note when state.json names none
-	Out        io.Writer // the lines for the window: "<INSTALL|UNINSTALL>: " steps, INSTALL-OK, INSTALL-REFUSED: <reason>, UNINSTALL-NOTE: ..., UNINSTALL-OK
+	UserSID     string    // install: the setup user, plain S-1-... (--user-sid); the pipe and export\ give him access
+	SessionUser bool      // prepare, install: the setup user is the user of the session of this process (--session-user)
+	Purge       bool      // uninstall: remove the data folder and the user's folder too (--purge)
+	Exe         string    // the running splitlane-helper.exe: install runs only from ProgramDir
+	ProductDir  string    // %ProgramFiles%\SplitLane (place.ProductDir)
+	ProgramDir  string    // %ProgramFiles%\SplitLane\helper (place.ProgramDir)
+	DataDir     string    // %ProgramData%\SplitLane (place.DataDir)
+	UserDataDir string    // %AppData%\SplitLane of the user of this process; only --purge removes it
+	Hostname    string    // the computer's name: the device <Hostname>-splitlane of the uninstall note when state.json names none
+	Out         io.Writer // the lines for the window: "<PREPARE|INSTALL|UNINSTALL>: " steps, <label>-OK, <label>-REFUSED: <reason>, UNINSTALL-NOTE: ...
+}
+
+// Proc is a process of the product that runs: its id and the full path of its image, empty when the
+// process could not be opened (it is then treated as running).
+type Proc struct {
+	PID   uint32
+	Image string
 }
 
 // Sys is every effect of install and uninstall on the system; System is the real one.
 type Sys interface {
 	// Token is the user of this process's token, S-1-..., and whether the token is elevated.
 	Token() (sid string, elevated bool, err error)
+	// SessionUserSID is the SID of the user logged on in the session of this process; "" without error
+	// for a session that has no user (session 0 of services).
+	SessionUserSID() (string, error)
+	// ProductProcesses are the processes, other than this one, whose image is splitlane-helper.exe or
+	// sing-box.exe under productDir, at any depth.
+	ProductProcesses(productDir string) ([]Proc, error)
 	// AccountName is the account of a SID, DOMAIN\name: the user of the task.
 	AccountName(sid string) (string, error)
-	// ReadFile reads a file whole: install checks and copies the same bytes.
+	// ReadFile reads a file whole: install checks the core and its library with it.
 	ReadFile(path string) ([]byte, error)
 	// ShutdownHelper: when a helper has the pipe, it sends hello and helper.shutdown and waits at most
 	// wait for the helper's process to end. found is false when no helper has the pipe; err tells that
@@ -92,7 +114,7 @@ type Sys interface {
 	CheckDir(dir string) (there bool, err error)
 	// After is time.After.
 	After(d time.Duration) <-chan time.Time
-	// WriteFile replaces path with data, making its folder when it is missing; a file in use is an error.
+	// WriteFile replaces path with data, making its folder when it is missing; a file in use is an error (install no longer calls it).
 	WriteFile(path string, data []byte) error
 	// SecureDir makes the folder dir with the access list sddl, or gives the list to the folder that is
 	// there and to everything in it; a folder that is a link, or that was not made by an administrator,
@@ -134,30 +156,27 @@ func finish(o Options, label string, err error) error {
 	return nil
 }
 
-// Install is `install --user-sid <SID>` (spec 4.3 point 2 and the paragraph on a repeated install), in
-// this order: 1. this process is elevated and runs as the setup user; 2. the files of the folder of the
-// running exe are read, the core and its library checked by SHA-256; 3. a data folder that is there
-// must be a plain folder made by an administrator (a user may have made it before the first install,
-// with a journal of his own in it; step 5 would refuse it anyway), then the helper that runs is
-// stopped, or without one what an abnormal end left is undone (stopOld); 4. the files go into the
-// program folder; 5. the data folder and export\ get their access lists; 6. setup.json (a product
-// helper without it exits with code 6); 7. the scheduled task. It prints INSTALL-OK, or
-// INSTALL-REFUSED: <reason> and returns the error.
+// Install is `install --user-sid <SID> | --session-user` (spec 3 step 5), in this order: 1. this process is
+// elevated and runs as the setup user; 2. it runs from the program folder, and the files there are read,
+// the core and its library checked by SHA-256 (the installer put them there; install copies nothing);
+// 3. a data folder that is there must be a plain folder made by an administrator (a user may have made it
+// before the first install, with a journal of his own in it; step 4 would refuse it anyway), then the
+// helper that runs is stopped, or without one what an abnormal end left is undone (stopOld); 4. the data
+// folder and export\ get their access lists; 5. setup.json (a product helper without it exits with code
+// 6); 6. the scheduled task. It prints INSTALL-OK, or INSTALL-REFUSED: <reason> and returns the error.
 func Install(o Options, s Sys) error {
 	return finish(o, "INSTALL", install(o, s, progress(o, "INSTALL")))
 }
 
 func install(o Options, s Sys, say sayFunc) error {
-	account, err := checkUser(o, s)
+	account, o, err := checkUser("install", o, s)
 	if err != nil {
 		return err
 	}
-	src := filepath.Dir(o.Exe)
-	if inside(src, o.ProgramDir) {
-		return fmt.Errorf("install copies the application's own copy into %s; it does not run from there", o.ProgramDir)
+	if !sameDir(filepath.Dir(o.Exe), o.ProgramDir) {
+		return fmt.Errorf("install runs from %s, where the installer puts the files", o.ProgramDir)
 	}
-	files, err := readSource(s, src)
-	if err != nil {
+	if _, err := readSource(s, o.ProgramDir); err != nil {
 		return err
 	}
 	there, err := s.CheckDir(o.DataDir)
@@ -167,12 +186,6 @@ func install(o Options, s Sys, say sayFunc) error {
 	if err := stopOld(o, s, there, say); err != nil {
 		return err
 	}
-	for _, name := range Files {
-		if err := s.WriteFile(filepath.Join(o.ProgramDir, name), files[name]); err != nil {
-			return fmt.Errorf("the program folder: %w", err)
-		}
-	}
-	say("%d files copied to %s", len(Files), o.ProgramDir)
 	if err := s.SecureDir(o.DataDir, DataSDDL); err != nil {
 		return fmt.Errorf("the data folder: %w", err)
 	}
@@ -190,28 +203,124 @@ func install(o Options, s Sys, say sayFunc) error {
 	return nil
 }
 
-// checkUser is step 1 (spec 4.3): the SID is plain S-1-... (it goes into access lists; place takes no
-// other form), this process is elevated and runs as that user. A UAC passed under another account
-// would give the task an account without administrator rights, which stage 1 does not support. It
-// returns the user's account name for the task.
-func checkUser(o Options, s Sys) (string, error) {
-	if sid, err := windows.StringToSid(o.UserSID); err != nil || sid.String() != o.UserSID {
-		return "", fmt.Errorf("--user-sid %q is not a SID in the form S-1-...", o.UserSID)
+// Prepare is `prepare --session-user` (spec 3 step 2), run by the installer from its temporary folder before
+// any file is touched: the user as for install, the data folder, the stop of the helper that runs
+// (stopOld), then the wait until no process of the product is left. It changes nothing. It prints
+// PREPARE-OK, or PREPARE-REFUSED: <reason> and returns the error.
+func Prepare(o Options, s Sys) error {
+	return finish(o, "PREPARE", prepare(o, s, progress(o, "PREPARE")))
+}
+
+func prepare(o Options, s Sys, say sayFunc) error {
+	_, o, err := checkUser("prepare", o, s)
+	if err != nil {
+		return err
+	}
+	there, err := s.CheckDir(o.DataDir)
+	if err != nil {
+		return fmt.Errorf("the data folder: %w", err)
+	}
+	if err := stopOld(o, s, there, say); err != nil {
+		return err
+	}
+	return waitGone(o, s, say)
+}
+
+// waitGone looks every 500 ms for processes of the product (spec 3 step 2): the supervisor and the worker
+// of this version, the helper and the core of stage 1. helper.shutdown waits only for the owner of the
+// pipe, so the supervisor and the core may still run, with their files busy. Some left after 10 s refuse
+// the command. A process that cannot be looked at counts as running.
+func waitGone(o Options, s Sys, say sayFunc) error {
+	for attempt := 0; ; attempt++ {
+		ps, err := s.ProductProcesses(o.ProductDir)
+		if err != nil {
+			return fmt.Errorf("the processes of %s: %w", o.ProductDir, err)
+		}
+		if len(ps) == 0 {
+			return nil
+		}
+		if attempt == waitTries {
+			return fmt.Errorf("%s still running (process %s); the files cannot be replaced", imageNames(ps), pids(ps))
+		}
+		if attempt == 0 {
+			say("waiting for %s to end", imageNames(ps))
+		}
+		<-s.After(waitEvery)
+	}
+}
+
+// imageNames are the file names of the images of ps, in the order of the first appearance; a process
+// without an image is named by the two images.
+func imageNames(ps []Proc) string {
+	var names []string
+	for _, p := range ps {
+		n := "splitlane-helper.exe or sing-box.exe"
+		if p.Image != "" {
+			n = filepath.Base(p.Image)
+		}
+		if !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+func pids(ps []Proc) string {
+	var ids []string
+	for _, p := range ps {
+		ids = append(ids, strconv.FormatUint(uint64(p.PID), 10))
+	}
+	return strings.Join(ids, ", ")
+}
+
+// resolveUser is the setup user: --user-sid as given; --session-user the user logged on in the session of
+// this process, and the user of the process when the session has none (session 0, the runner of GitHub
+// Actions).
+func resolveUser(o Options, s Sys) (string, error) {
+	if !o.SessionUser {
+		return o.UserSID, nil
+	}
+	sid, err := s.SessionUserSID()
+	if err != nil {
+		return "", fmt.Errorf("the user of the session: %w", err)
+	}
+	if sid != "" {
+		return sid, nil
+	}
+	user, _, err := s.Token()
+	if err != nil {
+		return "", fmt.Errorf("the user of this process: %w", err)
+	}
+	return user, nil
+}
+
+// checkUser is step 1 (spec 3): the setup user (resolveUser) is a plain S-1-... SID (it goes into access
+// lists; place takes no other form), and this process is elevated and runs as that user. A UAC passed
+// under another account would give the task an account without administrator rights, which is not
+// supported. It returns the user's account name for the task and the options with UserSID filled.
+func checkUser(cmd string, o Options, s Sys) (string, Options, error) {
+	sid, err := resolveUser(o, s)
+	if err != nil {
+		return "", o, err
+	}
+	o.UserSID = sid
+	if p, err := windows.StringToSid(o.UserSID); err != nil || p.String() != o.UserSID {
+		return "", o, fmt.Errorf("--user-sid %q is not a SID in the form S-1-...", o.UserSID)
 	}
 	user, elevated, err := s.Token()
 	switch {
 	case err != nil:
-		return "", fmt.Errorf("the user of this process: %w", err)
+		return "", o, fmt.Errorf("the user of this process: %w", err)
 	case !elevated:
-		return "", errors.New("install runs elevated: the window starts it with UAC (spec 4.3)")
+		return "", o, fmt.Errorf("%s runs elevated: the installer or the window starts it with UAC (spec 4.3)", cmd)
 	case user != o.UserSID:
-		return "", fmt.Errorf("UAC was passed under another account: this process runs as %s, the setup user is %s; stage 1 needs the setup user to be an administrator (spec 4.3, 13)", user, o.UserSID)
+		return "", o, fmt.Errorf("UAC was passed under another account: this process runs as %s, the setup user is %s; the setup user must be an administrator (spec 3)", user, o.UserSID)
 	}
 	account, err := s.AccountName(o.UserSID)
 	if err != nil {
-		return "", fmt.Errorf("the account of %s: %w", o.UserSID, err)
+		return "", o, fmt.Errorf("the account of %s: %w", o.UserSID, err)
 	}
-	return account, nil
+	return account, o, nil
 }
 
 // readSource is step 2: every file of Files from the folder src, the pinned ones checked.
@@ -234,12 +343,13 @@ func readSource(s Sys, src string) (map[string][]byte, error) {
 	return files, nil
 }
 
-// stopOld is step 3 of install and the first step of uninstall (spec 4.3). A helper that has the pipe
+// stopOld is step 3 of install, the stop of prepare and the first step of uninstall (spec 4.3). A helper that has the pipe
 // gets helper.shutdown and must end within helperWait: its disabling gives the system exit node back
 // first (5.4), so a helper that stays (restore_pending, for example) refuses the command, nothing is
 // changed, and that helper keeps trying. Without a helper on the pipe the command does the start-up's
 // work of 5.7 itself: the journal first (5.4 step 1), then the helper's own core left from an earlier
-// run, found by the identity in state.json and the image <ProgramDir>\sing-box.exe. "Was on" stays in
+// run, found by the identity in state.json and the image <ProgramDir>\sing-box.exe, else (a core of
+// stage 1) <ProductDir>\sing-box.exe. "Was on" stays in
 // state.json: the next helper enables again after its start-up, as after any abnormal end (5.2).
 // read tells that the data folder is there and passed CheckDir: only then are its files read, with
 // administrator rights, and acted on.
@@ -273,7 +383,7 @@ func stopOld(o Options, s Sys, read bool, say sayFunc) error {
 	if st.Core == nil {
 		return nil
 	}
-	return stopCore(s, filepath.Join(o.ProgramDir, "sing-box.exe"), *st.Core, say)
+	return stopCore(s, o, *st.Core, say)
 }
 
 // restore is 5.4 step 1 for install and uninstall: the exit node of the journal back, confirmed by
@@ -326,8 +436,11 @@ func dropJournal(d store.Dir) error {
 
 // stopCore is 5.4 step 2 for the core left from an earlier run: the graceful signal, at most 5 s, then
 // the forced end; at once when the signal fails. A core that does not end refuses the command.
-func stopCore(s Sys, exe string, id store.CoreIdentity, say sayFunc) error {
-	p, ok := s.FindCore(exe, id)
+func stopCore(s Sys, o Options, id store.CoreIdentity, say sayFunc) error {
+	p, ok := s.FindCore(filepath.Join(o.ProgramDir, "sing-box.exe"), id)
+	if !ok && o.ProductDir != "" {
+		p, ok = s.FindCore(filepath.Join(o.ProductDir, "sing-box.exe"), id)
+	}
 	if !ok {
 		return nil
 	}
@@ -363,25 +476,23 @@ func ended(p engine.CoreProc) bool {
 	}
 }
 
-// Uninstall is `uninstall [--purge]` (spec 4.3 point 4), in this order: the same stop as step 3 of
-// install (refused while it is not confirmed; the files of a data folder that does not pass CheckDir
-// are not read, and the rest goes on); the task; the program folder; with Purge the data
-// folder, and a note that the embedded node stays a device of the Tailscale network. It runs from the
-// application's own copy: an exe inside the program folder is refused before anything, it would be
-// removed under itself. It prints UNINSTALL-OK, or UNINSTALL-REFUSED: <reason> and returns the error.
+// Uninstall is `uninstall [--purge]` (spec 3, Removal), in this order: this process is elevated; the same
+// stop as step 3 of install (refused while it is not confirmed; the files of a data folder that does not
+// pass CheckDir are not read, and the rest goes on); the wait until no process of the product is left;
+// the task; with Purge the data folder, the folder %AppData%\SplitLane of the user of this process and a
+// note that the embedded node stays a device of the Tailscale network. The files of the program folder
+// are the uninstaller's: it runs from there and removes nothing of it. It prints UNINSTALL-OK, or
+// UNINSTALL-REFUSED: <reason> and returns the error.
 func Uninstall(o Options, s Sys) error {
 	return finish(o, "UNINSTALL", uninstall(o, s, progress(o, "UNINSTALL")))
 }
 
 func uninstall(o Options, s Sys, say sayFunc) error {
-	if inside(o.Exe, o.ProgramDir) {
-		return fmt.Errorf("uninstall runs from the application's own copy, not from %s", o.ProgramDir)
-	}
 	switch _, elevated, err := s.Token(); {
 	case err != nil:
 		return fmt.Errorf("the user of this process: %w", err)
 	case !elevated:
-		return errors.New("uninstall runs elevated: the window starts it with UAC (spec 4.3)")
+		return errors.New("uninstall runs elevated: the uninstaller or the window starts it with UAC (spec 4.3)")
 	}
 	read, err := s.CheckDir(o.DataDir)
 	if err != nil {
@@ -389,6 +500,9 @@ func uninstall(o Options, s Sys, say sayFunc) error {
 		read = false
 	}
 	if err := stopOld(o, s, read, say); err != nil {
+		return err
+	}
+	if err := waitGone(o, s, say); err != nil {
 		return err
 	}
 	device := ""
@@ -399,10 +513,6 @@ func uninstall(o Options, s Sys, say sayFunc) error {
 		return fmt.Errorf("the task %s: %w", TaskName, err)
 	}
 	say("the task %s is removed", TaskName)
-	if err := s.RemoveAll(o.ProgramDir); err != nil {
-		return fmt.Errorf("the program folder: %w", err)
-	}
-	say("%s is removed", o.ProgramDir)
 	if !o.Purge {
 		return nil
 	}
@@ -410,6 +520,12 @@ func uninstall(o Options, s Sys, say sayFunc) error {
 		return fmt.Errorf("the data folder: %w", err)
 	}
 	say("%s is removed", o.DataDir)
+	if o.UserDataDir != "" {
+		if err := s.RemoveAll(o.UserDataDir); err != nil {
+			return fmt.Errorf("the settings folder of the user: %w", err)
+		}
+		say("the settings folder of the user is removed")
+	}
 	fmt.Fprintf(output(o), "UNINSTALL-NOTE: the device %s stays in your Tailscale network; remove it in the Tailscale admin console\n", device)
 	return nil
 }
@@ -425,8 +541,5 @@ func deviceName(o Options, read bool) string {
 	return o.Hostname + "-splitlane"
 }
 
-// inside tells that path is dir or below it; names compare without case, as on Windows (filepath.Rel).
-func inside(path, dir string) bool {
-	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
+// sameDir tells that a and b are the same folder; names compare without case, as on Windows.
+func sameDir(a, b string) bool { return strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) }

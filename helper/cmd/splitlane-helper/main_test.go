@@ -91,6 +91,8 @@ func TestProductModeRejectsDevFlags(t *testing.T) {
 // other run without --dev stops at once. No test reaches the real system of install and uninstall.
 func init() {
 	programDir = func() (string, error) { return "", errors.New("the tests do not read the real program folder") }
+	productDir = func() (string, error) { return "", errors.New("the tests do not read the real product folder") }
+	userData = func() (string, error) { return "", errors.New("the tests do not read the real user folder") }
 	productData = func() (string, error) { return "", errors.New("the tests do not read the real data folder") }
 	newSys = func() install.Sys { return nil }
 }
@@ -103,11 +105,15 @@ func fakePlace(t *testing.T) (prog, data string) {
 	prog, data = filepath.Join(root, "Program Files", "SplitLane"), filepath.Join(root, "ProgramData", "SplitLane")
 	os.MkdirAll(prog, 0o755)
 	os.MkdirAll(data, 0o755)
-	oldProg, oldData, oldExe := programDir, productData, executable
+	oldProg, oldData, oldExe, oldProd, oldUser := programDir, productData, executable, productDir, userData
+	productDir = func() (string, error) { return filepath.Dir(prog), nil }
+	userData = func() (string, error) { return filepath.Join(root, "Users", "tester", "SplitLane"), nil }
 	programDir = func() (string, error) { return prog, nil }
 	productData = func() (string, error) { return data, nil }
 	executable = func() (string, error) { return filepath.Join(prog, "splitlane-helper.exe"), nil }
-	t.Cleanup(func() { programDir, productData, executable = oldProg, oldData, oldExe })
+	t.Cleanup(func() {
+		programDir, productData, executable, productDir, userData = oldProg, oldData, oldExe, oldProd, oldUser
+	})
 	return prog, data
 }
 
@@ -431,7 +437,7 @@ func TestInstallSubcommandArgs(t *testing.T) {
 		t.Fatalf("exit code %d, %d calls, output:\n%s", code, len(got), out.String())
 	}
 	o := got[0]
-	if o.UserSID != sid || o.Purge || o.ProgramDir != prog || o.DataDir != data || o.Exe != filepath.Join(prog, "splitlane-helper.exe") || o.Out != &out {
+	if o.UserSID != sid || o.Purge || o.ProgramDir != prog || o.DataDir != data || o.ProductDir != filepath.Dir(prog) || o.SessionUser || o.Exe != filepath.Join(prog, "splitlane-helper.exe") || o.Out != &out {
 		t.Fatalf("options %+v", o)
 	}
 	if code := run([]string{"uninstall", "--purge"}); code != exitOK || len(got) != 2 || !got[1].Purge || got[1].UserSID != "" {
@@ -446,7 +452,7 @@ func TestInstallSubcommandArgs(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"install", nil, "--user-sid is required"},
+		{"install", nil, "--user-sid or --session-user is required"},
 		{"install", []string{"--user-sid"}, "flag needs an argument: -user-sid"},
 		{"install", []string{"--user-sid", sid, "extra"}, `unexpected "extra"`},
 		{"install", []string{"--user-sid", sid, "--purge"}, "flag provided but not defined: -purge"},
@@ -471,5 +477,68 @@ func TestInstallSubcommandArgs(t *testing.T) {
 	calls := len(got)
 	if code := admin("install", []string{"--user-sid", sid}, &out); code != exitRefused || len(got) != calls || out.String() != "INSTALL-REFUSED: no program folder\n" {
 		t.Fatalf("without the program folder: exit code %d, output %q", code, out.String())
+	}
+}
+
+// prepare (spec 3) takes --session-user and nothing else; the user's folder of --purge is the process
+// user's roaming folder, filled for uninstall only.
+func TestPrepareFlags(t *testing.T) {
+	prog, _ := fakePlace(t)
+	var got []install.Options
+	old := adminCommands
+	adminCommands = map[string]func(install.Options, install.Sys) error{}
+	for name := range old {
+		adminCommands[name] = func(o install.Options, s install.Sys) error {
+			got = append(got, o)
+			return nil
+		}
+	}
+	t.Cleanup(func() { adminCommands = old })
+
+	var out strings.Builder
+	if code := run([]string{"prepare", "--session-user"}); code != exitOK || len(got) != 1 || !got[0].SessionUser || got[0].UserSID != "" ||
+		got[0].ProgramDir != prog || got[0].ProductDir != filepath.Dir(prog) {
+		t.Fatalf("prepare --session-user: exit code %d, %+v", code, got)
+	}
+	if code := run([]string{"install", "--session-user"}); code != exitOK || len(got) != 2 || !got[1].SessionUser || got[1].UserSID != "" {
+		t.Fatalf("install --session-user: exit code %d, %+v", code, got)
+	}
+	if code := run([]string{"uninstall", "--purge"}); code != exitOK || len(got) != 3 || !got[2].Purge || !strings.HasSuffix(got[2].UserDataDir, "SplitLane") {
+		t.Fatalf("uninstall --purge: exit code %d, %+v", code, got)
+	}
+	for _, c := range []struct {
+		cmd  string
+		args []string
+		want string
+	}{
+		{"prepare", nil, "--session-user is required"},
+		{"prepare", []string{"--user-sid", "S-1-5-21-1000-2000-3000-1001"}, "flag provided but not defined: -user-sid"},
+		{"prepare", []string{"--session-user", "--purge"}, "flag provided but not defined: -purge"},
+		{"prepare", []string{"--session-user", "extra"}, `unexpected "extra"`},
+		{"uninstall", []string{"--session-user"}, "flag provided but not defined: -session-user"},
+	} {
+		out.Reset()
+		if code := admin(c.cmd, c.args, &out); code != exitUsage || !strings.HasPrefix(out.String(), strings.ToUpper(c.cmd)+"-REFUSED: ") || !strings.Contains(out.String(), c.want) {
+			t.Errorf("%s %v: exit code %d, output %q", c.cmd, c.args, code, out.String())
+		}
+	}
+	if len(got) != 3 {
+		t.Fatalf("a refused command line ran a command: %d", len(got))
+	}
+}
+
+// --session-user and --user-sid exclude each other: a usage error, nothing runs.
+func TestSessionUserAndUserSidExclude(t *testing.T) {
+	fakePlace(t)
+	calls := 0
+	old := adminCommands
+	adminCommands = map[string]func(install.Options, install.Sys) error{
+		"install": func(install.Options, install.Sys) error { calls++; return nil },
+	}
+	t.Cleanup(func() { adminCommands = old })
+	var out strings.Builder
+	code := admin("install", []string{"--session-user", "--user-sid", "S-1-5-21-1000-2000-3000-1001"}, &out)
+	if code != exitUsage || calls != 0 || !strings.HasPrefix(out.String(), "INSTALL-REFUSED: ") || !strings.Contains(out.String(), "--session-user and --user-sid exclude each other") {
+		t.Fatalf("exit code %d, %d calls, output %q", code, calls, out.String())
 	}
 }

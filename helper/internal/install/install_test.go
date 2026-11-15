@@ -42,6 +42,9 @@ type fakeSys struct {
 	inUse    string            // the name of a file that WriteFile cannot replace
 	written  map[string][]byte // what WriteFile wrote, by full path
 	xml      string            // the XML of the task registered
+	session  string            // the user of the session (SessionUserSID); "" is a session without a user
+	procs    [][]Proc          // the answers of ProductProcesses, one per call; none left is "no process"
+	stay     []Proc            // when set, every call of ProductProcesses answers this
 }
 
 func (f *fakeSys) add(format string, a ...any) { f.log = append(f.log, fmt.Sprintf(format, a...)) }
@@ -49,6 +52,24 @@ func (f *fakeSys) add(format string, a ...any) { f.log = append(f.log, fmt.Sprin
 func (f *fakeSys) Token() (string, bool, error) {
 	f.add("sid token")
 	return f.user, f.elevated, nil
+}
+
+func (f *fakeSys) SessionUserSID() (string, error) {
+	f.add("sid session")
+	return f.session, nil
+}
+
+func (f *fakeSys) ProductProcesses(dir string) ([]Proc, error) {
+	f.add("wait procs %s", dir)
+	if f.stay != nil {
+		return f.stay, nil
+	}
+	if len(f.procs) == 0 {
+		return nil, nil
+	}
+	p := f.procs[0]
+	f.procs = f.procs[1:]
+	return p, nil
 }
 
 func (f *fakeSys) AccountName(sid string) (string, error) {
@@ -195,25 +216,28 @@ func sum(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// setup is an elevated setup user with a complete dist\helper, no helper on the pipe, the system
+// setup is an elevated setup user with the complete files in the program folder, no helper on the pipe, the system
 // Tailscale installed without an exit node, and the options of install: the program and data folders
 // in a temporary folder. The pins are those of the fake core and library.
 func setup(t *testing.T) (*fakeSys, Options, *strings.Builder) {
 	t.Helper()
 	root := t.TempDir()
 	out := &strings.Builder{}
+	product := filepath.Join(root, "Program Files", "SplitLane")
 	o := Options{
-		UserSID:    testSID,
-		Exe:        filepath.Join(root, "dist", "helper", "splitlane-helper.exe"),
-		ProgramDir: filepath.Join(root, "Program Files", "SplitLane"),
-		DataDir:    filepath.Join(root, "ProgramData", "SplitLane"),
-		Hostname:   "testpc",
-		Out:        out,
+		UserSID:     testSID,
+		ProductDir:  product,
+		ProgramDir:  filepath.Join(product, "helper"),
+		Exe:         filepath.Join(product, "helper", "splitlane-helper.exe"),
+		DataDir:     filepath.Join(root, "ProgramData", "SplitLane"),
+		UserDataDir: filepath.Join(root, "Users", "tester", "AppData", "Roaming", "SplitLane"),
+		Hostname:    "testpc",
+		Out:         out,
 	}
-	f := &fakeSys{user: testSID, elevated: true, files: map[string][]byte{}, helper: "none",
+	f := &fakeSys{user: testSID, session: testSID, elevated: true, files: map[string][]byte{}, helper: "none",
 		sys: engine.SysStatus{Installed: true}, written: map[string][]byte{}}
 	for _, name := range Files {
-		f.files[filepath.Join(filepath.Dir(o.Exe), name)] = []byte("content of " + name)
+		f.files[filepath.Join(o.ProgramDir, name)] = []byte("content of " + name)
 	}
 	old := pinned
 	pinned = map[string]string{"sing-box.exe": sum("content of sing-box.exe"), "libcronet.dll": sum("content of libcronet.dll")}
@@ -271,16 +295,12 @@ func TestInstallOrder(t *testing.T) {
 	if err := Install(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got, want := steps(f.log), "sid,hash,stop,copy,acl,setup,task"; got != want {
+	if got, want := steps(f.log), "sid,hash,stop,acl,setup,task"; got != want {
 		t.Fatalf("steps %s, want %s; log:\n%s", got, want, strings.Join(f.log, "\n"))
 	}
-	src := filepath.Dir(o.Exe)
 	for _, name := range Files {
-		if got := f.written[filepath.Join(o.ProgramDir, name)]; string(got) != "content of "+name {
-			t.Errorf("%s: %q", name, got)
-		}
-		if !slices.Contains(f.log, "hash read "+name) || f.files[filepath.Join(src, name)] == nil {
-			t.Errorf("%s was not read from %s", name, src)
+		if !slices.Contains(f.log, "hash read "+name) {
+			t.Errorf("%s was not read from %s", name, o.ProgramDir)
 		}
 	}
 	for _, w := range []string{
@@ -361,20 +381,6 @@ func TestInstallRefusesWrongCoreHash(t *testing.T) {
 	}
 }
 
-// A file of the program folder that a program still holds cannot be replaced: install refuses, and the
-// access lists, setup.json and the task are not touched.
-func TestInstallRefusesAFileInUse(t *testing.T) {
-	f, o, out := setup(t)
-	f.helper, f.inUse = "ends", "sing-box.exe"
-	if err := Install(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()), "INSTALL-REFUSED: the program folder: ") ||
-		!strings.Contains(out.String(), "may hold it") {
-		t.Fatalf("%v\n%s", err, out)
-	}
-	if got := steps(f.log); got != "sid,hash,stop,copy" {
-		t.Fatalf("steps %s", got)
-	}
-}
-
 // Review Focus 4: install over an installation that runs, with routing on and the return of the system
 // exit node not confirmed. The disabling of the helper (5.4) keeps it and its core while the exit node
 // is not back, so it does not end within 120 s: install refuses with the reason and replaces neither the
@@ -425,7 +431,7 @@ func TestInstallWithoutPipeRestoresByJournal(t *testing.T) {
 	}
 	core := filepath.Join(o.ProgramDir, "sing-box.exe")
 	if err := inOrder(f.log, []string{"stop shutdown 2m0s", "stop status", "stop set " + exitNode + " true", "stop status",
-		"stop find " + core + " 4242", "stop interrupt 4242", "copy " + filepath.Join(o.ProgramDir, Files[0])}); err != nil {
+		"stop find " + core + " 4242", "stop interrupt 4242", "acl " + o.DataDir + " " + DataSDDL}); err != nil {
 		t.Fatal(err)
 	}
 	if j, err := d.LoadJournal(); j != nil || err != nil {
@@ -511,7 +517,7 @@ func TestDataFolderOfAUserIsNotRead(t *testing.T) {
 		t.Errorf("%v\n%s", err, out)
 	}
 	notRead(f, journal)
-	if err := inOrder(f.log, []string{"stop check " + o.DataDir, "stop shutdown 2m0s", "task delete", "remove " + o.ProgramDir, "remove " + o.DataDir}); err != nil {
+	if err := inOrder(f.log, []string{"stop check " + o.DataDir, "stop shutdown 2m0s", "wait procs " + o.ProductDir, "task delete", "remove " + o.DataDir}); err != nil {
 		t.Error(err)
 	}
 
@@ -520,7 +526,7 @@ func TestDataFolderOfAUserIsNotRead(t *testing.T) {
 	if err := Install(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if err := inOrder(f.log, []string{"stop check " + o.DataDir, "stop shutdown 2m0s", "copy " + filepath.Join(o.ProgramDir, Files[0])}); err != nil {
+	if err := inOrder(f.log, []string{"stop check " + o.DataDir, "stop shutdown 2m0s", "acl " + o.DataDir + " " + DataSDDL}); err != nil {
 		t.Error(err)
 	}
 }
@@ -528,15 +534,15 @@ func TestDataFolderOfAUserIsNotRead(t *testing.T) {
 // uninstall (spec 4.3 point 4) stops first, as install does: a helper on the pipe gets helper.shutdown
 // and must end; one that does not refuses the uninstall, and nothing is removed. Without a helper on the
 // pipe the core left by one that ended abnormally is stopped, by force when the signal is not enough.
-// Only then the task and the program folder go; the data folder stays. A process that is not elevated
-// is refused before anything.
+// Then it waits for the processes of the product to end, and only then the task goes. A process that is
+// not elevated is refused before anything.
 func TestUninstallStopsFirst(t *testing.T) {
 	f, o, out := setup(t)
 	f.helper = "ends"
 	if err := Uninstall(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got := strings.Join(f.log, ","); got != "sid token,stop check "+o.DataDir+",stop shutdown 2m0s,task delete,remove "+o.ProgramDir {
+	if got := strings.Join(f.log, ","); got != "sid token,stop check "+o.DataDir+",stop shutdown 2m0s,wait procs "+o.ProductDir+",task delete" {
 		t.Fatalf("log %s", got)
 	}
 	if lastLine(out.String()) != "UNINSTALL-OK" {
@@ -564,7 +570,7 @@ func TestUninstallStopsFirst(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	if err := inOrder(f.log, []string{"stop shutdown 2m0s", "stop find " + id.Path + " 4343", "stop interrupt 4343", "stop wait 5s",
-		"stop kill 4343", "task delete", "remove " + o.ProgramDir}); err != nil {
+		"stop kill 4343", "wait procs " + o.ProductDir, "task delete"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -575,10 +581,52 @@ func TestUninstallStopsFirst(t *testing.T) {
 	}
 }
 
-// uninstall --purge removes the data folder too, after the program folder, and says that the embedded
-// node stays a device of the Tailscale network (spec 4.3 point 4): the name state.json keeps, else
-// <PC>-splitlane. Without --purge the data folder stays and there is no note.
-func TestUninstallPurge(t *testing.T) {
+// uninstall does not remove the program folder (the uninstaller does), from wherever it runs, even from
+// the program folder itself; the data folder stays without --purge and there is no note.
+func TestUninstallKeepsTheProgramFiles(t *testing.T) {
+	f, o, out := setup(t)
+	if err := Uninstall(o, f); err != nil || lastLine(out.String()) != "UNINSTALL-OK" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if count(f.log, "remove") != 0 || count(f.log, "copy") != 0 || strings.Contains(out.String(), "UNINSTALL-NOTE") {
+		t.Fatalf("log:\n%s", strings.Join(f.log, "\n"))
+	}
+	if count(f.log, "task delete") != 1 {
+		t.Fatalf("the task was not removed:\n%s", strings.Join(f.log, "\n"))
+	}
+}
+
+// Review Focus 1 for uninstall: the helper's process and the core end a moment after the pipe's owner, and
+// their files stay busy until then. The task is removed only when no process of the product is left.
+func TestUninstallWaitsForProcesses(t *testing.T) {
+	f, o, out := setup(t)
+	f.helper = "ends"
+	f.procs = [][]Proc{{{PID: 10, Image: filepath.Join(o.ProgramDir, "splitlane-helper.exe")}}, {{PID: 11, Image: filepath.Join(o.ProgramDir, "sing-box.exe")}}}
+	if err := Uninstall(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := count(f.log, "wait procs"); got != 3 {
+		t.Fatalf("%d looks at the processes:\n%s", got, strings.Join(f.log, "\n"))
+	}
+	if err := inOrder(f.log, []string{"wait procs " + o.ProductDir, "stop wait 500ms", "wait procs " + o.ProductDir, "stop wait 500ms",
+		"wait procs " + o.ProductDir, "task delete"}); err != nil {
+		t.Fatal(err)
+	}
+
+	f, o, out = setup(t)
+	f.stay = []Proc{{PID: 12, Image: filepath.Join(o.ProgramDir, "sing-box.exe")}}
+	if err := Uninstall(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()), "UNINSTALL-REFUSED: sing-box.exe still running (process 12)") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if count(f.log, "task delete") != 0 {
+		t.Fatalf("the task was removed while a process stayed:\n%s", strings.Join(f.log, "\n"))
+	}
+}
+
+// uninstall --purge removes the data folder, then the folder of the user who ran it, and says that the
+// embedded node stays a device of the Tailscale network (spec 4.3 point 4): the name state.json keeps,
+// else <PC>-splitlane. The line of the user's folder has no path of the user.
+func TestPurgeRemovesTheUserFolder(t *testing.T) {
 	note := "UNINSTALL-NOTE: the device %s stays in your Tailscale network; remove it in the Tailscale admin console\nUNINSTALL-OK\n"
 
 	f, o, out := setup(t)
@@ -591,10 +639,11 @@ func TestUninstallPurge(t *testing.T) {
 	if err := Uninstall(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got := strings.Join(f.log, ","); got != "sid token,stop check "+o.DataDir+",stop shutdown 2m0s,task delete,remove "+o.ProgramDir+",remove "+o.DataDir {
+	want := "sid token,stop check " + o.DataDir + ",stop shutdown 2m0s,wait procs " + o.ProductDir + ",task delete,remove " + o.DataDir + ",remove " + o.UserDataDir
+	if got := strings.Join(f.log, ","); got != want {
 		t.Fatalf("log %s", got)
 	}
-	if !strings.HasSuffix(out.String(), fmt.Sprintf(note, "desk-7-splitlane")) {
+	if !strings.HasSuffix(out.String(), fmt.Sprintf(note, "desk-7-splitlane")) || strings.Contains(out.String(), o.UserDataDir) || strings.Contains(out.String(), "tester") {
 		t.Fatalf("output:\n%s", out)
 	}
 
@@ -605,39 +654,214 @@ func TestUninstallPurge(t *testing.T) {
 	}
 
 	f, o, out = setup(t)
-	if err := Uninstall(o, f); err != nil || slices.Contains(f.log, "remove "+o.DataDir) || strings.Contains(out.String(), "UNINSTALL-NOTE") {
+	if err := Uninstall(o, f); err != nil || slices.Contains(f.log, "remove "+o.DataDir) || slices.Contains(f.log, "remove "+o.UserDataDir) {
 		t.Fatalf("%v\n%s\n%v", err, out, f.log)
 	}
 }
 
-// uninstall runs from the application's own copy (dist\helper of the window), never from the program
-// folder it removes: an exe there or below it, in any case of its name, is refused before anything. A
-// folder that only begins with the same name is another folder. install likewise copies from the
-// application's own copy, never from the program folder onto itself.
-func TestUninstallRefusesFromProgramDir(t *testing.T) {
-	for _, exe := range []func(dir string) string{
-		func(dir string) string { return filepath.Join(dir, "splitlane-helper.exe") },
-		func(dir string) string { return strings.ToUpper(filepath.Join(dir, "splitlane-helper.exe")) },
-		func(dir string) string { return filepath.Join(dir, "old", "splitlane-helper.exe") },
+// install runs only from the program folder, where the installer put the files (spec 3): from another
+// folder (the installer's temporary one, the window's own copy) it refuses before it reads a file.
+func TestInstallRunsOnlyFromTheProgramFolder(t *testing.T) {
+	for _, exe := range []func(o Options) string{
+		func(o Options) string { return filepath.Join(o.ProductDir, "dist", "splitlane-helper.exe") },
+		func(o Options) string { return filepath.Join(o.ProductDir, "splitlane-helper.exe") },
+		func(o Options) string { return filepath.Join(o.ProgramDir, "old", "splitlane-helper.exe") },
+		func(o Options) string { return filepath.Join(o.ProgramDir+"2", "splitlane-helper.exe") },
 	} {
 		f, o, out := setup(t)
-		o.Exe = exe(o.ProgramDir)
-		if err := Uninstall(o, f); err == nil || len(f.log) != 0 ||
-			lastLine(out.String()) != "UNINSTALL-REFUSED: uninstall runs from the application's own copy, not from "+o.ProgramDir {
+		o.Exe = exe(o)
+		if err := Install(o, f); err == nil || steps(f.log) != "sid" ||
+			lastLine(out.String()) != "INSTALL-REFUSED: install runs from "+o.ProgramDir+", where the installer puts the files" {
 			t.Errorf("%s: %v\n%s\n%v", o.Exe, err, out, f.log)
 		}
 	}
-
+	// The case of the name does not matter on Windows.
 	f, o, out := setup(t)
-	o.Exe = filepath.Join(o.ProgramDir+"2", "splitlane-helper.exe")
-	if err := Uninstall(o, f); err != nil {
+	o.Exe = strings.ToUpper(o.Exe)
+	if err := Install(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
+}
 
+// install no longer copies: nothing is written into the program folder, and the task runs
+// <ProgramDir>\splitlane-helper.exe.
+func TestInstallDoesNotCopy(t *testing.T) {
+	f, o, out := setup(t)
+	if err := Install(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if n := count(f.log, "copy"); n != 0 || len(f.written) != 0 {
+		t.Fatalf("%d files written:\n%s", n, strings.Join(f.log, "\n"))
+	}
+	if !strings.Contains(f.xml, "<Command>"+esc(filepath.Join(o.ProgramDir, "splitlane-helper.exe"))+"</Command>") {
+		t.Fatalf("task XML:\n%s", f.xml)
+	}
+	if strings.Contains(out.String(), "copied") {
+		t.Fatalf("output:\n%s", out)
+	}
+}
+
+// install still checks the core and the library of the program folder by SHA-256 before it changes
+// anything.
+func TestInstallStillChecksTheCore(t *testing.T) {
+	f, o, out := setup(t)
+	f.files[filepath.Join(o.ProgramDir, "sing-box.exe")] = []byte("another core")
+	if err := Install(o, f); err == nil || !strings.Contains(out.String(), "INSTALL-REFUSED: ") || !strings.Contains(out.String(), "has SHA-256 "+sum("another core")) {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := steps(f.log); got != "sid,hash" {
+		t.Fatalf("steps %s", got)
+	}
+}
+
+// --session-user: the user of the session of this process is the setup user (spec 3); a session without
+// one (session 0 of services, the runner of GitHub Actions) takes the user of the process.
+func TestSessionUserTakesTheSessionUser(t *testing.T) {
+	f, o, out := setup(t)
+	o.UserSID, o.SessionUser = "", true
+	f.session = testSID
+	if err := Install(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !slices.Contains(f.log, "sid session") || !slices.Contains(f.log, "sid account "+testSID) ||
+		!slices.Contains(f.log, "setup "+o.DataDir+" "+testSID) {
+		t.Fatalf("log:\n%s", strings.Join(f.log, "\n"))
+	}
+}
+
+func TestSessionWithoutUserTakesTheProcessUser(t *testing.T) {
+	f, o, out := setup(t)
+	o.UserSID, o.SessionUser = "", true
+	f.session = ""
+	if err := Prepare(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !slices.Contains(f.log, "sid session") || !slices.Contains(f.log, "sid account "+testSID) {
+		t.Fatalf("log:\n%s", strings.Join(f.log, "\n"))
+	}
+}
+
+// mutated counts the calls of the log that change the system.
+func mutated(log []string) int {
+	n := 0
+	for _, p := range []string{"copy", "acl", "setup", "task", "remove", "stop set", "stop interrupt", "stop kill"} {
+		n += count(log, p)
+	}
+	return n
+}
+
+// Review Focus 3: UAC passed by another administrator, the session user is not that administrator.
+// prepare and install refuse before any change.
+func TestSessionUserMismatchRefusesBeforeChanges(t *testing.T) {
+	for _, cmd := range []string{"prepare", "install"} {
+		f, o, out := setup(t)
+		o.UserSID, o.SessionUser = "", true
+		f.session = otherSID // the process runs as testSID
+		f.helper = "ends"
+		run := Prepare
+		if cmd == "install" {
+			run = Install
+		}
+		if err := run(o, f); err == nil ||
+			!strings.HasPrefix(lastLine(out.String()), strings.ToUpper(cmd)+"-REFUSED: UAC was passed under another account: this process runs as "+testSID+", the setup user is "+otherSID) {
+			t.Fatalf("%s: %v\n%s", cmd, err, out)
+		}
+		if mutated(f.log) != 0 || count(f.log, "stop shutdown") != 0 || count(f.log, "hash") != 0 {
+			t.Fatalf("%s: log:\n%s", cmd, strings.Join(f.log, "\n"))
+		}
+	}
+}
+
+func notChanged(t *testing.T, f *fakeSys) {
+	t.Helper()
+	if n := mutated(f.log); n != 0 {
+		t.Fatalf("prepare changed the system:\n%s", strings.Join(f.log, "\n"))
+	}
+}
+
+// Review Focus 1: the helper of stage 1 runs with routing on. prepare stops it by helper.shutdown and then
+// waits until no process of the product is left (the supervisor ends a moment after the worker), every
+// 500 ms. It changes nothing and runs from any folder.
+func TestPrepareStopsTheRunningHelperAndWaits(t *testing.T) {
+	f, o, out := setup(t)
+	f.helper = "ends"
+	o.Exe = filepath.Join(t.TempDir(), "splitlane-helper.exe")
+	f.procs = [][]Proc{{{PID: 10, Image: filepath.Join(o.ProgramDir, "splitlane-helper.exe")}}, {{PID: 11, Image: filepath.Join(o.ProgramDir, "sing-box.exe")}}}
+	if err := Prepare(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if err := inOrder(f.log, []string{"sid token", "sid account " + testSID, "stop check " + o.DataDir, "stop shutdown 2m0s",
+		"wait procs " + o.ProductDir, "stop wait 500ms", "wait procs " + o.ProductDir, "stop wait 500ms", "wait procs " + o.ProductDir}); err != nil {
+		t.Fatal(err)
+	}
+	notChanged(t, f)
+	if lastLine(out.String()) != "PREPARE-OK" {
+		t.Fatalf("output:\n%s", out)
+	}
+}
+
+// Processes that stay for 10 s refuse the preparation with their image names and ids.
+func TestPrepareRefusesWhileProcessesStay(t *testing.T) {
+	f, o, out := setup(t)
+	f.stay = []Proc{{PID: 10, Image: filepath.Join(o.ProgramDir, "splitlane-helper.exe")}, {PID: 11, Image: filepath.Join(o.ProductDir, "sing-box.exe")}}
+	if err := Prepare(o, f); err == nil ||
+		lastLine(out.String()) != "PREPARE-REFUSED: splitlane-helper.exe, sing-box.exe still running (process 10, 11); the files cannot be replaced" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if n := count(f.log, "stop wait 500ms"); n != 20 {
+		t.Fatalf("%d waits of 500 ms, want 20 (10 s)", n)
+	}
+	notChanged(t, f)
+
+	// A process that could not be opened has no image: it counts as still running.
 	f, o, out = setup(t)
-	o.Exe = filepath.Join(o.ProgramDir, "splitlane-helper.exe")
-	if err := Install(o, f); err == nil || steps(f.log) != "sid" ||
-		!strings.HasPrefix(lastLine(out.String()), "INSTALL-REFUSED: install copies the application's own copy into "+o.ProgramDir) {
-		t.Fatalf("%v\n%s\n%v", err, out, f.log)
+	f.stay = []Proc{{PID: 13}}
+	if err := Prepare(o, f); err == nil || !strings.Contains(lastLine(out.String()), "still running (process 13)") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// Review Focus 1: a core left by the helper of stage 1 lies at the root of the product folder; it is
+// looked for by that image when the one in the program folder is not found.
+func TestPrepareFindsTheLegacyCore(t *testing.T) {
+	f, o, out := setup(t)
+	legacy := filepath.Join(o.ProductDir, "sing-box.exe")
+	id := store.CoreIdentity{PID: 4444, Created: 134000000000000000, Path: legacy}
+	st := store.Defaults()
+	st.Core = &id
+	if err := (store.Dir{Path: o.DataDir}).SaveState(st); err != nil {
+		t.Fatal(err)
+	}
+	f.core = &fakeCore{f: f, id: id, done: make(chan struct{}), graceful: true}
+	if err := Prepare(o, f); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if err := inOrder(f.log, []string{"stop find " + filepath.Join(o.ProgramDir, "sing-box.exe") + " 4444", "stop find " + legacy + " 4444",
+		"stop interrupt 4444", "wait procs " + o.ProductDir}); err != nil {
+		t.Fatal(err)
+	}
+	if lastLine(out.String()) != "PREPARE-OK" {
+		t.Fatalf("output:\n%s", out)
+	}
+}
+
+// The return of the exit node not confirmed: prepare refuses with the manual command, before it waits,
+// and changes nothing (the journal stays).
+func TestPrepareRefusesAnUnconfirmedRestore(t *testing.T) {
+	f, o, out := setup(t)
+	d := store.Dir{Path: o.DataDir}
+	if err := d.SaveJournal(store.Journal{ExitNode: exitNode, AllowLAN: true}); err != nil {
+		t.Fatal(err)
+	}
+	err := Prepare(o, f)
+	if err == nil || !strings.HasPrefix(lastLine(out.String()), "PREPARE-REFUSED: the system exit node was not given back within 30s") ||
+		!strings.Contains(out.String(), "give it back by hand: ") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if count(f.log, "wait procs") != 0 {
+		t.Fatalf("log:\n%s", strings.Join(f.log, "\n"))
+	}
+	if j, _ := d.LoadJournal(); j == nil {
+		t.Fatal("the journal went without a confirmed return")
 	}
 }

@@ -52,6 +52,116 @@ func (*System) Token() (string, bool, error) {
 	return u.User.Sid.String(), t.IsElevated(), nil
 }
 
+var (
+	wtsapi32          = windows.NewLazySystemDLL("wtsapi32.dll")
+	procWTSQuerySess  = wtsapi32.NewProc("WTSQuerySessionInformationW")
+	procWTSFreeMemory = wtsapi32.NewProc("WTSFreeMemory")
+)
+
+const (
+	wtsCurrentServerHandle = 0 // WTS_CURRENT_SERVER_HANDLE
+	wtsUserName            = 5 // WTS_INFO_CLASS: WTSUserName
+	wtsDomainName          = 7 // WTS_INFO_CLASS: WTSDomainName
+)
+
+// wtsString is one string of the session sess of this computer (WTSQuerySessionInformationW).
+func wtsString(sess uint32, class uintptr) (string, error) {
+	var buf *uint16
+	var n uint32
+	r, _, err := procWTSQuerySess.Call(wtsCurrentServerHandle, uintptr(sess), class, uintptr(unsafe.Pointer(&buf)), uintptr(unsafe.Pointer(&n)))
+	if r == 0 {
+		return "", err
+	}
+	defer procWTSFreeMemory.Call(uintptr(unsafe.Pointer(buf)))
+	return windows.UTF16PtrToString(buf), nil
+}
+
+// SessionUserSID: the user and domain of this process's session (WTSUserName, WTSDomainName), then their
+// SID (LookupAccountName). A session without a user (session 0 of services) gives "".
+func (*System) SessionUserSID() (string, error) {
+	var sess uint32
+	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &sess); err != nil {
+		return "", fmt.Errorf("the session of this process: %w", err)
+	}
+	user, err := wtsString(sess, wtsUserName)
+	if err != nil {
+		return "", fmt.Errorf("the user of session %d: %w", sess, err)
+	}
+	if user == "" {
+		return "", nil
+	}
+	domain, err := wtsString(sess, wtsDomainName)
+	if err != nil {
+		return "", fmt.Errorf("the domain of session %d: %w", sess, err)
+	}
+	account := user
+	if domain != "" {
+		account = domain + `\` + user
+	}
+	sid, _, _, err := windows.LookupSID("", account)
+	if err != nil {
+		return "", fmt.Errorf("the SID of the session user: %w", err)
+	}
+	return sid.String(), nil
+}
+
+// productImages are the images of the processes that hold the files of the program folder.
+var productImages = []string{"splitlane-helper.exe", "sing-box.exe"}
+
+// ProductProcesses: the snapshot of the processes (as cmd/slguard does), those named as one of
+// productImages, other than this one, whose image (QueryFullProcessImageName) is under productDir. A
+// process that has such a name and cannot be opened is returned without an image: it may be the product's,
+// and the files it holds cannot be replaced.
+func (*System) ProductProcesses(productDir string) ([]Proc, error) {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil, fmt.Errorf("the list of processes: %w", err)
+	}
+	defer windows.CloseHandle(snap)
+	self := windows.GetCurrentProcessId()
+	var e windows.ProcessEntry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	var out []Proc
+	for err = windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
+		name := windows.UTF16ToString(e.ExeFile[:])
+		if e.ProcessID == self || !slices.ContainsFunc(productImages, func(i string) bool { return strings.EqualFold(i, name) }) {
+			continue
+		}
+		image, ok := imagePath(e.ProcessID)
+		switch {
+		case !ok:
+			out = append(out, Proc{PID: e.ProcessID})
+		case insideDir(image, productDir):
+			out = append(out, Proc{PID: e.ProcessID, Image: image})
+		}
+	}
+	if !errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+		return nil, fmt.Errorf("the list of processes: %w", err)
+	}
+	return out, nil
+}
+
+// imagePath is the full path of the image of a process; ok is false when it cannot be found out.
+func imagePath(pid uint32) (string, bool) {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return "", false
+	}
+	defer windows.CloseHandle(h)
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	n := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &n); err != nil {
+		return "", false
+	}
+	return windows.UTF16ToString(buf[:n]), true
+}
+
+// insideDir tells that path is below dir; names compare without case, as on Windows (filepath.Rel).
+func insideDir(path, dir string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // AccountName is DOMAIN\name of the SID, the user of the task.
 func (*System) AccountName(sid string) (string, error) {
 	s, err := windows.StringToSid(sid)

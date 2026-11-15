@@ -8,12 +8,16 @@
 // reaches ends 60 s after the start-up. For development it runs from an elevated terminal with paths
 // in the repository: --dev --data-dir <folder> --core <sing-box.exe>.
 //
-// The window runs the setup with UAC from its own copy, dist\helper (package install, spec 4.3):
+// The installer and the window run the setup with UAC (package install, spec 3 of stage 2):
 //
-//	splitlane-helper.exe install --user-sid <SID>
-//	splitlane-helper.exe uninstall [--purge]
+//	splitlane-helper.exe prepare --session-user          (the installer, from its temporary folder)
+//	splitlane-helper.exe install --session-user          (the installer, from <ProgramDir>)
+//	splitlane-helper.exe install --user-sid <SID>        (the window's repair, from <ProgramDir>)
+//	splitlane-helper.exe uninstall [--purge]             (the uninstaller, from <ProgramDir>)
 //
-// Their lines go to the standard output (the window redirects it); a refusal exits with code 7.
+// --session-user is the user logged on in the session of the process (the user of the process when the
+// session has none); it and --user-sid exclude each other. The last line of their output is
+// <PREPARE|INSTALL|UNINSTALL>-OK or -REFUSED: <reason> (the caller reads it); a refusal exits with code 7.
 //
 // The product is two processes (spec 4): the scheduled task starts the supervisor, which runs this exe
 // again with --worker and starts it anew after a failure (package supervise); the worker is what the
@@ -77,6 +81,8 @@ const idleExit = 60 * time.Second
 // test reads the registry or the known folders or touches %ProgramData%.
 var (
 	programDir  = place.ProgramDir
+	productDir  = place.ProductDir
+	userData    = roamingSplitLane
 	productData = place.DataDir
 	readSetup   = place.ReadSetup
 	executable  = os.Executable
@@ -100,6 +106,7 @@ var setupRetryWait = 200 * time.Millisecond
 // tests replace both.
 var (
 	adminCommands = map[string]func(install.Options, install.Sys) error{
+		"prepare":   install.Prepare,
 		"install":   install.Install,
 		"uninstall": install.Uninstall,
 	}
@@ -417,20 +424,35 @@ func productPlace(helperPath, dataDir string, logf func(string, ...any)) (core, 
 }
 
 var adminUsage = map[string]string{
-	"install":   "splitlane-helper install --user-sid <SID>",
+	"prepare":   "splitlane-helper prepare --session-user",
+	"install":   "splitlane-helper install --session-user | --user-sid <SID>",
 	"uninstall": "splitlane-helper uninstall [--purge]",
 }
 
-// parseAdmin reads the flags of a subcommand: --user-sid of install, which it needs, or --purge of
-// uninstall; nothing else, no flag of the run mode.
+// roamingSplitLane is %AppData%\SplitLane of the user of this process: what --purge removes besides the
+// data folder.
+func roamingSplitLane() (string, error) {
+	dir, err := windows.KnownFolderPath(windows.FOLDERID_RoamingAppData, 0)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "SplitLane"), nil
+}
+
+// parseAdmin reads the flags of a subcommand: --session-user of prepare, which it needs, --session-user or
+// --user-sid of install (one of them), --purge of uninstall; nothing else, no flag of the run mode.
 func parseAdmin(cmd string, args []string) (install.Options, error) {
 	var o install.Options
 	fs := flag.NewFlagSet("splitlane-helper "+cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	if cmd == "install" {
+	switch cmd {
+	case "install":
 		fs.StringVar(&o.UserSID, "user-sid", "", "the SID of the user who runs the setup, S-1-...")
-	} else {
-		fs.BoolVar(&o.Purge, "purge", false, "remove the data folder too")
+		fs.BoolVar(&o.SessionUser, "session-user", false, "the setup user is the user logged on in this session")
+	case "prepare":
+		fs.BoolVar(&o.SessionUser, "session-user", false, "the setup user is the user logged on in this session")
+	default:
+		fs.BoolVar(&o.Purge, "purge", false, "remove the data folder and the user's folder too")
 	}
 	if err := fs.Parse(args); err != nil {
 		return o, fmt.Errorf("%v; usage: %s", err, adminUsage[cmd])
@@ -438,14 +460,18 @@ func parseAdmin(cmd string, args []string) (install.Options, error) {
 	switch {
 	case fs.NArg() != 0:
 		return o, fmt.Errorf("unexpected %q; usage: %s", fs.Arg(0), adminUsage[cmd])
-	case cmd == "install" && o.UserSID == "":
-		return o, fmt.Errorf("--user-sid is required; usage: %s", adminUsage[cmd])
+	case o.SessionUser && o.UserSID != "":
+		return o, fmt.Errorf("--session-user and --user-sid exclude each other; usage: %s", adminUsage[cmd])
+	case cmd == "install" && !o.SessionUser && o.UserSID == "":
+		return o, fmt.Errorf("--user-sid or --session-user is required; usage: %s", adminUsage[cmd])
+	case cmd == "prepare" && !o.SessionUser:
+		return o, fmt.Errorf("--session-user is required; usage: %s", adminUsage[cmd])
 	}
 	return o, nil
 }
 
-// admin runs install or uninstall with its lines to out. The program and data folders come from the
-// system as in the product (package place); the source of install is the folder of the running exe.
+// admin runs prepare, install or uninstall with its lines to out. The folders come from the system as in
+// the product (package place); install runs from ProgramDir, which it checks.
 func admin(cmd string, args []string, out io.Writer) int {
 	refused := strings.ToUpper(cmd) + "-REFUSED"
 	o, err := parseAdmin(cmd, args)
@@ -454,9 +480,14 @@ func admin(cmd string, args []string, out io.Writer) int {
 		return exitUsage
 	}
 	if o.ProgramDir, err = programDir(); err == nil {
-		if o.DataDir, err = productData(); err == nil {
-			o.Exe, err = executable()
+		if o.ProductDir, err = productDir(); err == nil {
+			if o.DataDir, err = productData(); err == nil {
+				o.Exe, err = executable()
+			}
 		}
+	}
+	if err == nil && o.Purge {
+		o.UserDataDir, err = userData()
 	}
 	if err != nil {
 		fmt.Fprintf(out, "%s: %v\n", refused, err)
