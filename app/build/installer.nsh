@@ -16,8 +16,8 @@
 ;   customInstall (after the files): `helper\splitlane-helper.exe install --session-user` in place; the copy
 ;     of the installer that the template puts into %LocalAppData% goes (splitlaneDropInstallerCopy). A refusal
 ;     stops the setup (exit code 2), and a window the setup closed is started again, of the new files.
-;   The result for the window (spec 6 of stage 2 part 2, splitlaneWriteResult): after install, and when
-;     prepare or install refuses, %ProgramData%\SplitLane\export\last-install.txt says ok or refused and why.
+;   The result for the window (spec 6 of stage 2 part 2), %ProgramData%\SplitLane\export\last-install.txt, is
+;     written by the helper's prepare (a refusal) and install, which check the data folder first; not here.
 ; Uninstaller:
 ;   customUnWelcomePage: the page with the check box that adds --purge (silent: the parameter /PURGE).
 ;   customCheckAppRunning: the window is closed (no prepare: the helper's uninstall stops the helper itself).
@@ -195,83 +195,6 @@ Var splitlaneClosed
 !macroend
 
 !ifndef BUILD_UNINSTALLER
-  ; splitlaneWriteResult RESULT REASON: %ProgramData%\SplitLane\export\last-install.txt is replaced whole by three
-  ; lines, ${VERSION}, RESULT (ok or refused) and REASON (one line, "" for ok); CRLF, UTF-8 without BOM. The window
-  ; reads it when it starts again after an update it started. The folder is the helper's install's (administrators
-  ; write, the user reads; spec 1, 4.2) and is not made here: without it nothing is written. A write that fails
-  ; is no failure of the setup: no message; the registers, the error flag and the shell context stay as they were.
-  !macro splitlaneWriteResult RESULT REASON
-    Push "${VERSION}$\r$\n${RESULT}$\r$\n${REASON}$\r$\n"
-    Call splitlaneWriteResultFile
-  !macroend
-
-  ; Push <text>, Call. The text (UTF-16 in NSIS) is converted to UTF-8 with WideCharToMultiByte and written with
-  ; WriteFile: FileWrite of the Unicode NSIS converts to the ANSI code page. A file left half written is removed.
-  Function splitlaneWriteResultFile
-    Exch $R0 ; the text
-    Push $R1 ; $APPDATA of the shell context in effect, then the file's handle
-    Push $R2 ; the folder
-    Push $R3 ; the size of the UTF-8 text, with its NUL, then without
-    Push $R4 ; the buffer of the UTF-8 text
-    Push $R5 ; "1" when the error flag was set
-    Push $R6 ; what WriteFile returns, then "done" when the whole text is written
-    Push $R7 ; the bytes written
-    StrCpy $R5 ""
-    ${If} ${Errors} ; it clears the flag
-      StrCpy $R5 "1"
-    ${EndIf}
-    ; %ProgramData% is the known folder, as for the helper: $APPDATA of the shell context "all". The template sets
-    ; "all" in .onInit (perMachine); a context "current" (its $APPDATA differs) is put back at once.
-    StrCpy $R1 $APPDATA
-    SetShellVarContext all
-    StrCpy $R2 "$APPDATA\SplitLane\export"
-    ${If} $R1 != $APPDATA
-      SetShellVarContext current
-    ${EndIf}
-    ${If} ${FileExists} "$R2\*.*"
-      FileOpen $R1 "$R2\last-install.txt" w
-      ${IfNot} ${Errors}
-        StrCpy $R6 ""
-        System::Call 'kernel32::WideCharToMultiByte(i 65001, i 0, w R0, i -1, p 0, i 0, p 0, p 0) i .R3'
-        ${If} $R3 > 1
-          System::Alloc $R3
-          Pop $R4
-          ${If} $R4 != 0
-            System::Call 'kernel32::WideCharToMultiByte(i 65001, i 0, w R0, i -1, p R4, i R3, p 0, p 0) i .R3'
-            ${If} $R3 > 1
-              IntOp $R3 $R3 - 1
-              StrCpy $R7 0
-              System::Call 'kernel32::WriteFile(p R1, p R4, i R3, *i 0 R7, p 0) i .R6'
-              ${If} $R6 != 0
-              ${AndIf} $R7 == $R3
-                StrCpy $R6 "done"
-              ${Else}
-                StrCpy $R6 ""
-              ${EndIf}
-            ${EndIf}
-            System::Free $R4
-          ${EndIf}
-        ${EndIf}
-        FileClose $R1
-        ${If} $R6 != "done"
-          Delete "$R2\last-install.txt"
-        ${EndIf}
-      ${EndIf}
-    ${EndIf}
-    ClearErrors
-    ${If} $R5 == "1"
-      SetErrors
-    ${EndIf}
-    Pop $R7
-    Pop $R6
-    Pop $R5
-    Pop $R4
-    Pop $R3
-    Pop $R2
-    Pop $R1
-    Pop $R0
-  FunctionEnd
-
   ; Spec 3, steps 2 and 3: prepare, then the stage 1 layout leaves the root.
   !macro splitlanePrepare
     ; installSection.nsh hides the details of the wizard (none; both when silent); this step shows its line
@@ -289,8 +212,6 @@ Var splitlaneClosed
     Pop $1 ; the output
     ${If} $0 != 0
       !insertmacro splitlaneReason PREPARE "splitlane-helper.exe prepare: $0"
-      ; before the window starts again: it reads the result when it starts
-      !insertmacro splitlaneWriteResult refused $1
       MessageBox MB_OK|MB_ICONSTOP "SplitLane не установлен: $1" /SD IDOK
       !insertmacro splitlaneStartWindow
       SetErrorLevel 2
@@ -327,15 +248,12 @@ Var splitlaneClosed
   !insertmacro splitlaneDropInstallerCopy
   ${If} $0 != 0
     !insertmacro splitlaneReason INSTALL "splitlane-helper.exe install: $0"
-    !insertmacro splitlaneWriteResult refused $1
     MessageBox MB_OK|MB_ICONSTOP "SplitLane не установлен: $1" /SD IDOK
     ; the window of the new files (Abort skips --force-run): its repair screen and the result of the update
     !insertmacro splitlaneStartWindow
     SetErrorLevel 2
     Abort
   ${EndIf}
-  ; before --force-run starts the window
-  !insertmacro splitlaneWriteResult ok ""
 !macroend
 
 !macro customUnWelcomePage

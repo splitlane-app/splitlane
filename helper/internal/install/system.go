@@ -20,6 +20,7 @@ import (
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 
+	"splitlane/helper/internal/atomicfile"
 	"splitlane/helper/internal/engine"
 	"splitlane/helper/internal/pipe"
 	"splitlane/helper/internal/place"
@@ -399,6 +400,8 @@ func checkOwner(dir string, owners []string) error {
 }
 
 func (*System) WriteSetup(dataDir string, s place.Setup) error { return place.WriteSetup(dataDir, s) }
+
+func (*System) WriteResult(path string, data []byte) error { return atomicfile.Write(path, data) }
 
 // RegisterTask: the XML in UTF-16 LE with a BOM in dir\task.xml, schtasks /create /tn ... /xml ... /f
 // (the task is replaced when it is there), the file removed after.

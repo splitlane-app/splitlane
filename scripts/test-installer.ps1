@@ -6,9 +6,10 @@
 # must stay; the silent uninstall without /PURGE (the data stays, the window's autostart value goes); the
 # install and the silent uninstall with /PURGE (the data goes). After every install the template's copy of
 # the installer in %LocalAppData%\splitlane-app-updater must be gone, and %ProgramData%\SplitLane\export\
-# last-install.txt (removed before each install) must hold the installer's result for the window: the version
-# of the installer (from its name, SplitLane-Setup-<version>.exe), ok and an empty reason, CRLF, UTF-8 without
-# BOM (spec 6 of stage 2 part 2). The helper is never started and the network is not touched.
+# last-install.txt (removed before each install) must hold the result for the window that the helper's install
+# writes: its version, which is the installer's (from its name, SplitLane-Setup-<version>.exe), ok and an empty
+# reason, CRLF, UTF-8 without BOM (spec 6 of stage 2 part 2). The helper is never started as a service (the
+# installer runs its prepare and install) and the network is not touched.
 # It changes the machine: %ProgramFiles%\SplitLane, %ProgramData%\SplitLane, %AppData%\SplitLane of this user,
 # the task "SplitLane Helper", the uninstall entry, the shortcuts and the value SplitLane under HKCU Run. So it
 # runs only as an administrator on a machine without SplitLane and without Tailscale (the runner of GitHub
@@ -35,7 +36,7 @@ $helper = Join-Path $product 'helper'
 $data = Join-Path $env:ProgramData 'SplitLane'
 $userData = Join-Path $env:APPDATA 'SplitLane'
 $marker = 'splitlane-test-marker.txt'
-# the installer's result for the window (app\build\installer.nsh splitlaneWriteResult)
+# the result for the window (helper\internal\install recordResult, run by the installer's install step)
 $lastInstall = Join-Path $data 'export\last-install.txt'
 # the folder of the template's copy of the installer (<package name>-updater), removed by the installer
 $installerCopy = Join-Path $env:LOCALAPPDATA 'splitlane-app-updater'

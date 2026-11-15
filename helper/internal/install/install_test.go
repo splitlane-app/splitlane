@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/sys/windows"
+
+	"splitlane/helper/internal/atomicfile"
 	"splitlane/helper/internal/engine"
 	"splitlane/helper/internal/place"
 	"splitlane/helper/internal/singbox"
@@ -46,6 +50,8 @@ type fakeSys struct {
 	stay     []Proc            // when set, every call of ProductProcesses answers this
 	data     string            // the data folder: a helper that ends saves its state.json there, "was on" off
 	sup      *supervisor       // when set, the supervisor of stage 2 answers ProductProcesses
+	taskErr  error             // when set, RegisterTask fails with it
+	writeErr error             // when set, WriteResult fails with it; else it writes with atomicfile
 }
 
 // supervisor is the supervisor of stage 2 in its pause before a restart (spec 4): it runs, and from the call
@@ -170,7 +176,8 @@ func (f *fakeSys) FindCore(exe string, id store.CoreIdentity) (engine.CoreProc, 
 	return f.core, true
 }
 
-// CheckDir finds the temporary folder as it is; one that is there belongs to dirOwner when it is set.
+// CheckDir finds the temporary folder as it is, with the real check (a link, a junction or a file is
+// refused) and the user of the test as an administrator; one that is there belongs to dirOwner when it is set.
 func (f *fakeSys) CheckDir(dir string) (bool, error) {
 	f.add("stop check %s", dir)
 	if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
@@ -179,7 +186,24 @@ func (f *fakeSys) CheckDir(dir string) (bool, error) {
 	if f.dirOwner != "" {
 		return true, fmt.Errorf("%s is there and belongs to %s: it was not made by an administrator; remove it first", dir, f.dirOwner)
 	}
-	return true, nil
+	return checkDir(dir, testOwners)
+}
+
+// testOwners own the temporary folders: the user of the test, or the administrators when it runs elevated.
+var testOwners = func() []string {
+	u, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		panic(err)
+	}
+	return append([]string{u.User.Sid.String()}, adminOwners...)
+}()
+
+func (f *fakeSys) WriteResult(path string, data []byte) error {
+	f.add("result write %s", path)
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	return atomicfile.Write(path, data)
 }
 
 // After fires at once: the tests do not wait.
@@ -203,7 +227,7 @@ func (f *fakeSys) WriteSetup(dataDir string, s place.Setup) error {
 func (f *fakeSys) RegisterTask(xml, dir string) error {
 	f.add("task register %s", dir)
 	f.xml = xml
-	return nil
+	return f.taskErr
 }
 
 func (f *fakeSys) DeleteTask() error {
@@ -263,6 +287,7 @@ func setup(t *testing.T) (*fakeSys, Options, *strings.Builder) {
 	out := &strings.Builder{}
 	product := filepath.Join(root, "Program Files", "SplitLane")
 	o := Options{
+		Version:     "1.2.3",
 		UserSID:     testSID,
 		ProductDir:  product,
 		ProgramDir:  filepath.Join(product, "helper"),
@@ -333,7 +358,8 @@ func TestInstallOrder(t *testing.T) {
 	if err := Install(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got, want := steps(f.log), "sid,hash,stop,acl,setup,task"; got != want {
+	// the last stop: the result for the window checks the data folder (the fake makes none: nothing recorded)
+	if got, want := steps(f.log), "sid,hash,stop,acl,setup,task,stop"; got != want {
 		t.Fatalf("steps %s, want %s; log:\n%s", got, want, strings.Join(f.log, "\n"))
 	}
 	for _, name := range Files {
@@ -363,8 +389,9 @@ func TestInstallOrder(t *testing.T) {
 }
 
 // UAC passed under another account (spec 4.3): the user of the elevated process is not the one the
-// window names. Install refuses before it reads anything else. A process that is not elevated and a
-// SID that is not plain S-1-... (it goes into access lists) are refused as well.
+// window names. Install refuses before it reads anything else (then only the result for the window checks
+// the data folder). A process that is not elevated and a SID that is not plain S-1-... (it goes into access
+// lists) are refused as well.
 func TestInstallRefusesOtherUser(t *testing.T) {
 	f, o, out := setup(t)
 	f.user = otherSID
@@ -372,20 +399,20 @@ func TestInstallRefusesOtherUser(t *testing.T) {
 		!strings.HasPrefix(lastLine(out.String()), "INSTALL-REFUSED: UAC was passed under another account: this process runs as "+otherSID+", the setup user is "+testSID) {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got := strings.Join(f.log, ","); got != "sid token" {
+	if got := strings.Join(f.log, ","); got != "sid token,stop check "+o.DataDir {
 		t.Fatalf("log %s", got)
 	}
 
 	f, o, out = setup(t)
 	f.elevated = false
-	if err := Install(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()), "INSTALL-REFUSED: install runs elevated") || len(f.log) != 1 {
+	if err := Install(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()), "INSTALL-REFUSED: install runs elevated") || len(f.log) != 2 {
 		t.Fatalf("%v\n%s\n%v", err, out, f.log)
 	}
 
 	for _, bad := range []string{"", "WD", "s-1-5-21-1000-2000-3000-1001", testSID + ")(A;;GA;;;WD", " " + testSID} {
 		f, o, out = setup(t)
 		o.UserSID, f.user = bad, bad
-		if err := Install(o, f); err == nil || len(f.log) != 0 || !strings.Contains(out.String(), "is not a SID in the form S-1-...") {
+		if err := Install(o, f); err == nil || strings.Join(f.log, ",") != "stop check "+o.DataDir || !strings.Contains(out.String(), "is not a SID in the form S-1-...") {
 			t.Errorf("%q: %v\n%s\n%v", bad, err, out, f.log)
 		}
 	}
@@ -413,7 +440,7 @@ func TestInstallRefusesWrongCoreHash(t *testing.T) {
 		if err := Install(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()), "INSTALL-REFUSED: ") || !strings.Contains(out.String(), c.want) {
 			t.Errorf("%s: %v\n%s", c.name, err, out)
 		}
-		if got := steps(f.log); got != "sid,hash" {
+		if got := steps(f.log); got != "sid,hash,stop" { // stop: the result's check of the data folder
 			t.Errorf("%s: steps %s", c.name, got)
 		}
 	}
@@ -434,7 +461,8 @@ func TestReinstallWaitsForRestore(t *testing.T) {
 	if got := steps(f.log); got != "sid,hash,stop" {
 		t.Fatalf("steps %s; log:\n%s", got, strings.Join(f.log, "\n"))
 	}
-	if got := strings.Join(f.log[len(f.log)-1:], ""); got != "stop shutdown 2m0s" {
+	// after the shutdown only the result for the window checks the data folder (not there: nothing recorded)
+	if got := strings.Join(f.log[len(f.log)-2:], ","); got != "stop shutdown 2m0s,stop check "+o.DataDir {
 		t.Fatalf("last %q", got)
 	}
 }
@@ -708,7 +736,7 @@ func TestInstallRunsOnlyFromTheProgramFolder(t *testing.T) {
 	} {
 		f, o, out := setup(t)
 		o.Exe = exe(o)
-		if err := Install(o, f); err == nil || steps(f.log) != "sid" ||
+		if err := Install(o, f); err == nil || steps(f.log) != "sid,stop" ||
 			lastLine(out.String()) != "INSTALL-REFUSED: install runs from "+o.ProgramDir+", where the installer puts the files" {
 			t.Errorf("%s: %v\n%s\n%v", o.Exe, err, out, f.log)
 		}
@@ -721,8 +749,8 @@ func TestInstallRunsOnlyFromTheProgramFolder(t *testing.T) {
 	}
 }
 
-// install no longer copies (Sys has no way to write a file): the task runs
-// <ProgramDir>\splitlane-helper.exe.
+// install no longer copies (Sys writes no file of the program, only setup.json and the result for the
+// window): the task runs <ProgramDir>\splitlane-helper.exe.
 func TestInstallDoesNotCopy(t *testing.T) {
 	f, o, out := setup(t)
 	if err := Install(o, f); err != nil {
@@ -744,7 +772,7 @@ func TestInstallStillChecksTheCore(t *testing.T) {
 	if err := Install(o, f); err == nil || !strings.Contains(out.String(), "INSTALL-REFUSED: ") || !strings.Contains(out.String(), "has SHA-256 "+sum("another core")) {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if got := steps(f.log); got != "sid,hash" {
+	if got := steps(f.log); got != "sid,hash,stop" {
 		t.Fatalf("steps %s", got)
 	}
 }
@@ -1098,5 +1126,185 @@ func TestPurgeUnderAnotherAdminKeepsTheUserFolder(t *testing.T) {
 	f, o, out = setup(t)
 	if err := Uninstall(o, f); err != nil || slices.Contains(f.log, "sid session") {
 		t.Fatalf("%v\n%s\n%v", err, out, f.log)
+	}
+}
+
+// mkExport makes the data folder and export\ as an earlier install left them (the fake's SecureDir makes no
+// folder) and returns the path of the result file.
+func mkExport(t *testing.T, o Options) string {
+	t.Helper()
+	dir := filepath.Join(o.DataDir, "export")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(dir, ResultFile)
+}
+
+// readResult is the result file, and whether it is there.
+func readResult(t *testing.T, file string) (string, bool) {
+	t.Helper()
+	b, err := os.ReadFile(file)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b), true
+}
+
+// refusedResult is the result file of a refusal: the reason is that of the -REFUSED line.
+func refusedResult(out, label string) string {
+	return "1.2.3\r\nrefused\r\n" + strings.TrimPrefix(lastLine(out), label+"-REFUSED: ") + "\r\n"
+}
+
+// Spec 6 of stage 2 part 2: install records ok for the window once the task is registered: the version of
+// this helper, ok and an empty reason, CRLF, UTF-8 without BOM; an older result is replaced whole, and no
+// temporary file is left.
+func TestInstallRecordsOk(t *testing.T) {
+	f, o, out := setup(t)
+	file := mkExport(t, o)
+	if err := os.WriteFile(file, []byte(strings.Repeat("0.9.9\r\nrefused\r\nan older result\r\n", 10)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(o, f); err != nil || lastLine(out.String()) != "INSTALL-OK" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got, ok := readResult(t, file); !ok || got != "1.2.3\r\nok\r\n\r\n" {
+		t.Fatalf("result %q %v", got, ok)
+	}
+	if err := inOrder(f.log, []string{"task register " + o.DataDir, "stop check " + o.DataDir, "stop check " + filepath.Dir(file), "result write " + file}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(file))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("export holds %v (%v), want only %s", entries, err, ResultFile)
+	}
+}
+
+// install refuses: the result says refused with the reason of the INSTALL-REFUSED line, on one line; a task
+// that could not be registered is a refusal, never ok.
+func TestInstallRecordsARefusal(t *testing.T) {
+	f, o, out := setup(t)
+	file := mkExport(t, o)
+	f.helper = "stays"
+	if err := Install(o, f); err == nil {
+		t.Fatalf("install did not refuse:\n%s", out)
+	}
+	if got, _ := readResult(t, file); got != refusedResult(out.String(), "INSTALL") || !strings.Contains(got, "reason=restore_pending") {
+		t.Fatalf("result %q\noutput:\n%s", got, out)
+	}
+
+	f, o, out = setup(t)
+	file = mkExport(t, o)
+	f.taskErr = errors.New("schtasks /create: exit status 1: ERROR: the first line\r\nthe second line")
+	if err := Install(o, f); err == nil {
+		t.Fatalf("install did not refuse:\n%s", out)
+	}
+	if got, _ := readResult(t, file); got != "1.2.3\r\nrefused\r\nthe task "+TaskName+": schtasks /create: exit status 1: ERROR: the first line the second line\r\n" {
+		t.Fatalf("result %q", got)
+	}
+}
+
+// prepare records a refusal with the reason of its PREPARE-REFUSED line, and nothing when it succeeds
+// (install records the outcome of the setup).
+func TestPrepareRecordsARefusal(t *testing.T) {
+	f, o, out := setup(t)
+	file := mkExport(t, o)
+	f.stay = []Proc{{PID: 10, Image: filepath.Join(o.ProgramDir, "splitlane-helper.exe")}}
+	if err := Prepare(o, f); err == nil {
+		t.Fatalf("prepare did not refuse:\n%s", out)
+	}
+	want := "1.2.3\r\nrefused\r\nsplitlane-helper.exe still running (process 10); the files cannot be replaced\r\n"
+	if got, _ := readResult(t, file); got != want || got != refusedResult(out.String(), "PREPARE") {
+		t.Fatalf("result %q, want %q", got, want)
+	}
+
+	f, o, out = setup(t)
+	file = mkExport(t, o)
+	f.helper = "ends"
+	if err := Prepare(o, f); err != nil || lastLine(out.String()) != "PREPARE-OK" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got, ok := readResult(t, file); ok || count(f.log, "result") != 0 {
+		t.Fatalf("prepare recorded a success: %q", got)
+	}
+}
+
+// A data folder that does not pass CheckDir (a user made it before the first install, with links of his own
+// in it): neither prepare nor install writes the result there, and a line says why.
+func TestNoRecordInAnUntrustedDataFolder(t *testing.T) {
+	for _, run := range []func(Options, Sys) error{Prepare, Install} {
+		f, o, out := setup(t)
+		file := mkExport(t, o)
+		f.dirOwner = otherSID
+		if err := run(o, f); err == nil || !strings.Contains(lastLine(out.String()), "-REFUSED: the data folder: ") {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if _, ok := readResult(t, file); ok || count(f.log, "result") != 0 {
+			t.Fatalf("a result was written into a user's folder; log:\n%s", strings.Join(f.log, "\n"))
+		}
+		if !strings.Contains(out.String(), ": the result for the window is not recorded: "+o.DataDir+" is there and belongs to "+otherSID) {
+			t.Fatalf("output:\n%s", out)
+		}
+	}
+}
+
+// export\ is a junction to another folder (mklink /J inside a temporary folder needs no administrator):
+// nothing is written through it, after a success or a refusal; the outcome stays.
+func TestNoRecordThroughALinkedExportFolder(t *testing.T) {
+	for _, refuse := range []bool{false, true} {
+		f, o, out := setup(t)
+		target := t.TempDir()
+		if err := os.MkdirAll(o.DataDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(o.DataDir, "export")
+		if b, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+			t.Fatalf("mklink /J: %v: %s", err, b)
+		}
+		want := "INSTALL-OK"
+		if refuse {
+			f.helper, want = "stays", "INSTALL-REFUSED: the helper that runs did not end: "
+		}
+		if err := Install(o, f); (err != nil) != refuse || !strings.HasPrefix(lastLine(out.String()), want) {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if entries, err := os.ReadDir(target); err != nil || len(entries) != 0 || count(f.log, "result") != 0 {
+			t.Fatalf("written through the junction: %v %v; log:\n%s", entries, err, strings.Join(f.log, "\n"))
+		}
+		if !strings.Contains(out.String(), "INSTALL: the result for the window is not recorded: "+link+" is not a plain folder") {
+			t.Fatalf("output:\n%s", out)
+		}
+	}
+}
+
+// A result that cannot be written is a line: install still succeeds or refuses as it did, with its own reason.
+func TestRecordFailureDoesNotChangeTheOutcome(t *testing.T) {
+	f, o, out := setup(t)
+	mkExport(t, o)
+	f.writeErr = errors.New("access is denied")
+	if err := Install(o, f); err != nil || lastLine(out.String()) != "INSTALL-OK" ||
+		!strings.Contains(out.String(), "INSTALL: the result for the window is not recorded: access is denied\n") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	f, o, out = setup(t)
+	mkExport(t, o)
+	f.writeErr = errors.New("access is denied")
+	f.stay = []Proc{{PID: 10}}
+	if err := Prepare(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()), "PREPARE-REFUSED: splitlane-helper.exe or sing-box.exe still running (process 10)") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+
+	// No data folder (a first install that refuses): nothing to write into, and the outcome stays.
+	f, o, out = setup(t)
+	f.helper = "stays"
+	if err := Install(o, f); err == nil || !strings.HasPrefix(lastLine(out.String()), "INSTALL-REFUSED: the helper that runs did not end: ") ||
+		!strings.Contains(out.String(), "INSTALL: the result for the window is not recorded: "+o.DataDir+" is not there\n") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := os.Lstat(o.DataDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the data folder was made: %v", err)
 	}
 }

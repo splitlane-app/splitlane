@@ -516,6 +516,7 @@ func admin(cmd string, args []string, out io.Writer) int {
 		return exitRefused
 	}
 	o.Hostname, _ = os.Hostname()
+	o.Version = version
 	o.Out = out
 	if adminCommands[cmd](o, newSys()) != nil {
 		return exitRefused // the command printed its -REFUSED line

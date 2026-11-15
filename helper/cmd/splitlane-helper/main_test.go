@@ -417,7 +417,8 @@ func TestStateLineHasReasonParams(t *testing.T) {
 // The subcommands install and uninstall (spec 4.3) come first, before any flag of the run mode:
 // install takes --user-sid only and needs it, uninstall takes --purge only. The folders come from the
 // system as in the product, never from the command line; the lines go to the output that the window
-// reads, and a refusal exits with code 7 (a usage error with 2). The commands are replaced here.
+// reads, and a refusal exits with code 7 (a usage error with 2). The version of the result file is this
+// helper's own (main.version). The commands are replaced here.
 func TestInstallSubcommandArgs(t *testing.T) {
 	prog, data := fakePlace(t)
 	const sid = "S-1-5-21-1000-2000-3000-1001"
@@ -438,7 +439,8 @@ func TestInstallSubcommandArgs(t *testing.T) {
 		t.Fatalf("exit code %d, %d calls, output:\n%s", code, len(got), out.String())
 	}
 	o := got[0]
-	if o.UserSID != sid || o.Purge || o.ProgramDir != prog || o.DataDir != data || o.ProductDir != filepath.Dir(prog) || o.SessionUser || o.Exe != filepath.Join(prog, "splitlane-helper.exe") || o.Out != &out {
+	if o.UserSID != sid || o.Purge || o.ProgramDir != prog || o.DataDir != data || o.ProductDir != filepath.Dir(prog) || o.SessionUser || o.Exe != filepath.Join(prog, "splitlane-helper.exe") || o.Out != &out ||
+		o.Version != version {
 		t.Fatalf("options %+v", o)
 	}
 	if code := run([]string{"uninstall", "--purge"}); code != exitOK || len(got) != 2 || !got[1].Purge || got[1].UserSID != "" {

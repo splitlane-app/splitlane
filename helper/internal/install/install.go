@@ -3,7 +3,8 @@
 // touches them, stops the helper of an earlier version and waits for its processes to end; install, run
 // from the program folder, makes the data folder with its access list (4.2), writes setup.json and
 // registers the scheduled task; uninstall stops the helper, waits and takes the task away (the files are
-// the uninstaller's). A helper that runs is stopped first, and nothing is replaced or removed until it
+// the uninstaller's). prepare and install leave their result for the window in export\ (recordResult, spec
+// 6 of stage 2 part 2). A helper that runs is stopped first, and nothing is replaced or removed until it
 // has given the system exit node back and ended (Review Focus 4 of plan 1B). Every effect on the system
 // sits behind Sys, so the tests run on a fake; System is the real one.
 package install
@@ -63,8 +64,12 @@ const (
 	waitTries     = int(waitWithin / waitEvery)
 )
 
+// ResultFile is the result of prepare and install for the window, in <DataDir>\export (recordResult).
+const ResultFile = "last-install.txt"
+
 // Options are what the command line and the system give install and uninstall.
 type Options struct {
+	Version     string    // the version of this helper (main.version): the first line of ResultFile
 	UserSID     string    // install: the setup user, plain S-1-... (--user-sid); the pipe and export\ give him access
 	SessionUser bool      // prepare, install: the setup user is the user of the session of this process (--session-user)
 	Purge       bool      // uninstall: remove the data folder and the user's folder too (--purge)
@@ -115,6 +120,9 @@ type Sys interface {
 	// CheckDir tells whether the folder dir is there; one that is there must be a plain folder, not a
 	// link or a junction, made by an administrator (as SecureDir requires), else the error says why.
 	CheckDir(dir string) (there bool, err error)
+	// WriteResult replaces the file path with data (atomicfile.Write: a temporary file in the same folder,
+	// renamed over path, so a link at path is replaced, never followed): recordResult only.
+	WriteResult(path string, data []byte) error
 	// After is time.After.
 	After(d time.Duration) <-chan time.Time
 	// SecureDir makes the folder dir with the access list sddl, or gives the list to the folder that is
@@ -147,6 +155,38 @@ func progress(o Options, label string) sayFunc {
 	return func(format string, a ...any) { fmt.Fprintf(output(o), label+": "+format+"\n", a...) }
 }
 
+// recordResult writes <DataDir>\export\ResultFile for the window, which reads it when it starts again after an
+// update it started (spec 6 of stage 2 part 2): three lines, o.Version, ok or refused, and the reason (the text
+// of the -REFUSED line, on one line; empty for ok), each ended by CRLF, UTF-8 without BOM, the file replaced
+// whole. Only into a data folder and a folder export that pass CheckDir (plain folders, not links or junctions,
+// made by an administrator): a refusal may come from a data folder that a user made, with links of his own in
+// it, and this process writes with administrator rights. Neither folder is made here. A result that cannot be
+// recorded is a line; the outcome of the command stays as it is.
+func recordResult(o Options, s Sys, say sayFunc, cmdErr error) {
+	export := filepath.Join(o.DataDir, "export")
+	for _, dir := range []string{o.DataDir, export} {
+		there, err := s.CheckDir(dir)
+		switch {
+		case err != nil:
+			say("the result for the window is not recorded: %v", err)
+			return
+		case !there:
+			say("the result for the window is not recorded: %s is not there", dir)
+			return
+		}
+	}
+	result, reason := "ok", ""
+	if cmdErr != nil {
+		result, reason = "refused", oneLine.Replace(cmdErr.Error())
+	}
+	if err := s.WriteResult(filepath.Join(export, ResultFile), []byte(o.Version+"\r\n"+result+"\r\n"+reason+"\r\n")); err != nil {
+		say("the result for the window is not recorded: %v", err)
+	}
+}
+
+// oneLine puts a text of several lines on one.
+var oneLine = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ")
+
 // finish prints the last line, <label>-OK or <label>-REFUSED: <reason>, and returns err.
 func finish(o Options, label string, err error) error {
 	if err != nil {
@@ -164,9 +204,13 @@ func finish(o Options, label string, err error) error {
 // before the first install, with a journal of his own in it; step 4 would refuse it anyway), then the
 // helper that runs is stopped, or without one what an abnormal end left is undone (stopOld); 4. the data
 // folder and export\ get their access lists; 5. setup.json (a product helper without it exits with code
-// 6); 6. the scheduled task. It prints INSTALL-OK, or INSTALL-REFUSED: <reason> and returns the error.
+// 6); 6. the scheduled task. Then the result for the window, ok once the task is registered, else refused
+// (recordResult). It prints INSTALL-OK, or INSTALL-REFUSED: <reason> and returns the error.
 func Install(o Options, s Sys) error {
-	return finish(o, "INSTALL", install(o, s, progress(o, "INSTALL")))
+	say := progress(o, "INSTALL")
+	err := install(o, s, say)
+	recordResult(o, s, say, err)
+	return finish(o, "INSTALL", err)
 }
 
 func install(o Options, s Sys, say sayFunc) error {
@@ -209,10 +253,16 @@ func install(o Options, s Sys, say sayFunc) error {
 // (stopOld), then the wait until no process of the product is left. It changes no file of the program, no
 // access list and no task; stopOld may give the system exit node back, drop restore.json after a confirmed
 // return and stop a core left from an earlier run. An update keeps splitting as it was: helper.shutdown
-// writes "was on" off in state.json, so prepare reads it before and writes it back after (keepOn). It prints
-// PREPARE-OK, or PREPARE-REFUSED: <reason> and returns the error.
+// writes "was on" off in state.json, so prepare reads it before and writes it back after (keepOn). A refusal
+// is recorded for the window (recordResult); a success is not: install records the outcome of the setup. It
+// prints PREPARE-OK, or PREPARE-REFUSED: <reason> and returns the error.
 func Prepare(o Options, s Sys) error {
-	return finish(o, "PREPARE", prepare(o, s, progress(o, "PREPARE")))
+	say := progress(o, "PREPARE")
+	err := prepare(o, s, say)
+	if err != nil {
+		recordResult(o, s, say, err)
+	}
+	return finish(o, "PREPARE", err)
 }
 
 func prepare(o Options, s Sys, say sayFunc) error {
