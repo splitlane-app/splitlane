@@ -19,7 +19,7 @@ test('App picks the screen by the link and shows the board once there is a state
   const { bridge } = fakeBridge()
   const services = servicesFor(bridge, { ...snap(), link: { kind: 'setup-needed' }, state: null })
   renderWith(<App />, services)
-  expect(screen.getByRole('heading', { name: 'Настройка' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Первая настройка' })).toBeTruthy()
 
   act(() => services.store.getState().setSnapshot(snap({ phase: 'off' })))
   expect(screen.getByRole('region', { name: 'Через VPN' })).toBeTruthy()

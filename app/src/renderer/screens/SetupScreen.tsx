@@ -4,8 +4,8 @@ import { useApp, useServices } from '../services'
 import styles from './screens.module.css'
 
 /**
- * The first-run «Настройка» (spec 4.3) and, for a helper older than the window, the update (5.1): one button that
- * runs the install with the Windows prompt, the progress and the outcome.
+ * The first-run «Первая настройка» (spec 4.3) and, for a helper older than the window, the update (5.1): one button
+ * that runs the install of the background service with the Windows prompt, the progress and the outcome.
  */
 export function SetupScreen({ update }: { update: boolean }): React.JSX.Element {
   const { bridge } = useServices()

@@ -18,7 +18,13 @@ test('SetupScreen installs on the button and shows the progress', () => {
   const { bridge } = fakeBridge({ installHelper })
   const services = servicesFor(bridge, setup({ kind: 'idle' }))
   renderWith(<SetupScreen update={false} />, services)
-  fireEvent.click(screen.getByRole('button', { name: 'Настроить' }))
+  expect(screen.getByRole('heading', { name: 'Первая настройка' })).toBeTruthy()
+  expect(
+    screen.getByText(
+      'Чтобы разделять трафик программ, SplitLane нужна фоновая служба с правами администратора. Она устанавливается один раз: Windows попросит подтвердить. Потом окно работает без прав администратора.'
+    )
+  ).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Установить службу' }))
   expect(installHelper).toHaveBeenCalledTimes(1)
 
   act(() => services.store.getState().setSnapshot(setup({ kind: 'running' })))
@@ -32,7 +38,8 @@ test('SetupScreen installs on the button and shows the progress', () => {
 test('SetupScreen offers the update of an older helper', () => {
   const { bridge } = fakeBridge()
   renderWith(<SetupScreen update />, servicesFor(bridge, setup({ kind: 'idle' })))
-  expect(screen.getByRole('button', { name: 'Обновить служебный процесс' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Обновите служебный процесс' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Обновить службу' })).toBeTruthy()
 })
 
 test('SetupScreen shows cancelled and refused outcomes', () => {
@@ -40,7 +47,7 @@ test('SetupScreen shows cancelled and refused outcomes', () => {
   const services = servicesFor(bridge, setup({ kind: 'done', outcome: { kind: 'cancelled' } }))
   renderWith(<SetupScreen update={false} />, services)
   expect(screen.getByText('Настройка отменена')).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Настроить' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Установить службу' })).toBeTruthy()
 
   act(() =>
     services.store
@@ -49,7 +56,7 @@ test('SetupScreen shows cancelled and refused outcomes', () => {
   )
   expect(screen.getByText('installed for another user')).toBeTruthy()
   expect(screen.queryByText('Настройка отменена')).toBeNull()
-  expect(screen.getByRole('button', { name: 'Настроить' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Установить службу' })).toBeTruthy()
 
   act(() =>
     services.store.getState().setSnapshot(setup({ kind: 'done', outcome: { kind: 'failed', detail: 'exit code 5' } }))

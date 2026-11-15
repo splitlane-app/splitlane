@@ -10,7 +10,6 @@ export interface Exec {
 export interface SystemTools {
   schtasks: string
   whoami: string
-  reg: string
   powershell: string
 }
 
@@ -25,7 +24,6 @@ export function systemTools(env: Record<string, string | undefined>): SystemTool
   return {
     schtasks: win32.join(system32, 'schtasks.exe'),
     whoami: win32.join(system32, 'whoami.exe'),
-    reg: win32.join(system32, 'reg.exe'),
     powershell: win32.join(system32, 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   }
 }

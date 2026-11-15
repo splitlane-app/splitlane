@@ -1,11 +1,10 @@
 import { win32 } from 'node:path'
 import type { Program } from '../shared/programs'
-import type { Exec } from './task'
 
 /**
  * Games of Steam and Epic (spec 9.3): their launchers put `.url` shortcuts, not `.lnk`, in the Start menu and on the
  * desktop, so the games are read from the launchers' own files. A folder rule on the exe found here covers its folder
- * and the folders inside (spec 8.2), which is what routes the game. No electron here: the disk and reg.exe come in.
+ * and the folders inside (spec 8.2), which is what routes the game. No electron here: the disk and PowerShell come in.
  */
 
 // ---- the disk, as the games need it ----
@@ -175,55 +174,119 @@ function folderName(s: string): boolean {
   return s.trim() !== '' && s !== '.' && s !== '..' && !/[\\/:]/.test(s)
 }
 
-/** Id, name and folder (under steamapps\common) of an appmanifest_<id>.acf. */
+/** StateFlags of an appmanifest: bit 4 is «fully installed»; without the value the exe on disk decides. */
+const INSTALLED_FLAG = 4
+
+/** Id, name and folder (under steamapps\common) of an appmanifest_<id>.acf of a fully installed game. */
 export function appManifest(acf: KvObject): { appId: string; name: string; installDir: string } | null {
   const state = acf['appstate']
   if (typeof state !== 'object') return null
-  const { appid, name, installdir } = state
+  const { appid, name, installdir, stateflags } = state
   if (typeof appid !== 'string' || !/^\d+$/.test(appid)) return null
   if (typeof name !== 'string' || name.trim() === '') return null
   if (typeof installdir !== 'string' || !folderName(installdir)) return null
+  if (stateflags !== undefined) {
+    if (typeof stateflags !== 'string' || !/^\d+$/.test(stateflags)) return null
+    if ((Number(stateflags) & INSTALLED_FLAG) === 0) return null // a first download that still runs
+  }
   return { appId: appid, name: name.trim(), installDir: installdir }
 }
 
 // ---- Steam ----
 
 export const DEFAULT_STEAM_ROOT = 'C:\\Program Files (x86)\\Steam'
-const STEAM_KEY = 'HKCU\\Software\\Valve\\Steam'
-const STEAM_PATH_LINE = /^\s*SteamPath\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/i
 const MANIFEST_FILE = /^appmanifest_(\d+)\.acf$/i
 
-/** The Steam folder: SteamPath of the registry (`c:/program files (x86)/steam`), else the usual folder. */
-export async function steamRoot(exec: Exec, regExe: string): Promise<string> {
-  try {
-    const r = await exec(regExe, ['query', STEAM_KEY, '/v', 'SteamPath'])
-    if (r.code === 0) {
-      for (const line of r.stdout.split(/\r?\n/)) {
-        const m = STEAM_PATH_LINE.exec(line)
-        if (m === null) continue
-        const p = m[1].replace(/\//g, '\\')
-        if (DRIVE_PATH.test(p)) return trimSlash(p)
-      }
-    }
-  } catch {
-    // no reg.exe answer: the usual folder
-  }
-  return DEFAULT_STEAM_ROOT
+/**
+ * SteamPath of the registry (`c:/program files (x86)/steam`), printed by PowerShell in UTF-8: reg.exe prints in the
+ * OEM code page and would garble a non-ASCII folder. ASCII only.
+ */
+export const STEAM_PATH_SCRIPT =
+  "(Get-ItemProperty -LiteralPath 'HKCU:\\Software\\Valve\\Steam' -ErrorAction SilentlyContinue).SteamPath"
+
+/** The Steam folder in the output of STEAM_PATH_SCRIPT; null when there is none or it came garbled. */
+export function steamPathOf(stdout: string): string | null {
+  const p = stdout.replace(/^\ufeff/, '').trim().replace(/\//g, '\\')
+  if (!DRIVE_PATH.test(p) || p.includes('\ufffd')) return null
+  return trimSlash(p)
 }
 
-// the installers, crash reporters, anti-cheat services and browser helpers that ship next to a game; vconsole is the
-// developer console of Source 2 games, larger than the game's own exe beside it (CS2: vconsole2.exe and cs2.exe)
-const HELPER_NAME =
-  /unins|crash|report|setup|redist|vcredist|dxsetup|directx|dotnet|easyanticheat|battleye|be_service|launcherhelper|cefprocess|webhelper|vconsole/i
+// the installers, crash reporters, anti-cheat services and browser helpers shipped next to a game, by whole names
+// (a game called «Crashlands» stays); vconsole is the developer console of Source 2 games, larger than the game's own
+// exe beside it (CS2: vconsole2.exe and cs2.exe)
+const HELPER_EXES: readonly RegExp[] = [
+  /^unins/,
+  /crash_?handler|crashpad|crash_?report(er)?|errorreporter/,
+  /^vc_?redist/,
+  /^dxsetup/,
+  /^setup\.exe$/,
+  /^vconsole/,
+  /easyanticheat/,
+  /^be_?service/,
+  /launcherhelper/,
+  /cefprocess/,
+  /webhelper/
+]
+// folders that hold only installers and anti-cheat, by exact name
+const HELPER_DIRS: ReadonlySet<string> = new Set([
+  '_commonredist',
+  'redist',
+  '_redist',
+  'redistributables',
+  'vcredist',
+  'directx',
+  'dotnet',
+  'easyanticheat',
+  'battleye',
+  '__installer'
+])
 const MAX_EXE_DEPTH = 5
+const MIN_WORD = 3
+
+function helperExe(name: string): boolean {
+  const lower = name.toLowerCase()
+  return HELPER_EXES.some((re) => re.test(lower))
+}
+
+/** Letters and digits only, lower-cased: «Orbit Racer: Deluxe» → «orbitracerdeluxe». */
+function plainName(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
+}
+
+/** What an exe of the game may be called: the folder and game names whole, and their words of 3 letters and more. */
+function gameNames(names: readonly string[]): Set<string> {
+  const out = new Set<string>()
+  for (const n of names) {
+    const whole = plainName(n)
+    if (whole !== '') out.add(whole)
+    for (const word of n.split(/[^\p{L}\p{N}]+/u)) {
+      if (word.length >= MIN_WORD) out.add(plainName(word))
+    }
+  }
+  return out
+}
+
+/** The exe of one level: one named after the game, else the largest; on equal sizes the first by path. */
+async function pickExe(fs: GamesFs, exes: string[], names: Set<string>): Promise<string> {
+  const sorted = [...exes].sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0))
+  const named = sorted.filter((p) => names.has(plainName(win32.basename(p).replace(/\.exe$/i, ''))))
+  const pool = named.length > 0 ? named : sorted
+  const sizes = await Promise.all(pool.map(async (p) => (await fs.fileSize(p)) ?? -1))
+  let best = 0
+  for (let k = 1; k < pool.length; k++) if (sizes[k] > sizes[best]) best = k
+  return pool[best]
+}
 
 /**
- * The exe of a game folder: the shallowest .exe (up to five folders down), the largest one of that level when there
- * are several, the first by name on equal sizes. Files and folders named like helpers (installers, redistributables,
- * crash reporters, anti-cheat) are passed over. Null when there is none.
+ * The exe of a game folder: the shallowest .exe (up to five folders down) that is not a helper (installer,
+ * redistributable, crash reporter, anti-cheat, by whole names); helper folders are not searched. Of several on that
+ * level the one named after the game (`names`: its folder and name) wins, else the largest. When every exe found looks
+ * like a helper, the shallowest of them after all. Null when there is none.
  */
-export async function gameExe(fs: GamesFs, folder: string): Promise<string | null> {
+export async function gameExe(fs: GamesFs, folder: string, names: readonly string[] = []): Promise<string | null> {
+  const wanted = gameNames(names)
   let level = [trimSlash(folder)]
+  let firstHelpers: string[] | null = null
   for (let depth = 0; depth <= MAX_EXE_DEPTH && level.length > 0; depth++) {
     const listed = await Promise.all(
       level.map(async (dir) => {
@@ -235,25 +298,23 @@ export async function gameExe(fs: GamesFs, folder: string): Promise<string | nul
       })
     )
     const exes: string[] = []
+    const helpers: string[] = []
     const next: string[] = []
     for (const { dir, entries } of listed) {
       for (const e of entries) {
-        if (HELPER_NAME.test(e.name)) continue
         const p = child(dir, e.name)
-        if (e.dir) next.push(p)
-        else if (e.name.toLowerCase().endsWith('.exe')) exes.push(p)
+        if (e.dir) {
+          if (!HELPER_DIRS.has(e.name.toLowerCase())) next.push(p)
+        } else if (e.name.toLowerCase().endsWith('.exe')) {
+          ;(helperExe(e.name) ? helpers : exes).push(p)
+        }
       }
     }
-    if (exes.length > 0) {
-      exes.sort((a, b) => (a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0))
-      const sizes = await Promise.all(exes.map(async (p) => (await fs.fileSize(p)) ?? -1))
-      let best = 0
-      for (let k = 1; k < exes.length; k++) if (sizes[k] > sizes[best]) best = k
-      return exes[best]
-    }
+    if (exes.length > 0) return pickExe(fs, exes, wanted)
+    if (firstHelpers === null && helpers.length > 0) firstHelpers = helpers
     level = next
   }
-  return null
+  return firstHelpers === null ? null : pickExe(fs, firstHelpers, wanted)
 }
 
 /** The game of appmanifest_<appId>.acf in a library: its exe and name, or null when it is missing or has no exe. */
@@ -265,30 +326,37 @@ async function steamGameIn(fs: GamesFs, library: string, appId: string): Promise
     return null
   }
   if (manifest === null) return null
-  const exe = await gameExe(fs, child(library, `steamapps\\common\\${manifest.installDir}`))
+  const folder = child(library, `steamapps\\common\\${manifest.installDir}`)
+  const exe = await gameExe(fs, folder, [manifest.installDir, manifest.name])
   return exe === null ? null : { exe, name: manifest.name }
 }
 
 export interface GamesDeps {
   fs: GamesFs
-  exec: Exec
-  /** %SystemRoot%\System32\reg.exe */
-  regExe: string
+  /** Runs a PowerShell script that prints UTF-8 and gives its output; throws when it fails. */
+  powershell(script: string): Promise<string>
   /** %ProgramData% (the Epic manifests live there); undefined when not set. */
   programData: string | undefined
   log(message: string): void
 }
 
-/** The library folders of Steam: those of libraryfolders.vdf, and the Steam folder itself. */
-async function steamLibraries(d: GamesDeps): Promise<string[]> {
-  const root = await steamRoot(d.exec, d.regExe)
+/** The libraries of a Steam folder: those of its libraryfolders.vdf and itself; null when its steamapps is not there. */
+async function librariesOf(fs: GamesFs, root: string): Promise<string[] | null> {
   let listed: string[] = []
   try {
-    listed = libraryFolders(parseKeyValues(decodeText(await d.fs.readBytes(child(root, 'steamapps\\libraryfolders.vdf')))))
-  } catch (e) {
-    d.log(`programs: Steam: no library list: ${errText(e)}`)
+    listed = libraryFolders(parseKeyValues(decodeText(await fs.readBytes(child(root, 'steamapps\\libraryfolders.vdf')))))
+  } catch {
+    try {
+      await fs.readDir(child(root, 'steamapps'))
+    } catch {
+      return null
+    }
   }
   return uniquePaths([...listed, root])
+}
+
+function hasPath(paths: readonly string[], p: string): boolean {
+  return paths.some((x) => sameText(x, p))
 }
 
 interface SteamGame {
@@ -296,13 +364,13 @@ interface SteamGame {
   program: Program
 }
 
-async function readSteamGames(d: GamesDeps): Promise<SteamGame[]> {
+async function steamGamesIn(fs: GamesFs, libraries: readonly string[]): Promise<SteamGame[]> {
   const out: SteamGame[] = []
   const seen = new Set<string>()
-  for (const library of await steamLibraries(d)) {
+  for (const library of libraries) {
     let entries: DirEntry[]
     try {
-      entries = await d.fs.readDir(child(library, 'steamapps'))
+      entries = await fs.readDir(child(library, 'steamapps'))
     } catch {
       continue // a library on a drive that is not connected now
     }
@@ -310,7 +378,7 @@ async function readSteamGames(d: GamesDeps): Promise<SteamGame[]> {
       const m = e.dir ? null : MANIFEST_FILE.exec(e.name)
       return m === null || seen.has(m[1]) ? [] : [m[1]]
     })
-    const found = await Promise.all(ids.map(async (appId) => ({ appId, program: await steamGameIn(d.fs, library, appId) })))
+    const found = await Promise.all(ids.map(async (appId) => ({ appId, program: await steamGameIn(fs, library, appId) })))
     for (const { appId, program } of found) {
       if (program === null || seen.has(appId)) continue
       seen.add(appId)
@@ -447,6 +515,7 @@ export function gameLink(url: string): GameLink | null {
 export class Games {
   private steam: Promise<SteamGame[]> | null = null
   private epic: Promise<EpicGame[]> | null = null
+  private registryRoot: Promise<string | null> | null = null
 
   constructor(private readonly d: GamesDeps) {}
 
@@ -464,7 +533,9 @@ export class Games {
     try {
       if (link.store === 'steam') {
         if (!fresh) return (await this.steamList()).find((g) => g.appId === link.appId)?.program ?? null
-        for (const library of await steamLibraries(this.d)) {
+        const libraries = await this.steamLibraries()
+        const extra = hasPath(libraries, DEFAULT_STEAM_ROOT) ? [] : [DEFAULT_STEAM_ROOT]
+        for (const library of [...libraries, ...extra]) {
           const p = await steamGameIn(this.d.fs, library, link.appId)
           if (p !== null) return p
         }
@@ -493,8 +564,43 @@ export class Games {
     return (await this.program(link, fresh)) ?? 'game'
   }
 
+  /** SteamPath of the registry, read once per run; null when there is none, it came garbled or PowerShell failed. */
+  private steamRegistryRoot(): Promise<string | null> {
+    this.registryRoot ??= this.d.powershell(STEAM_PATH_SCRIPT).then(
+      (out) => {
+        const root = steamPathOf(out)
+        if (root === null && out.trim() !== '') this.d.log('programs: Steam: SteamPath of the registry is not usable')
+        return root
+      },
+      (e: unknown) => {
+        this.d.log(`programs: Steam: cannot read SteamPath: ${errText(e)}`)
+        return null
+      }
+    )
+    return this.registryRoot
+  }
+
+  /** The libraries of the Steam folder of the registry; when its steamapps is not there, of the usual folder. */
+  private async steamLibraries(): Promise<string[]> {
+    const registry = await this.steamRegistryRoot()
+    for (const root of uniquePaths(registry === null ? [DEFAULT_STEAM_ROOT] : [registry, DEFAULT_STEAM_ROOT])) {
+      const libraries = await librariesOf(this.d.fs, root)
+      if (libraries !== null) return libraries
+    }
+    this.d.log('programs: Steam: no Steam folder found')
+    return []
+  }
+
+  /** The games of all libraries; when they hold none, the usual Steam folder is tried as one more library. */
+  private async readSteamGames(): Promise<SteamGame[]> {
+    const libraries = await this.steamLibraries()
+    const games = await steamGamesIn(this.d.fs, libraries)
+    if (games.length > 0 || hasPath(libraries, DEFAULT_STEAM_ROOT)) return games
+    return steamGamesIn(this.d.fs, [DEFAULT_STEAM_ROOT])
+  }
+
   private steamList(): Promise<SteamGame[]> {
-    this.steam ??= readSteamGames(this.d).catch((e: unknown) => {
+    this.steam ??= this.readSteamGames().catch((e: unknown) => {
       this.d.log(`programs: Steam: ${errText(e)}`)
       return []
     })

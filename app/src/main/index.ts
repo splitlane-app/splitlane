@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
 import { access, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, win32 } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
 import { IPC, type InstallState, type Snapshot } from '../shared/ipc'
 import type { Dropped } from '../shared/programs'
 import { PIPE_NAME, type HelperError, type HelperState } from '../shared/protocol'
@@ -122,7 +122,7 @@ app.setAppUserModelId('SplitLane')
 
 const startHidden = process.argv.includes('--hidden')
 const exec = execText(QUICK_EXEC_TIMEOUT_MS)
-/** schtasks, whoami, reg and powershell by full path under %SystemRoot%\System32, never through PATH. */
+/** schtasks, whoami and powershell by full path under %SystemRoot%\System32, never through PATH. */
 const tools = systemTools(process.env)
 
 let win: BrowserWindow | null = null
@@ -180,8 +180,25 @@ const gamesFs: GamesFs = {
   }
 }
 
-/** Steam and Epic games: listed once per run, like the Store apps; reg.exe by full path. */
-const games = new Games({ fs: gamesFs, exec, regExe: tools.reg, programData: process.env['ProgramData'], log })
+/** A PowerShell script that prints UTF-8, so that Cyrillic names and paths survive (no progress records). */
+async function powershellText(script: string, timeoutMs: number): Promise<string> {
+  const full = [
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+    "$ProgressPreference = 'SilentlyContinue'",
+    script
+  ].join('\r\n')
+  const r = await execText(timeoutMs)(tools.powershell, encodePowerShell(full))
+  if (r.code !== 0) throw new Error(`powershell failed with code ${r.code}`)
+  return stripBom(r.stdout)
+}
+
+/** Steam and Epic games: listed once per run, like the Store apps; SteamPath through PowerShell in UTF-8. */
+const games = new Games({
+  fs: gamesFs,
+  powershell: (script) => powershellText(script, QUICK_EXEC_TIMEOUT_MS),
+  programData: process.env['ProgramData'],
+  log
+})
 
 const readShortcut: ProgramsFs['readShortcut'] = (lnk) => ({ target: shell.readShortcutLink(lnk).target })
 
@@ -198,17 +215,10 @@ const dropReaders: DropReaders = {
   readUrl: (p) => games.readUrl(p, true)
 }
 
-/** Store apps once per run; the script prints UTF-8 so that Cyrillic names survive (no progress records). */
+/** Store apps once per run. */
 const storeApps = new StoreAppsCache(async () => {
-  const script = [
-    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    "$ProgressPreference = 'SilentlyContinue'",
-    STORE_APPS_SCRIPT
-  ].join('\r\n')
   try {
-    const r = await execText(STORE_APPS_TIMEOUT_MS)(tools.powershell, encodePowerShell(script))
-    if (r.code !== 0) throw new Error(`powershell failed with code ${r.code}`)
-    return stripBom(r.stdout)
+    return await powershellText(STORE_APPS_SCRIPT, STORE_APPS_TIMEOUT_MS)
   } catch (e) {
     log(`programs: Store apps: ${errText(e)}`)
     throw e
@@ -513,6 +523,8 @@ async function main(): Promise<void> {
     quit: () => void quit()
   })
   tray.update(link.status(), link.state())
+  // the page is dark only: Windows then draws a dark title bar and frame too
+  nativeTheme.themeSource = 'dark'
   createWindow()
   log(`window started${startHidden ? ' hidden' : ''}`)
   link.start()
