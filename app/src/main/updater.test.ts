@@ -277,32 +277,36 @@ describe('check', () => {
     expect(hits).toEqual([])
   })
 
-  it('later hides the offer; an automatic check of the same version keeps it hidden', async () => {
+  it('later hides the offer until the next check, which shows it again', async () => {
     serveGood()
     const r = rig()
     await r.u.check(false)
     r.u.later()
     expect(r.u.state()).toMatchObject({ kind: 'available', hidden: true })
+    // spec 4: «Позже» hides the offer until the next check, automatic or manual
     await r.u.check(false)
-    expect(r.u.state()).toMatchObject({ kind: 'available', hidden: true })
+    expect(r.u.state()).toMatchObject({ kind: 'available', version: '9.9.9', hidden: false })
+    r.u.later()
     await r.u.check(true)
     expect(r.u.state()).toMatchObject({ kind: 'available', hidden: false })
+    // an offer on screen is not sent again by an automatic check of the same version
+    const n = r.states.length
+    await r.u.check(false)
+    expect(r.states).toHaveLength(n)
   })
 
   it('an automatic check does not replace a result banner', async () => {
     serveGood()
-    for (const pendingUpdate of ['1.2.0', '1.0.0']) {
-      const r = rig({ settings: { pendingUpdate } })
-      await r.u.start()
-      r.u.stop()
-      const before = r.u.state()
-      expect(['installRefused', 'installed']).toContain(before.kind)
-      const n = hits.length
-      await r.u.check(false)
-      expect(r.u.state()).toEqual(before)
-      expect(hits.length).toBe(n)
-      expect(r.logs.join('\n')).toContain('skipped')
-    }
+    const r = rig({ settings: { pendingUpdate: '1.2.0' } })
+    await r.u.start()
+    r.u.stop()
+    const before = r.u.state()
+    expect(before.kind).toBe('installRefused')
+    const n = hits.length
+    await r.u.check(false)
+    expect(r.u.state()).toEqual(before)
+    expect(hits.length).toBe(n)
+    expect(r.logs.join('\n')).toContain('skipped')
     // a failed download is a result too
     routes[SHA] = text('garbage')
     const f = rig()
@@ -312,6 +316,21 @@ describe('check', () => {
     expect(failed.kind).toBe('downloadFailed')
     await f.u.check(false)
     expect(f.u.state()).toEqual(failed)
+  })
+
+  it('an automatic check runs after the success notice, and a newer release replaces it', async () => {
+    routes[API] = json(releaseJson(feed, '1.0.0'))
+    const r = rig({ settings: { pendingUpdate: '1.0.0' } })
+    await r.u.start()
+    r.u.stop()
+    expect(r.u.state()).toEqual({ kind: 'installed', version: '1.0.0' })
+    // nothing newer: the notice stays
+    await r.u.check(false)
+    expect(hits.filter((h) => h === API)).toHaveLength(1)
+    expect(r.u.state()).toEqual({ kind: 'installed', version: '1.0.0' })
+    serveGood()
+    await r.u.check(false)
+    expect(r.u.state()).toMatchObject({ kind: 'available', version: '9.9.9', hidden: false })
   })
 
   it('an automatic check is silent while it runs', async () => {
@@ -552,6 +571,40 @@ describe('update', () => {
     expect(r.states.some((s) => s.kind === 'verifying')).toBe(true)
   })
 
+  it('a launched installer that never closes the window ends in a refusal after 3 minutes', async () => {
+    serveGood()
+    const r = rig()
+    await r.u.check(false)
+    await r.u.update()
+    expect(r.u.state().kind).toBe('launching')
+    r.clock.advance(3 * 60_000 - 1)
+    expect(r.u.state().kind).toBe('launching')
+    r.clock.advance(1)
+    expect(r.u.state()).toEqual({
+      kind: 'installRefused',
+      version: '9.9.9',
+      notesUrl: 'https://github.com/splitlane-app/splitlane/releases/tag/v9.9.9',
+      reason: 'the installer did not start the update',
+      canRetry: true
+    })
+    // a late run of the installer still reports after the restart
+    expect(r.settings.pendingUpdate).toBe('9.9.9')
+    expect(r.logs.join('\n')).toContain('did not close the window within 3 minutes')
+    // the refusal can be retried: the installer runs again
+    await r.u.update()
+    expect(r.u.state().kind).toBe('launching')
+    expect(r.runInstaller).toHaveBeenCalledTimes(2)
+
+    // stop() clears the watchdog: a window that closes reports nothing
+    const s = rig()
+    await s.u.check(false)
+    await s.u.update()
+    s.u.stop()
+    s.clock.advance(10 * 60_000)
+    expect(s.u.state().kind).toBe('launching')
+    expect(s.states.some((x) => x.kind === 'installRefused')).toBe(false)
+  })
+
   it('a checksum mismatch fails and removes the file', async () => {
     serveGood()
     routes[SHA] = text(`${'0'.repeat(64)}  ${NAME}\n`)
@@ -788,6 +841,39 @@ describe('update', () => {
     expect(r.u.state()).toMatchObject({ kind: 'downloadFailed', reason: 'cannot start' })
     expect(r.settings.pendingUpdate).toBeNull()
   })
+
+  it('dismiss closes a refusal, a failed download and a cancelled update', async () => {
+    serveGood()
+    const c = rig({ installer: 'cancelled' })
+    await c.u.check(false)
+    await c.u.update()
+    expect(c.u.state().kind).toBe('cancelled')
+    c.u.dismiss()
+    expect(c.u.state()).toEqual({ kind: 'idle' })
+
+    const f = rig({ installer: { error: 'cannot start' } })
+    await f.u.check(false)
+    await f.u.update()
+    expect(f.u.state().kind).toBe('downloadFailed')
+    f.u.dismiss()
+    expect(f.u.state()).toEqual({ kind: 'idle' })
+
+    const r = rig({ settings: { pendingUpdate: '1.2.0' } })
+    await r.u.start()
+    r.u.stop()
+    expect(r.u.state().kind).toBe('installRefused')
+    r.u.dismiss()
+    expect(r.u.state()).toEqual({ kind: 'idle' })
+    // a closed result lets the automatic checks run again
+    await r.u.check(false)
+    expect(r.u.state()).toMatchObject({ kind: 'available', version: '9.9.9' })
+
+    // an offer is not closed by dismiss (it has «Позже»); the page hears of every close
+    r.u.dismiss()
+    expect(r.u.state().kind).toBe('available')
+    expect(c.states.at(-1)).toEqual({ kind: 'idle' })
+    expect(f.states.at(-1)).toEqual({ kind: 'idle' })
+  })
 })
 
 describe('start', () => {
@@ -810,9 +896,55 @@ describe('start', () => {
       kind: 'installRefused',
       version: '1.2.0',
       notesUrl: 'https://github.com/splitlane-app/splitlane/releases/tag/v1.2.0',
-      reason: 'the tunnel is on'
+      reason: 'the tunnel is on',
+      canRetry: true
     })
     expect(r.settings.pendingUpdate).toBeNull()
+  })
+
+  it('start removes the downloads of an earlier run after reading the outcome; a failure is only logged', async () => {
+    const order: string[] = []
+    const real = nodeFs()
+    const r = rig({
+      appVersion: '1.1.0',
+      settings: { pendingUpdate: '1.1.0' },
+      fs: {
+        ...real,
+        readText: async (p) => {
+          order.push('read')
+          return real.readText(p)
+        },
+        rmDir: async (p) => {
+          order.push('remove')
+          await real.rmDir(p)
+        }
+      }
+    })
+    await mkdir(r.tempDir, { recursive: true })
+    await writeFile(join(r.tempDir, 'SplitLane-Setup-1.1.0.exe'), 'installer')
+    await writeFile(join(r.tempDir, 'SplitLane-Setup-1.2.0.exe.part'), 'part')
+    await r.u.start()
+    r.u.stop()
+    expect(order).toEqual(['read', 'remove'])
+    expect(await files(root)).not.toContain('SplitLane-update')
+    expect(r.u.state()).toEqual({ kind: 'installed', version: '1.1.0' })
+
+    // without a pending update too
+    const n = rig()
+    await mkdir(n.tempDir, { recursive: true })
+    await writeFile(join(n.tempDir, 'left.part'), 'part')
+    await n.u.start()
+    n.u.stop()
+    expect(await files(root)).not.toContain('SplitLane-update')
+
+    // a folder that cannot be removed: a line, and the window works on
+    serveGood()
+    const b = rig({ fs: { ...real, rmDir: () => Promise.reject(new Error('EBUSY: resource busy or locked')) } })
+    await b.u.start()
+    expect(b.logs.join('\n')).toContain('EBUSY')
+    b.clock.advance(30_000)
+    await vi.waitFor(() => expect(b.u.state().kind).toBe('available'))
+    b.u.stop()
   })
 
   it('start without a pending update leaves the state idle', async () => {
@@ -831,6 +963,20 @@ describe('start', () => {
     await r.u.update()
     expect(r.u.state()).toMatchObject({ kind: 'launching', version: '9.9.9' })
     r.u.stop()
+
+    // a refusal of the window's own version has nothing to install again: update() leaves it as it is
+    const own = rig({ appVersion: '9.9.9', settings: { pendingUpdate: '9.9.9' } })
+    await mkdir(root, { recursive: true })
+    await writeFile(own.lastInstallFile, '9.9.9\r\nrefused\r\nthe task cannot be registered\r\n', 'utf8')
+    await own.u.start()
+    own.u.stop()
+    const refused = own.u.state()
+    expect(refused).toMatchObject({ kind: 'installRefused', version: '9.9.9', canRetry: false })
+    const n = hits.length
+    await own.u.update()
+    expect(own.u.state()).toEqual(refused)
+    expect(hits.length).toBe(n)
+    expect(own.runInstaller).not.toHaveBeenCalled()
   })
 
   it('schedule: first check after 30 s, then every 24 h, none when checkUpdates is off', async () => {

@@ -73,6 +73,25 @@ test('SetupScreen offers the update of an older helper', async () => {
   expect(await screen.findByRole('button', { name: 'Обновить службу' })).toBeTruthy()
 })
 
+test('SetupScreen shows the update banner', async () => {
+  // after an install refusal the window may open here: the result of the update shows on this screen too
+  const dismissUpdate = vi.fn(async () => {})
+  const { bridge } = fakeBridge({ dismissUpdate })
+  const notesUrl = 'https://github.com/splitlane-app/splitlane/releases/tag/v1.2.0'
+  const services = servicesFor(bridge, {
+    ...setup({ kind: 'idle' }),
+    update: { kind: 'installRefused', version: '1.2.0', notesUrl, reason: 'the tunnel is on', canRetry: true }
+  })
+  renderWith(<SetupScreen update={false} />, services)
+  expect(screen.getByText('Обновление до 1.2.0 не установлено: the tunnel is on')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Повторить' })).toBeTruthy()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }))
+  })
+  expect(dismissUpdate).toHaveBeenCalledTimes(1)
+  expect(await screen.findByRole('button', { name: 'Установить службу' })).toBeTruthy()
+})
+
 test('SetupScreen shows cancelled and refused outcomes', async () => {
   const { bridge } = fakeBridge()
   const services = servicesFor(bridge, setup({ kind: 'done', outcome: { kind: 'cancelled' } }))

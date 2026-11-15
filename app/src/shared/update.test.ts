@@ -3,6 +3,7 @@ import {
   allowedHop,
   compareVersions,
   feedFrom,
+  isNewer,
   notesUrlFor,
   outcomeAfterRestart,
   parseLastInstall,
@@ -274,13 +275,24 @@ describe('update', () => {
     // install refused after the files of 1.2.0 were put in place: the window already runs 1.2.0
     const refused = { kind: 'installRefused', version: '1.2.0', notesUrl: notesUrlFor('1.2.0'), reason: 'the tunnel is on' }
     const last = { version: '1.2.0', result: 'refused', reason: 'the tunnel is on' } as const
-    expect(outcomeAfterRestart('1.2.0', '1.2.0', last)).toEqual(refused)
-    expect(outcomeAfterRestart('1.2.0', '1.3.1', last)).toEqual(refused)
-    expect(outcomeAfterRestart('1.2.0', '1.1.0', last)).toEqual(refused)
+    // a retry fetches the release again: only a version newer than the window's can be installed again
+    expect(outcomeAfterRestart('1.2.0', '1.2.0', last)).toEqual({ ...refused, canRetry: false })
+    expect(outcomeAfterRestart('1.2.0', '1.3.1', last)).toEqual({ ...refused, canRetry: false })
+    expect(outcomeAfterRestart('1.2.0', '1.1.0', last)).toEqual({ ...refused, canRetry: true })
     expect(outcomeAfterRestart('1.2.0', '1.2.0', { version: '1.2.0', result: 'refused', reason: '' })).toEqual({
       ...refused,
-      reason: ''
+      reason: '',
+      canRetry: false
     })
+  })
+
+  it('isNewer compares two versions x.y.z', () => {
+    expect(isNewer('1.2.0', '1.1.9')).toBe(true)
+    expect(isNewer('1.10.0', '1.9.0')).toBe(true)
+    expect(isNewer('1.2.0', '1.2.0')).toBe(false)
+    expect(isNewer('1.1.0', '1.2.0')).toBe(false)
+    expect(isNewer('1.2', '1.1.0')).toBe(false)
+    expect(isNewer('1.2.0', 'dev')).toBe(false)
   })
 
   it('outcomeAfterRestart treats a newer window version as installed', () => {
@@ -297,13 +309,15 @@ describe('update', () => {
       kind: 'installRefused',
       version: '1.2.0',
       notesUrl: notesUrlFor('1.2.0'),
-      reason: 'busy'
+      reason: 'busy',
+      canRetry: true
     })
     expect(outcomeAfterRestart('1.2.0', '1.1.0', null)).toEqual({
       kind: 'installRefused',
       version: '1.2.0',
       notesUrl: notesUrlFor('1.2.0'),
-      reason: ''
+      reason: '',
+      canRetry: true
     })
   })
 
@@ -312,13 +326,15 @@ describe('update', () => {
       kind: 'installRefused',
       version: '1.2.0',
       notesUrl: notesUrlFor('1.2.0'),
-      reason: ''
+      reason: '',
+      canRetry: true
     })
     expect(outcomeAfterRestart('1.2.0', '1.1.0', { version: '1.2.0', result: 'ok', reason: '' })).toEqual({
       kind: 'installRefused',
       version: '1.2.0',
       notesUrl: notesUrlFor('1.2.0'),
-      reason: ''
+      reason: '',
+      canRetry: true
     })
     // a refusal of an older install does not turn a window that runs the pending version into a refusal
     expect(outcomeAfterRestart('1.2.0', '1.2.0', { version: '1.0.5', result: 'refused', reason: 'old' })).toEqual({

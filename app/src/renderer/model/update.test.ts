@@ -37,13 +37,13 @@ const rows: [string, UpdateState, { text: string; actions: string[]; tone: strin
   [
     'cancelled',
     { kind: 'cancelled', version: '1.2.0', notesUrl: N },
-    { text: 'Обновление отменено', actions: ['install'], tone: 'info' },
+    { text: 'Обновление отменено', actions: ['install', 'dismiss'], tone: 'info' },
     'Обновление отменено'
   ],
   [
     'downloadFailed',
     { kind: 'downloadFailed', version: '1.2.0', notesUrl: N, reason: 'HTTP 500' },
-    { text: 'Не удалось скачать версию 1.2.0: HTTP 500', actions: ['retry'], tone: 'warn' },
+    { text: 'Не удалось скачать версию 1.2.0: HTTP 500', actions: ['retry', 'dismiss'], tone: 'warn' },
     'Не удалось скачать версию 1.2.0: HTTP 500'
   ],
   [
@@ -54,15 +54,21 @@ const rows: [string, UpdateState, { text: string; actions: string[]; tone: strin
   ],
   [
     'installRefused',
-    { kind: 'installRefused', version: '1.2.0', notesUrl: N, reason: 'not signed' },
-    { text: 'Обновление до 1.2.0 не установлено: not signed', actions: ['retry', 'notes'], tone: 'warn' },
+    { kind: 'installRefused', version: '1.2.0', notesUrl: N, reason: 'not signed', canRetry: true },
+    { text: 'Обновление до 1.2.0 не установлено: not signed', actions: ['retry', 'notes', 'dismiss'], tone: 'warn' },
     'Обновление до 1.2.0 не установлено: not signed'
   ],
   [
     'installRefused without a reason',
-    { kind: 'installRefused', version: '1.2.0', notesUrl: N, reason: '' },
-    { text: 'Обновление до 1.2.0 не установлено', actions: ['retry', 'notes'], tone: 'warn' },
+    { kind: 'installRefused', version: '1.2.0', notesUrl: N, reason: '', canRetry: true },
+    { text: 'Обновление до 1.2.0 не установлено', actions: ['retry', 'notes', 'dismiss'], tone: 'warn' },
     'Обновление до 1.2.0 не установлено'
+  ],
+  [
+    'installRefused of the window version',
+    { kind: 'installRefused', version: '1.2.0', notesUrl: N, reason: 'the task', canRetry: false },
+    { text: 'Обновление до 1.2.0 не установлено: the task', actions: ['dismiss'], tone: 'warn' },
+    'Обновление до 1.2.0 не установлено: the task'
   ]
 ]
 

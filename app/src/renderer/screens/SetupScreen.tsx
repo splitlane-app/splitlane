@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ScreenFrame } from '../components/ScreenFrame'
+import { UpdateBanner } from '../components/UpdateBanner'
 import { t } from '../i18n/t'
 import { useApp, useServices } from '../services'
 import styles from './screens.module.css'
@@ -40,6 +41,8 @@ export function SetupScreen({ update }: { update: boolean }): React.JSX.Element 
 
   return (
     <ScreenFrame title={update ? t('setup.updateTitle') : t('setup.title')}>
+      {/* after an install refusal the window may open here: the result of the update shows on this screen too */}
+      <UpdateBanner />
       <p className={styles.lead}>{update ? t('setup.updateLead') : t('setup.lead')}</p>
       {running && (
         <p className={styles.status} role="status">

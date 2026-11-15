@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { WindowSettings } from '../shared/settings'
 import {
   allowedHop,
+  isNewer,
   notesUrlFor,
   outcomeAfterRestart,
   parseLastInstall,
@@ -57,10 +58,14 @@ const FIRST_CHECK_MS = 30_000
 const CHECK_EVERY_MS = 24 * 60 * 60 * 1000
 const PROGRESS_EVERY_MS = 250
 const UAC_CANCELLED = 1223
+/** The installer closes this window when it starts the update; one still open after this did not start it. */
+const LAUNCH_WAIT_MS = 3 * 60_000
 
-const AUTO_CHECK_STATES: readonly UpdateState['kind'][] = ['idle', 'upToDate', 'checkFailed', 'available']
+// `installed` too: a newer offer may replace the success notice
+const AUTO_CHECK_STATES: readonly UpdateState['kind'][] = ['idle', 'upToDate', 'checkFailed', 'available', 'installed']
 
 const NOT_INSTALLED = 'updates are available only for an installed SplitLane'
+const NOT_STARTED = 'the installer did not start the update'
 
 type Newer = Extract<ReturnType<typeof pickRelease>, { kind: 'newer' }> & { size: number }
 type Pick = Exclude<ReturnType<typeof pickRelease>, { kind: 'newer' }> | Newer
@@ -144,6 +149,9 @@ export class Updater {
   private stopped = false
   private timer: unknown = null
   private stallTimer: unknown = null
+  private launchTimer: unknown = null
+  /** The removal of the downloads of an earlier run (start); a download waits for it. */
+  private leftovers: Promise<void> = Promise.resolve()
   private pick: Newer | null = null
   private checkRun: Promise<void> | null = null
   /** Whether the running check reports as a manual one (an automatic check turns manual on a press). */
@@ -174,6 +182,11 @@ export class Updater {
         }
       }
     }
+    // the outcome is read: the installer of an earlier run and what a failed download left are not needed
+    this.leftovers = this.d.fs.rmDir(this.d.tempDir).catch((e: unknown) => {
+      this.d.log(`cannot remove the downloads of an earlier run: ${errText(e)}`)
+    })
+    await this.leftovers
     if (this.stopped) return
     this.timer = this.d.clock.setTimeout(() => this.tick(), FIRST_CHECK_MS)
   }
@@ -182,6 +195,8 @@ export class Updater {
     this.stopped = true
     if (this.timer !== null) this.d.clock.clearTimeout(this.timer)
     this.timer = null
+    if (this.launchTimer !== null) this.d.clock.clearTimeout(this.launchTimer)
+    this.launchTimer = null
     this.disarm()
     this.ctl?.abort()
   }
@@ -222,7 +237,8 @@ export class Updater {
       if (pick.kind === 'newer') {
         this.pick = pick
         const cur = this.s
-        if (this.checkManual || !(cur.kind === 'available' && cur.version === pick.version)) {
+        // «Позже» hides the offer until the next check (spec 4): only an offer on screen is not sent again
+        if (this.checkManual || !(cur.kind === 'available' && cur.version === pick.version && !cur.hidden)) {
           this.set({ kind: 'available', version: pick.version, notesUrl: pick.notesUrl, hidden: false })
         }
       } else if (pick.kind === 'notNewer') {
@@ -247,6 +263,8 @@ export class Updater {
     const s = this.s
     if (this.busy) return
     if (s.kind !== 'available' && s.kind !== 'cancelled' && s.kind !== 'downloadFailed' && s.kind !== 'installRefused') return
+    // a refusal of the window's own version: a retry would find no newer release
+    if (s.kind === 'installRefused' && !s.canRetry) return
     this.begin()
     let version = s.version
     let notesUrl = s.notesUrl
@@ -266,6 +284,7 @@ export class Updater {
       }
       const release = pick
       const fs = this.d.fs
+      await this.leftovers
       await fs.rmDir(this.d.tempDir)
       await fs.mkdir(this.d.tempDir)
 
@@ -316,7 +335,10 @@ export class Updater {
       } catch (e) {
         result = { error: errText(e) }
       }
-      if (result === 'started') return
+      if (result === 'started') {
+        this.watchLaunch(version, notesUrl)
+        return
+      }
       await this.clearPending()
       if (result === 'cancelled') this.set({ kind: 'cancelled', version, notesUrl })
       else this.set({ kind: 'downloadFailed', version, notesUrl, reason: result.error })
@@ -360,10 +382,34 @@ export class Updater {
 
   dismiss(): void {
     const k = this.s.kind
-    if (k === 'installed' || k === 'upToDate' || k === 'checkFailed') this.set({ kind: 'idle' })
+    if (
+      k === 'installed' ||
+      k === 'upToDate' ||
+      k === 'checkFailed' ||
+      k === 'installRefused' ||
+      k === 'downloadFailed' ||
+      k === 'cancelled'
+    ) {
+      this.set({ kind: 'idle' })
+    }
   }
 
   // --- internals ---
+
+  /**
+   * The installer closes this window when it starts the update. A window still open after LAUNCH_WAIT_MS: the
+   * installer did not start it (an antivirus blocked the file, another installer runs, it failed early).
+   * pendingUpdate stays: a late run of the installer still reports after the restart.
+   */
+  private watchLaunch(version: string, notesUrl: string): void {
+    if (this.launchTimer !== null) this.d.clock.clearTimeout(this.launchTimer)
+    this.launchTimer = this.d.clock.setTimeout(() => {
+      this.launchTimer = null
+      if (this.stopped || this.s.kind !== 'launching') return
+      this.d.log(`the installer of ${version} did not close the window within 3 minutes`)
+      this.set({ kind: 'installRefused', version, notesUrl, reason: NOT_STARTED, canRetry: isNewer(version, this.d.appVersion) })
+    }, LAUNCH_WAIT_MS)
+  }
 
   private begin(): void {
     this.busy = true

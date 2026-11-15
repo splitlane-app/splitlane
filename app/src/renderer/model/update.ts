@@ -22,9 +22,13 @@ export function updateBannerModel(s: UpdateState): UpdateBannerModel | null {
     case 'launching':
       return { text: t('update.launching', { v: s.version }), actions: [], tone: 'info' }
     case 'cancelled':
-      return { text: t('update.cancelled'), actions: ['install'], tone: 'info' }
+      return { text: t('update.cancelled'), actions: ['install', 'dismiss'], tone: 'info' }
     case 'downloadFailed':
-      return { text: t('update.downloadFailed', { v: s.version, reason: s.reason }), actions: ['retry'], tone: 'warn' }
+      return {
+        text: t('update.downloadFailed', { v: s.version, reason: s.reason }),
+        actions: ['retry', 'dismiss'],
+        tone: 'warn'
+      }
     case 'installed':
       return { text: t('update.installed', { v: s.version }), actions: ['dismiss'], tone: 'info' }
     case 'installRefused':
@@ -33,7 +37,8 @@ export function updateBannerModel(s: UpdateState): UpdateBannerModel | null {
           s.reason === ''
             ? t('update.installRefusedNoReason', { v: s.version })
             : t('update.installRefused', { v: s.version, reason: s.reason }),
-        actions: ['retry', 'notes'],
+        // a refusal of the window's own version has nothing to install again: it can only be closed
+        actions: s.canRetry ? ['retry', 'notes', 'dismiss'] : ['dismiss'],
         tone: 'warn'
       }
     case 'idle':

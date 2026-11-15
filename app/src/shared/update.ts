@@ -28,6 +28,13 @@ export function compareVersions(a: Version, b: Version): number {
   return 0
 }
 
+/** True only when both are x.y.z and `version` is greater than `than`. */
+export function isNewer(version: string, than: string): boolean {
+  const v = parseVersion(version)
+  const t = parseVersion(than)
+  return v !== null && t !== null && compareVersions(v, t) > 0
+}
+
 export interface Feed {
   /** Full address of releases/latest. */
   api: string
@@ -174,7 +181,8 @@ export type UpdateState =
   | { kind: 'cancelled'; version: string; notesUrl: string }
   | { kind: 'downloadFailed'; version: string; notesUrl: string; reason: string }
   | { kind: 'installed'; version: string }
-  | { kind: 'installRefused'; version: string; notesUrl: string; reason: string } // reason may be ''
+  // reason may be ''; canRetry: the version is newer than the window's, so a retry finds it to install again
+  | { kind: 'installRefused'; version: string; notesUrl: string; reason: string; canRetry: boolean }
 
 /**
  * The outcome of an install started before this window started; the result file counts only for the same version.
@@ -188,13 +196,14 @@ export function outcomeAfterRestart(
 ): UpdateState | null {
   if (pending === null) return null
   const notesUrl = notesUrlFor(pending)
+  const canRetry = isNewer(pending, appVersion)
   if (last !== null && last.version === pending && last.result === 'refused') {
-    return { kind: 'installRefused', version: pending, notesUrl, reason: last.reason }
+    return { kind: 'installRefused', version: pending, notesUrl, reason: last.reason, canRetry }
   }
   const p = parseVersion(pending)
   const a = parseVersion(appVersion)
   if (pending === appVersion || (p !== null && a !== null && compareVersions(a, p) >= 0)) {
     return { kind: 'installed', version: appVersion }
   }
-  return { kind: 'installRefused', version: pending, notesUrl, reason: '' }
+  return { kind: 'installRefused', version: pending, notesUrl, reason: '', canRetry }
 }

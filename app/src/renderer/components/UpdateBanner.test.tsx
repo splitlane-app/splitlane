@@ -62,8 +62,39 @@ test('UpdateBanner buttons call the bridge', async () => {
   expect(calls.at(-1)).toBe('dismiss')
   expect(calls).toHaveLength(6)
 
+  // a result can be closed
+  for (const u of [
+    { kind: 'cancelled', version: '1.2.0', notesUrl: N },
+    { kind: 'downloadFailed', version: '1.2.0', notesUrl: N, reason: 'HTTP 500' },
+    { kind: 'installRefused', version: '1.2.0', notesUrl: N, reason: '', canRetry: true }
+  ] satisfies UpdateState[]) {
+    show(u)
+    await click('Закрыть')
+    expect(calls.at(-1), u.kind).toBe('dismiss')
+  }
+  expect(calls).toHaveLength(9)
+
   show({ kind: 'available', version: '1.2.0', notesUrl: N, hidden: true })
   expect(screen.queryByRole('button')).toBeNull()
+})
+
+test("a refusal of the window's own version offers only Закрыть", async () => {
+  const installUpdate = vi.fn(async () => {})
+  const dismissUpdate = vi.fn(async () => {})
+  const { bridge } = fakeBridge({ installUpdate, dismissUpdate })
+  const refused: UpdateState = {
+    kind: 'installRefused',
+    version: '1.2.0',
+    notesUrl: N,
+    reason: 'the task cannot be registered',
+    canRetry: false
+  }
+  renderWith(<UpdateBanner />, servicesFor(bridge, withUpdate(refused)))
+  expect(screen.getByText('Обновление до 1.2.0 не установлено: the task cannot be registered')).toBeTruthy()
+  expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Закрыть'])
+  await click('Закрыть')
+  expect(dismissUpdate).toHaveBeenCalledTimes(1)
+  expect(installUpdate).not.toHaveBeenCalled()
 })
 
 test('UpdateBanner survives a rejecting bridge', async () => {

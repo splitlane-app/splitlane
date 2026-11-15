@@ -459,7 +459,7 @@ test('openUpdateNotes opens only the release page of the current state', async (
   const notes = 'https://github.com/splitlane-app/splitlane/releases/tag/v1.2.0'
   const cases: [UpdateState, boolean][] = [
     [{ kind: 'available', version: '1.2.0', notesUrl: notes, hidden: false }, true],
-    [{ kind: 'installRefused', version: '1.2.0', notesUrl: notes, reason: '' }, true],
+    [{ kind: 'installRefused', version: '1.2.0', notesUrl: notes, reason: '', canRetry: true }, true],
     [{ kind: 'idle' }, false],
     [{ kind: 'installed', version: '1.2.0' }, false],
     [{ kind: 'available', version: '1.2.0', notesUrl: 'https://example.net/releases/tag/v1.2.0', hidden: false }, false],
