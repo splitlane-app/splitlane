@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"splitlane/helper/internal/connector"
 	"splitlane/helper/internal/protocol"
@@ -75,6 +76,20 @@ func (e *Engine) subscriptionLocked(id string) *store.StoredSubscription {
 	return nil
 }
 
+// fitName cuts a name to protocol.MaxNameLen bytes at a rune boundary, so that the state the window checks
+// strictly always fits: a share-link name may be 100 characters of up to 4 bytes each. A name that fits is
+// returned as it is.
+func fitName(name string) string {
+	if len(name) <= protocol.MaxNameLen {
+		return name
+	}
+	cut := protocol.MaxNameLen
+	for cut > 0 && !utf8.RuneStart(name[cut]) {
+		cut--
+	}
+	return name[:cut]
+}
+
 // syncProxy copies the connector and the servers into the published state, nothing secret; e.mu must be
 // held. A selected id that no server has (servers.json was set aside or cannot be read now) shows as none.
 func (e *Engine) syncProxy() {
@@ -84,14 +99,14 @@ func (e *Engine) syncProxy() {
 		Subscriptions: make([]protocol.Subscription, 0, len(e.servers.Subscriptions)),
 	}
 	for _, s := range e.servers.Servers {
-		p.Servers = append(p.Servers, protocol.ProxyServer{ID: s.ID, Name: s.Name, Protocol: s.Protocol, Source: s.Source})
+		p.Servers = append(p.Servers, protocol.ProxyServer{ID: s.ID, Name: fitName(s.Name), Protocol: s.Protocol, Source: s.Source})
 	}
 	if e.serverLocked(e.saved.SelectedServer) != nil {
 		id := e.saved.SelectedServer
 		p.Selected = &id
 	}
 	for _, s := range e.servers.Subscriptions {
-		sub := protocol.Subscription{ID: s.ID, Name: s.Name, UpdatedAt: s.UpdatedAt, Count: s.Count}
+		sub := protocol.Subscription{ID: s.ID, Name: fitName(s.Name), UpdatedAt: s.UpdatedAt, Count: s.Count}
 		if s.Error != "" {
 			code := s.Error
 			sub.Error = &code
@@ -246,7 +261,7 @@ func (e *Engine) dropGoneSelectionLocked() {
 }
 
 func storedServer(s connector.Server, source string) store.StoredServer {
-	return store.StoredServer{ID: s.ID, Name: s.Name, Protocol: s.Protocol, Source: source, Text: s.Text}
+	return store.StoredServer{ID: s.ID, Name: fitName(s.Name), Protocol: s.Protocol, Source: source, Text: s.Text}
 }
 
 // addResult is the answer of proxy.add and proxy.refresh: the servers new to the list, how many were there

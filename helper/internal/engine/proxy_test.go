@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"splitlane/helper/internal/connector"
 	"splitlane/helper/internal/protocol"
@@ -758,5 +759,33 @@ func noSecrets(t *testing.T, h *harness) {
 				t.Errorf("%s has the secret %q", name, s)
 			}
 		}
+	}
+}
+
+// A published name fits the pipe's limit: the window refuses a state with a longer one. The cut is at a rune
+// boundary and keeps the start of the name.
+func TestPublishedNamesFitTheNameLimit(t *testing.T) {
+	cjk := strings.Repeat("字", 100)   // 300 bytes
+	emoji := strings.Repeat("😀", 100) // 400 bytes of 4-byte runes
+	for _, name := range []string{cjk, emoji, strings.Repeat("a", 300), strings.Repeat("a", 256)} {
+		got := fitName(name)
+		if len(got) > protocol.MaxNameLen || !utf8.ValidString(got) || !strings.HasPrefix(name, got) {
+			t.Errorf("fitName(%d bytes) = %d bytes, valid=%v", len(name), len(got), utf8.ValidString(got))
+		}
+	}
+	if got := fitName(strings.Repeat("a", 256)); len(got) != 256 {
+		t.Errorf("a name of exactly 256 bytes was cut to %d", len(got))
+	}
+	if got := fitName("short"); got != "short" {
+		t.Errorf("short name changed: %q", got)
+	}
+
+	h := proxyHarness(t, "trojan://"+passTrojan+"@example.com:443?sni=example.com#"+emoji)
+	servers := h.e.State().Proxy.Servers
+	if len(servers) != 1 {
+		t.Fatalf("servers = %d, want 1", len(servers))
+	}
+	if n := servers[0].Name; len(n) > protocol.MaxNameLen || !utf8.ValidString(n) || !strings.HasPrefix(emoji, n) || n == "" {
+		t.Errorf("published server name: %d bytes, valid=%v", len(n), utf8.ValidString(n))
 	}
 }
