@@ -10,14 +10,14 @@ Please don't report vulnerabilities in public issues. Use GitHub's private vulne
 
 Please include:
 
-- the SplitLane version (the **Connection** screen shows the versions of SplitLane, the service and the core), the Windows version and the Tailscale version;
+- the SplitLane version (the **Connection** screen shows the versions of SplitLane, the service and the core), the Windows version and, if the Tailscale app is installed, its version;
 - what the problem is and what an attacker can do with it;
 - what the attacker needs: for example, a program running as the same Windows user, another standard user on the same PC, or a position on the network;
 - steps to reproduce, and a proof of concept if you have one.
 
 Don't include node keys, login links, the names or addresses of your tailnet devices, or other personal data. Mask them in logs and screenshots.
 
-What to expect: a first reply within 7 days, then updates while the problem is examined and fixed. Once a fix is released, the advisory is published, with credit to you if you want it.
+What to expect: we will reply as soon as possible and keep you updated while the problem is examined and fixed. Once a fix is released, the advisory is published, with credit to you if you want it.
 
 ## Security model in short
 

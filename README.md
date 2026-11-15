@@ -12,12 +12,13 @@ This is a beta. It works with Tailscale only.
 - The service runs a bundled network core (sing-box 1.14.4, unmodified). The core captures traffic with a virtual adapter and sends each connection to a lane by the path of the program that opened it.
 - The VPN lane goes through an embedded Tailscale node inside the core. It is a separate device in your tailnet, named `<PC name>-splitlane`, and it uses the exit node you choose. The Direct lane uses your normal connection.
 - One lane is the main lane. Programs you haven't pinned follow it; pinned programs stay on their lane.
-- While split routing is on, SplitLane turns off the exit node in the Tailscale app and turns it back on when you turn split routing off. After a crash or a restart of Windows, it turns it back on the next time the service starts.
+- If the Tailscale app for Windows is installed and uses an exit node, SplitLane turns that exit node off while split routing is on and turns it back on when you turn split routing off. After a crash or a restart of Windows, it turns it back on the next time the service starts.
 
 ## Requirements
 
 - Windows 10 or 11, x64.
-- Tailscale for Windows, installed and logged in, and an exit node in your tailnet that you can use. The exit node must reach the internet from a different address than this PC.
+- A Tailscale account (tailnet) with an exit node you can use; the exit node must reach the internet from a different address than this PC.
+- The Tailscale app for Windows is optional: if it is installed and uses an exit node, SplitLane turns that exit node off while split routing is on and turns it back on afterwards.
 - A Windows account with administrator rights. You install and use SplitLane under the same account: if you confirm the Windows prompt (UAC) with a different account, the installation stops.
 
 ## Install
@@ -37,14 +38,14 @@ This is a beta. It works with Tailscale only.
 
 The installer is in English or Russian, following the language of Windows.
 
-Installing over an older version works the same way: the installer first stops the service of the old version and turns the exit node back on. Your settings and the Tailscale login are kept. Silent install: `SplitLane-Setup-<version>.exe /S` (the window doesn't start; a non-zero exit code means the installation failed).
+Installing over an older version works the same way: the installer first stops the service of the old version and turns the exit node of the Tailscale app back on, if it used one. Your settings and the Tailscale login are kept. Silent install: `SplitLane-Setup-<version>.exe /S` (the window doesn't start; a non-zero exit code means the installation failed).
 
 winget: coming soon.
 
 ## First start
 
 1. If the window shows **First-time setup**, click **Install the service** and confirm the Windows prompt. The installer normally does this for you, so this screen appears only when the service needs to be repaired.
-2. On **Connect a VPN**, click **Log in to Tailscale**. The login page opens in your browser: log in to the tailnet that has your exit node. This logs in the embedded node, the new `<PC name>-splitlane` device. If your tailnet requires device approval, approve the device in the Tailscale admin console; the window continues by itself.
+2. On **Connect a VPN**, click **Log in to Tailscale**. SplitLane's window opens the login page in your browser: log in to the tailnet that has your exit node. This logs in SplitLane's embedded node, a new device `<PC name>-splitlane`; the Tailscale app isn't involved. If your tailnet requires device approval, approve the device in the Tailscale admin console; the window continues by itself.
 3. Choose an exit node, then click **Turn on split routing**.
 4. Drag programs onto the lanes. You can move a card from one lane to the other, drop an `.exe` file or a shortcut from Explorer onto a lane, or click **+ Add** to pick a program that is online now, an installed program or a file. The same actions are in the context menu of a card (**Send via VPN**, **Send direct**, **Unpin**) and work from the keyboard.
 
@@ -56,13 +57,13 @@ Closing the window keeps SplitLane in the tray. **Quit** in the tray menu turns 
 
 SplitLane checks the latest release on [GitHub Releases](https://github.com/splitlane-app/splitlane/releases) 30 seconds after the window starts and then every 24 hours while it runs, when **Check for updates automatically** is on (it is on by default). You can check at any time with **Check for updates** in the tray menu or on the **Connection** screen.
 
-When a newer version is out, a banner offers **Update**. SplitLane downloads the installer, checks its SHA-256 against the `.sha256` file of the same release and runs the installer silently; Windows asks you to confirm. The installer stops the service, turns the exit node back on, installs the new version and starts the window again. Split routing stays on or off, as it was. The window then shows "SplitLane was updated to version X", or the reason the update wasn't installed.
+When a newer version is out, a banner offers **Update**. SplitLane downloads the installer, checks its SHA-256 against the `.sha256` file of the same release and runs the installer silently; Windows asks you to confirm. The installer stops the service, turns the exit node of the Tailscale app back on if it used one, installs the new version and starts the window again. Split routing stays on or off, as it was. The window then shows "SplitLane was updated to version X", or the reason the update wasn't installed.
 
 The SHA-256 check confirms that the download is intact, not who made it: the installer isn't signed yet.
 
 ## Uninstall
 
-Open **Settings → Apps**, find SplitLane and click **Uninstall**, or run `%ProgramFiles%\SplitLane\Uninstall SplitLane.exe`. The uninstaller turns split routing off and turns the exit node back on in the Tailscale app before it removes anything.
+Open **Settings → Apps**, find SplitLane and click **Uninstall**, or run `%ProgramFiles%\SplitLane\Uninstall SplitLane.exe`. The uninstaller turns split routing off and, if the Tailscale app used an exit node, turns it back on before it removes anything.
 
 The checkbox **Remove the settings and the Tailscale login** (off by default) also deletes `%ProgramData%\SplitLane` and your `%AppData%\SplitLane`. Without it, they are kept for the next installation.
 
@@ -94,10 +95,10 @@ Details, and how to delete everything: [PRIVACY.md](PRIVACY.md).
 - Programs that go online through shared system processes (for example, the Edge web component) can't be separated from each other.
 - Traffic to private, local and Tailscale addresses always goes directly.
 - IPv6 to the internet doesn't work while split routing is on.
-- There is no kill switch. When the core crashes, traffic goes directly until SplitLane turns the exit node of the Tailscale app back on (about a second), then through that exit node until the core restarts. When SplitLane restarts the core itself (after a network change, when you change the exit node), traffic goes through the exit node of the Tailscale app meanwhile. If no exit node was selected in the Tailscale app, it goes directly in both cases.
+- There is no kill switch. When the core crashes, traffic goes directly until SplitLane turns the exit node of the Tailscale app back on (about a second), then through that exit node until the core restarts. When SplitLane restarts the core itself (after a network change, when you change the exit node), traffic goes through the exit node of the Tailscale app meanwhile. If the Tailscale app isn't installed or had no exit node selected, traffic goes directly in both cases.
 - An exit node that reaches the internet from the same address as this PC can't be used.
 - If the Tailscale app used automatic exit node selection, a specific exit node is selected there after split routing is turned off.
-- SplitLane reads one setting of the Tailscale app through a debug command whose format can change. After you update Tailscale, turn split routing on and off once.
+- If the Tailscale app is installed, SplitLane reads one of its settings through a debug command whose format can change. After you update Tailscale, turn split routing on and off once.
 - Messages of the service (its log, the reasons the installer shows when it stops) are in English in both languages.
 
 ## Building from source

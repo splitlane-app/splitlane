@@ -29,7 +29,7 @@ When: 30 seconds after the window starts and then every 24 hours while it runs, 
 
 **5. Traffic of your programs** follows the lanes you chose: programs on the VPN lane go through the embedded node and your exit node, the rest goes through your normal connection. SplitLane doesn't read or record what programs send. To show live activity, the service reads from the core which program connects to which host on which lane, and how fast; this stays on your PC.
 
-The service also runs the `tailscale` command of the Tailscale app on your PC to read its exit node and to turn it off and back on.
+If the Tailscale app is installed, the service also runs its `tailscale` command on your PC to read its exit node and to turn it off and back on.
 
 ### What is stored on your PC
 
@@ -81,7 +81,7 @@ Questions about this policy: [GitHub issues](https://github.com/splitlane-app/sp
 
 **5. Трафик программ** идёт по дорожкам, которые вы выбрали: программы дорожки VPN — через встроенный узел и ваш exit node, остальные — через обычное подключение. SplitLane не читает и не записывает то, что передают программы. Для живой активности служба получает от ядра, какая программа к какому узлу подключена, по какой дорожке и с какой скоростью; эти данные остаются на компьютере.
 
-Кроме того, служба вызывает на компьютере команду `tailscale` приложения Tailscale, чтобы узнать его exit node, выключить его и включить обратно.
+Кроме того, если приложение Tailscale установлено, служба вызывает на компьютере его команду `tailscale`, чтобы узнать его exit node, выключить его и включить обратно.
 
 ### Что хранится на компьютере
 
