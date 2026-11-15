@@ -88,6 +88,11 @@ describe('update', () => {
       'http://user:pw@127.0.0.1:8123',
       'http://127.0.0.1:0',
       'http://127.0.0.1:99999',
+      'http://127.0.0.1.evil.com:1',
+      'http://127.0.0.1:80/x',
+      'http://127.0.0.1:80',
+      'http://[::1]:1',
+      'http://0x7f.1:1',
       'https://example.com',
       'garbage'
     ]) {
@@ -173,6 +178,9 @@ describe('update', () => {
     expect(invalid(pickRelease(withSize(400 * 1024 * 1024 + 1), '1.0.0', GH))).not.toBe('')
     expect(invalid(pickRelease(withSize('big'), '1.0.0', GH))).not.toBe('')
     expect(invalid(pickRelease(withSize(-1), '1.0.0', GH))).not.toBe('')
+    expect(invalid(pickRelease(withSize(0), '1.0.0', GH))).not.toBe('')
+    expect(invalid(pickRelease(withSize(1.5), '1.0.0', GH))).not.toBe('')
+    expect(pickRelease(withSize(1), '1.0.0', GH).kind).toBe('newer')
   })
 
   it('allowedHop github hosts', () => {
@@ -225,6 +233,8 @@ describe('update', () => {
     expect(parseSha256File(`${HEX}0  ${name}`, name)).toBeNull()
     expect(parseSha256File(`${'zz'.repeat(32)}  ${name}`, name)).toBeNull()
     expect(parseSha256File(`${HEX}  ${name}x`, name)).toBeNull()
+    expect(parseSha256File(`﻿${HEX}  ${name}  \r\n`, name)).toBe(HEX)
+    expect(parseSha256File(`${HEX}  ${name} \t\n`, name)).toBe(HEX)
     expect(parseSha256File('', name)).toBeNull()
     expect(parseSha256File('\n  \n', name)).toBeNull()
   })
@@ -243,6 +253,8 @@ describe('update', () => {
     expect(parseLastInstall('1.2.0\nmaybe\n')).toBeNull()
     expect(parseLastInstall('1.2.0\n')).toBeNull()
     expect(parseLastInstall('')).toBeNull()
+    expect(parseLastInstall('﻿1.2.0\r\nok\r\n')).toEqual({ version: '1.2.0', result: 'ok', reason: '' })
+    expect(parseLastInstall(`1.2.0\nrefused\n${'x'.repeat(5000)}`)?.reason).toHaveLength(1000)
   })
 
   it('outcomeAfterRestart installed', () => {
@@ -251,6 +263,11 @@ describe('update', () => {
       kind: 'installed',
       version: '1.2.0'
     })
+  })
+
+  it('outcomeAfterRestart treats a newer window version as installed', () => {
+    // a newer version installed by hand is no failure; the window's own version is reported
+    expect(outcomeAfterRestart('1.2.0', '1.3.1', null)).toEqual({ kind: 'installed', version: '1.3.1' })
   })
 
   it('outcomeAfterRestart refused with reason', () => {

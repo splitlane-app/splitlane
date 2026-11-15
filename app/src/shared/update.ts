@@ -49,13 +49,13 @@ export function feedFrom(env: string | undefined): { feed: Feed; refused?: strin
   if (env === undefined || env === '') return { feed: { ...GITHUB_FEED } }
   const m = /^http:\/\/127\.0\.0\.1:(\d{1,5})\/?$/.exec(env)
   const port = m ? Number(m[1]) : 0
-  if (!m || port < 1 || port > 65535) {
+  if (!m || port < 1 || port > 65535 || port === 80) {
     return {
       feed: { ...GITHUB_FEED },
       refused: 'SPLITLANE_UPDATE_FEED ignored: only http://127.0.0.1:<port> is allowed'
     }
   }
-  const origin = `http://127.0.0.1:${port}`
+  const origin = new URL(`http://127.0.0.1:${port}`).origin
   return {
     feed: {
       api: `${origin}/repos/${REPO}/releases/latest`,
@@ -110,7 +110,7 @@ export function pickRelease(json: unknown, current: string, feed: Feed): Release
     return bad('release file address is not the expected one')
   }
   const size = exe.size
-  if (typeof size !== 'number' || !Number.isFinite(size) || size < 0 || size > MAX_INSTALLER_BYTES) {
+  if (typeof size !== 'number' || !Number.isFinite(size) || !Number.isInteger(size) || size < 1 || size > MAX_INSTALLER_BYTES) {
     return bad('installer size is out of range')
   }
   return { kind: 'newer', version, installerUrl, shaUrl, notesUrl: notesUrlFor(version), name }
@@ -136,7 +136,11 @@ export function allowedHop(url: string, feed: Feed): boolean {
 
 /** First non-empty line: "<64 hex><1-2 spaces or a tab><name>"; returns the lowercase hash. */
 export function parseSha256File(text: string, fileName: string): string | null {
-  const line = text.split(/\r?\n/).find((l) => l.trim() !== '')
+  const line = text
+    .replace(/^﻿/, '')
+    .split(/\r?\n/)
+    .find((l) => l.trim() !== '')
+    ?.trimEnd()
   if (line === undefined) return null
   const m = /^([0-9a-fA-F]{64})(?: {1,2}|\t)(.+)$/.exec(line)
   if (!m || m[2] !== fileName) return null
@@ -151,11 +155,11 @@ export interface LastInstall {
 
 /** last-install.txt: version, ok|refused, optional reason. */
 export function parseLastInstall(text: string): LastInstall | null {
-  const lines = text.split(/\r?\n/)
+  const lines = text.replace(/^﻿/, '').split(/\r?\n/)
   if (parseVersion(lines[0] ?? '') === null) return null
   const result = lines[1]
   if (result !== 'ok' && result !== 'refused') return null
-  return { version: lines[0], result, reason: lines[2] ?? '' }
+  return { version: lines[0], result, reason: (lines[2] ?? '').slice(0, 1000) }
 }
 
 export type UpdateState =
@@ -179,7 +183,11 @@ export function outcomeAfterRestart(
   last: LastInstall | null
 ): UpdateState | null {
   if (pending === null) return null
-  if (pending === appVersion) return { kind: 'installed', version: pending }
+  const p = parseVersion(pending)
+  const a = parseVersion(appVersion)
+  if (pending === appVersion || (p !== null && a !== null && compareVersions(a, p) >= 0)) {
+    return { kind: 'installed', version: appVersion }
+  }
   const reason = last !== null && last.version === pending && last.result === 'refused' ? last.reason : ''
   return { kind: 'installRefused', version: pending, notesUrl: notesUrlFor(pending), reason }
 }
