@@ -22,3 +22,8 @@ test('both languages have the same keys and no empty text', () => {
     for (const v of Object.values(MAIN_TEXT[lang])) expect(v.length).toBeGreaterThan(0)
   }
 })
+
+test('the notification texts carry the version of an update', () => {
+  expect(MAIN_TEXT.ru.notifyUpdateTitle).toContain('{v}')
+  expect(MAIN_TEXT.en.notifyUpdateTitle).toContain('{v}')
+})

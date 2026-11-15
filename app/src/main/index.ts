@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
 import { access, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, win32 } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, Notification, shell } from 'electron'
 import { resolveLanguage, type Lang } from '../shared/i18n'
 import { IPC, type InstallState, type Snapshot } from '../shared/ipc'
 import type { Dropped } from '../shared/programs'
@@ -33,6 +33,7 @@ import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
 import { forbiddenSwitch } from './switches'
 import { runTask, systemTools, taskRegistered, type Exec } from './task'
 import { mainText } from './mainText'
+import { noticeText, notificationsFor, shouldShow, watchedOf, type Watched } from './notifications'
 import { AppTray, windowIcon } from './tray'
 import { installerOutcome, nodeFs, runInstallerScript, Updater } from './updater'
 
@@ -297,6 +298,35 @@ function send(channel: string, data: unknown): void {
 
 function pushSnapshot(): void {
   send(IPC.snapshotChanged, snapshot())
+  notify()
+}
+
+// ---- notifications while the window is in the tray ----
+
+let watched: Watched | null = null
+/** Shown notifications stay referenced until they close, or Windows may drop their click. */
+const toasts = new Set<Notification>()
+
+function notify(): void {
+  const next = watchedOf(link.state(), updateState(), settings.notifiedVersion)
+  if (next === null) return
+  const found = notificationsFor(watched, next)
+  watched = next
+  if (found.length === 0) return
+  const supported = Notification.isSupported()
+  const windowHidden = win === null || win.isDestroyed() || !win.isVisible() || win.isMinimized()
+  for (const n of shouldShow(found, { enabled: settings.notifications, windowHidden, supported })) {
+    const { title, body } = noticeText(language, n)
+    const toast = new Notification({ title, body })
+    toasts.add(toast)
+    toast.on('click', showWindow)
+    toast.on('close', () => toasts.delete(toast))
+    toast.show()
+    if (n.kind === 'update' && n.version !== undefined) {
+      settings = { ...settings, notifiedVersion: n.version }
+      void saveSettings(settings)
+    }
+  }
 }
 
 link.on('status', (s) => {

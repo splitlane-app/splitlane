@@ -14,7 +14,9 @@ describe('settings', () => {
       checkUpdates: true,
       pendingUpdate: null,
       language: 'system',
-      lastExitNode: null
+      lastExitNode: null,
+      notifications: true,
+      notifiedVersion: null
     })
     expect(parseSettings('{"connectedOnce":true}').connectedOnce).toBe(true)
   })
@@ -68,5 +70,16 @@ describe('settings', () => {
     expect(rememberExitNode(a, st(null, [a]))).toBeNull()
     expect(rememberExitNode(a, st('100.64.0.2', []))).toBeNull()
     expect(rememberExitNode(null, st('100.64.0.2', [{ id: a.id, name: '' }]))).toBeNull()
+  })
+
+  it('parseSettings reads notifications (default on) and notifiedVersion', () => {
+    expect(DEFAULT_SETTINGS.notifications).toBe(true)
+    expect(DEFAULT_SETTINGS.notifiedVersion).toBeNull()
+    expect(parseSettings('{"notifications":false}').notifications).toBe(false)
+    expect(parseSettings('{"notifications":"no"}').notifications).toBe(true)
+    expect(parseSettings('{"notifiedVersion":"1.2.3"}').notifiedVersion).toBe('1.2.3')
+    for (const bad of ['"v1.2.3"', '"1.2"', '5', 'null', 'true']) {
+      expect(parseSettings(`{"notifiedVersion":${bad}}`).notifiedVersion, bad).toBeNull()
+    }
   })
 })

@@ -19,6 +19,10 @@ export interface WindowSettings {
    * routing off the pill would show the address; the page cannot patch this, the main process keeps it.
    */
   lastExitNode: LastExitNode | null
+  /** Windows notifications while the window is in the tray. */
+  notifications: boolean
+  /** The last version a notification of an update was shown for; x.y.z or null. Kept by the main process. */
+  notifiedVersion: string | null
 }
 
 export interface LastExitNode {
@@ -33,7 +37,9 @@ export const DEFAULT_SETTINGS: WindowSettings = {
   checkUpdates: true,
   pendingUpdate: null,
   language: 'system',
-  lastExitNode: null
+  lastExitNode: null,
+  notifications: true,
+  notifiedVersion: null
 }
 
 export function parseSettings(text: string): WindowSettings {
@@ -45,7 +51,7 @@ export function parseSettings(text: string): WindowSettings {
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ...DEFAULT_SETTINGS }
   const o = raw as Record<string, unknown>
-  const pick = (k: 'openAtLogin' | 'enableOnStart' | 'connectedOnce' | 'checkUpdates'): boolean =>
+  const pick = (k: 'openAtLogin' | 'enableOnStart' | 'connectedOnce' | 'checkUpdates' | 'notifications'): boolean =>
     typeof o[k] === 'boolean' ? (o[k] as boolean) : DEFAULT_SETTINGS[k]
   const p = o.pendingUpdate
   return {
@@ -55,7 +61,9 @@ export function parseSettings(text: string): WindowSettings {
     checkUpdates: pick('checkUpdates'),
     pendingUpdate: typeof p === 'string' && parseVersion(p) !== null ? p : null,
     language: isLanguageSetting(o.language) ? o.language : DEFAULT_SETTINGS.language,
-    lastExitNode: parseLastExitNode(o.lastExitNode)
+    lastExitNode: parseLastExitNode(o.lastExitNode),
+    notifications: pick('notifications'),
+    notifiedVersion: typeof o.notifiedVersion === 'string' && parseVersion(o.notifiedVersion) !== null ? o.notifiedVersion : null
   }
 }
 

@@ -307,6 +307,12 @@ export function ConnectionScreen(): React.JSX.Element | null {
           onToggle={() => save({ checkUpdates: !settings.checkUpdates })}
         />
         <Toggle
+          on={settings.notifications}
+          label={t('connection.notifications')}
+          caption={t('connection.notifications')}
+          onToggle={() => save({ notifications: !settings.notifications })}
+        />
+        <Toggle
           on={settings.enableOnStart}
           label={t('connection.enableOnStart')}
           caption={t('connection.enableOnStart')}

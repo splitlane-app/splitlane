@@ -593,3 +593,13 @@ test('«Подключение» offers the banner actions next to the update li
   show({ kind: 'upToDate' })
   expect(screen.queryByRole('button', { name: 'Обновить' })).toBeNull()
 })
+
+test('the notifications toggle saves the setting', () => {
+  const setSettings = vi.fn(async () => DEFAULT_SETTINGS)
+  const { bridge } = fakeBridge({ setSettings })
+  renderWith(<ConnectionScreen />, servicesFor(bridge, withTs({}, { phase: 'off' }, true)))
+  const sw = screen.getByRole('switch', { name: 'Показывать уведомления' })
+  expect(sw.getAttribute('aria-checked')).toBe('true')
+  fireEvent.click(sw)
+  expect(setSettings).toHaveBeenLastCalledWith({ notifications: false })
+})

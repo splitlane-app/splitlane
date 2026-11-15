@@ -12,7 +12,7 @@ describe('SettingsFile', () => {
       const path = join(dir, 'nested', 'settings.json')
       const f = new SettingsFile(path)
       expect(await f.load()).toEqual(DEFAULT_SETTINGS)
-      const s = { openAtLogin: true, enableOnStart: true, connectedOnce: false, checkUpdates: false, pendingUpdate: '1.2.3', language: 'en' as const, lastExitNode: { id: '100.64.0.2', name: 'node-a' } }
+      const s = { openAtLogin: true, enableOnStart: true, connectedOnce: false, checkUpdates: false, pendingUpdate: '1.2.3', language: 'en' as const, lastExitNode: { id: '100.64.0.2', name: 'node-a' }, notifications: false, notifiedVersion: '1.2.0' }
       await f.save(s)
       expect(await f.load()).toEqual(s)
       expect(await readdir(join(dir, 'nested'))).toEqual(['settings.json'])

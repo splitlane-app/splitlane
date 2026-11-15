@@ -304,6 +304,7 @@ export const ru = {
   'connection.openAtLogin': 'Запускать при входе в Windows',
   'connection.enableOnStart': 'Включать деление при запуске',
   'connection.checkUpdates': 'Проверять обновления',
+  'connection.notifications': 'Показывать уведомления',
   'connection.settings': 'Настройки',
   'connection.saveFailed': 'Не удалось сохранить настройку',
   'connection.language': 'Язык',

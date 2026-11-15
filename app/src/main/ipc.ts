@@ -148,8 +148,8 @@ export function validateDetailKey(x: unknown): string | null {
   return upTo(str(x, 'key'), LIMITS.maxPathBytes, 'key')
 }
 
-// pendingUpdate belongs to the updater of the main process: the page cannot set it
-const BOOL_SETTING_KEYS = ['openAtLogin', 'enableOnStart', 'connectedOnce', 'checkUpdates'] as const satisfies readonly (keyof WindowSettings)[]
+// pendingUpdate, lastExitNode and notifiedVersion belong to the main process: the page cannot set them
+const BOOL_SETTING_KEYS = ['openAtLogin', 'enableOnStart', 'connectedOnce', 'checkUpdates', 'notifications'] as const satisfies readonly (keyof WindowSettings)[]
 const SETTING_KEYS = [...BOOL_SETTING_KEYS, 'language'] as const
 
 export function validateSettingsPatch(x: unknown): Partial<WindowSettings> {

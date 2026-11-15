@@ -309,6 +309,7 @@ export const en: Record<Key, string> = {
   'connection.openAtLogin': 'Start when I sign in to Windows',
   'connection.enableOnStart': 'Turn on split routing at startup',
   'connection.checkUpdates': 'Check for updates automatically',
+  'connection.notifications': 'Show notifications',
   'connection.settings': 'Settings',
   'connection.saveFailed': "Couldn't save the setting",
   'connection.language': 'Language',

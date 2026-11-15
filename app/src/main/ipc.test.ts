@@ -303,7 +303,7 @@ function ipcHarness() {
     userCommand: vi.fn(),
     installHelper: vi.fn(async () => {}),
     appInfo: vi.fn(async () => ({ version: '0.2.0', installed: true })),
-    setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, language: 'system' as const, lastExitNode: null, ...p })),
+    setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, language: 'system' as const, lastExitNode: null, notifications: true, notifiedVersion: null, ...p })),
     installedPrograms: vi.fn(async () => []),
     pickProgram: vi.fn(async () => null),
     resolveDropped: vi.fn(async (paths: string[]) =>
@@ -393,7 +393,9 @@ test('registerIpc checks the sender and every argument from the page', async () 
     checkUpdates: true,
     pendingUpdate: null,
     language: 'system',
-    lastExitNode: null
+    lastExitNode: null,
+    notifications: true,
+    notifiedVersion: null
   })
   await expect(h.invoke(IPC.setSettings, { enableOnStart: 1 })).rejects.toThrow()
   expect(h.d.setSettings).toHaveBeenCalledTimes(1)
@@ -464,6 +466,12 @@ test('validateSettingsPatch accepts checkUpdates and refuses pendingUpdate', () 
   expect(() => validateSettingsPatch({ pendingUpdate: '1.2.0' })).toThrow()
   expect(() => validateSettingsPatch({ pendingUpdate: null })).toThrow()
   expect(() => validateSettingsPatch({ checkUpdates: true, pendingUpdate: '1.2.0' })).toThrow()
+})
+
+test('validateSettingsPatch accepts notifications and refuses notifiedVersion', () => {
+  expect(validateSettingsPatch({ notifications: false })).toEqual({ notifications: false })
+  expect(() => validateSettingsPatch({ notifications: 'no' })).toThrow()
+  expect(() => validateSettingsPatch({ notifiedVersion: '1.2.0' })).toThrow()
 })
 
 test('validateSettingsPatch refuses lastExitNode: the main process keeps it', () => {

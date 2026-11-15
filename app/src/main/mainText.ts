@@ -10,6 +10,17 @@ export interface MainText {
   quit: string
   programsFilter: string
   zipFilter: string
+  notifyErrorTitle: string
+  notifyErrorBody: string
+  notifyVpnDownTitle: string
+  notifyVpnDownBody: string
+  notifyBlockedTitle: string
+  notifyBlockedBody: string
+  notifyLoginTitle: string
+  notifyLoginBody: string
+  /** {v} is the version. */
+  notifyUpdateTitle: string
+  notifyUpdateBody: string
 }
 
 export const MAIN_TEXT: Record<Lang, MainText> = {
@@ -21,7 +32,17 @@ export const MAIN_TEXT: Record<Lang, MainText> = {
     disable: 'Выключить',
     quit: 'Выход',
     programsFilter: 'Программы',
-    zipFilter: 'Архив ZIP'
+    zipFilter: 'Архив ZIP',
+    notifyErrorTitle: 'SplitLane: деление остановлено',
+    notifyErrorBody: 'Откройте SplitLane, чтобы узнать причину',
+    notifyVpnDownTitle: 'SplitLane: нет связи с VPN-сервером',
+    notifyVpnDownBody: 'Программы дорожки VPN без интернета, пока связь не вернётся',
+    notifyBlockedTitle: 'SplitLane: Tailscale снова включил exit node',
+    notifyBlockedBody: 'Деление на паузе. Откройте SplitLane, чтобы выбрать, что делать',
+    notifyLoginTitle: 'SplitLane: войдите в Tailscale снова',
+    notifyLoginBody: 'Откройте SplitLane, чтобы войти',
+    notifyUpdateTitle: 'SplitLane: доступна версия {v}',
+    notifyUpdateBody: 'Нажмите, чтобы открыть SplitLane и обновить'
   },
   en: {
     open: 'Open',
@@ -31,7 +52,17 @@ export const MAIN_TEXT: Record<Lang, MainText> = {
     disable: 'Turn off',
     quit: 'Quit',
     programsFilter: 'Programs',
-    zipFilter: 'ZIP archive'
+    zipFilter: 'ZIP archive',
+    notifyErrorTitle: 'SplitLane: split routing stopped',
+    notifyErrorBody: 'Open SplitLane to see why',
+    notifyVpnDownTitle: "SplitLane: can't reach the VPN server",
+    notifyVpnDownBody: 'Programs on the VPN lane have no internet until the connection is back',
+    notifyBlockedTitle: 'SplitLane: Tailscale turned its exit node back on',
+    notifyBlockedBody: 'Split routing is paused. Open SplitLane to choose what to do',
+    notifyLoginTitle: 'SplitLane: log in to Tailscale again',
+    notifyLoginBody: 'Open SplitLane to log in',
+    notifyUpdateTitle: 'SplitLane: version {v} is available',
+    notifyUpdateBody: 'Click to open SplitLane and update'
   }
 }
 
