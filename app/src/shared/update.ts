@@ -176,18 +176,25 @@ export type UpdateState =
   | { kind: 'installed'; version: string }
   | { kind: 'installRefused'; version: string; notesUrl: string; reason: string } // reason may be ''
 
-/** The outcome of an install started before this window started; the result file counts only for the same version. */
+/**
+ * The outcome of an install started before this window started; the result file counts only for the same version.
+ * A refusal of the pending version wins over the window's version: when `install` refuses, the files of that
+ * version are already in place, so the window runs it although the setup failed.
+ */
 export function outcomeAfterRestart(
   pending: string | null,
   appVersion: string,
   last: LastInstall | null
 ): UpdateState | null {
   if (pending === null) return null
+  const notesUrl = notesUrlFor(pending)
+  if (last !== null && last.version === pending && last.result === 'refused') {
+    return { kind: 'installRefused', version: pending, notesUrl, reason: last.reason }
+  }
   const p = parseVersion(pending)
   const a = parseVersion(appVersion)
   if (pending === appVersion || (p !== null && a !== null && compareVersions(a, p) >= 0)) {
     return { kind: 'installed', version: appVersion }
   }
-  const reason = last !== null && last.version === pending && last.result === 'refused' ? last.reason : ''
-  return { kind: 'installRefused', version: pending, notesUrl: notesUrlFor(pending), reason }
+  return { kind: 'installRefused', version: pending, notesUrl, reason: '' }
 }

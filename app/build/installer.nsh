@@ -14,7 +14,8 @@
 ;     (exit code 2) with nothing changed, and a window the setup closed is started again; then the six files
 ;     of the stage 1 layout leave the root of $INSTDIR.
 ;   customInstall (after the files): `helper\splitlane-helper.exe install --session-user` in place; the copy
-;     of the installer that the template puts into %LocalAppData% goes (splitlaneDropInstallerCopy).
+;     of the installer that the template puts into %LocalAppData% goes (splitlaneDropInstallerCopy). A refusal
+;     stops the setup (exit code 2), and a window the setup closed is started again, of the new files.
 ;   The result for the window (spec 6 of stage 2 part 2, splitlaneWriteResult): after install, and when
 ;     prepare or install refuses, %ProgramData%\SplitLane\export\last-install.txt says ok or refused and why.
 ; Uninstaller:
@@ -328,6 +329,8 @@ Var splitlaneClosed
     !insertmacro splitlaneReason INSTALL "splitlane-helper.exe install: $0"
     !insertmacro splitlaneWriteResult refused $1
     MessageBox MB_OK|MB_ICONSTOP "SplitLane не установлен: $1" /SD IDOK
+    ; the window of the new files (Abort skips --force-run): its repair screen and the result of the update
+    !insertmacro splitlaneStartWindow
     SetErrorLevel 2
     Abort
   ${EndIf}
