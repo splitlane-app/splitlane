@@ -50,8 +50,14 @@
 
 ## Установщик
 
-- NSIS (Nullsoft Scriptable Install System) 3.04 в сборке electron-builder (`nsis-3.0.4.1`, модули `nsis-resources-3.4.1`): из него собраны установщик `SplitLane-Setup-<версия>.exe` и деинсталлятор `Uninstall SplitLane.exe`, его заглушка входит в оба файла. Лицензия zlib/libpng; отдельные части — свои лицензии, перечень: https://nsis.sourceforge.io/License
+- NSIS (Nullsoft Scriptable Install System) 3.04 в сборке electron-builder (`nsis-3.0.4.1`): из него собраны установщик `SplitLane-Setup-<версия>.exe` и деинсталлятор `Uninstall SplitLane.exe`, его заглушка входит в оба файла. Лицензия zlib/libpng (файл `COPYING` NSIS, https://nsis.sourceforge.io/License). Данные сжаты модулем zlib (та же лицензия); модуль LZMA (Common Public License 1.0) не используется. Модули из состава самого NSIS, которые входят в установщик и деинсталлятор, — `System`, `nsExec`, `nsDialogs` — под той же лицензией zlib/libpng.
 - Сценарии NSIS electron-builder (`app-builder-lib` 26.18.0, каталог `templates/nsis`), по которым собран установщик вместе с `app/build/installer.nsh`: лицензия MIT, https://github.com/electron-userland/electron-builder
+- Модули NSIS из набора electron-builder `nsis-resources-3.4.1` (файлов лицензий в наборе нет; ниже — по сведениям о версии DLL, заголовкам и страницам модулей). NSIS кладёт в установщик только модули, которые сценарий вызывает: в установщике и деинсталляторе SplitLane — четыре следующих (Nsis7z — только в установщике); `nsProcess`, `inetc`, `nsisunz`, `SpiderBanner`, `EmbedHTML` из набора не входят.
+  - Nsis7z 19.00 (`nsis7z.dll`, распаковка файлов программы из архива 7z): основан на исходном коде 7-Zip, в сведениях о версии — «Copyright (c) 1999-2016 Igor Pavlov, Nik Medved, Marek Mizanin, Stuart Welch». Страница модуля: «This software follows 7-Zip source code license» — основная лицензия 7-Zip GNU LGPL (https://www.7-zip.org/license.txt). Исходный код модуля — по ссылкам страницы https://nsis.sourceforge.io/Nsis7z_plug-in, исходный код 7-Zip — https://www.7-zip.org/download.html
+  - StdUtils 1.1.4 (`StdUtils.dll`, параметры командной строки, запуск окна от имени пользователя): LoRd_MuldeR, GNU LGPL версии 2.1 или более поздней (заголовок `StdUtils.nsh` в electron-builder), исходный код: https://github.com/lordmulder/stdutils
+  - UAC (`UAC.dll`, права администратора: деинсталлятор перезапускает себя через него с повышением): автор Anders, лицензия zlib (страница модуля https://nsis.sourceforge.io/UAC_plug-in).
+  - WinShell (`WinShell.dll`, ярлыки и AppUserModelID): автор Anders, лицензия: см. https://nsis.sourceforge.io/WinShell_plug-in (страница называет модуль «Freeware»).
+- `elevate.exe` в `resources\` папки программы (electron-builder кладёт его в установку для всех пользователей): Johannes Passing, сведения о версии «Elevate Application 1.0.0.2894, Copyright (C) 2007»; репозиторий автора https://github.com/jpassing/elevate — лицензия MIT.
 
 ## Модули Go служебного процесса
 

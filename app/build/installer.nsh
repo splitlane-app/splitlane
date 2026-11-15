@@ -84,12 +84,31 @@
 
 !ifdef BUILD_UNINSTALLER
   !insertmacro splitlaneLineFunction "un."
+  !define SPLITLANE_UN "un."
   ; "1" when the data folder and the user's settings go too (--purge)
   Var splitlanePurge
   Var splitlanePurgeBox
 !else
   !insertmacro splitlaneLineFunction ""
+  !define SPLITLANE_UN ""
 !endif
+
+; $1, the output of a refused subcommand LABEL, becomes the reason for the message box: its last line without
+; "<LABEL>-REFUSED: ", or FALLBACK when that leaves nothing. Uses $2 and $3.
+!macro splitlaneReason LABEL FALLBACK
+  Push $1
+  Push ""
+  Call ${SPLITLANE_UN}splitlaneLine
+  Pop $1
+  StrLen $2 "${LABEL}-REFUSED: "
+  StrCpy $3 $1 $2
+  ${If} $3 == "${LABEL}-REFUSED: "
+    StrCpy $1 $1 "" $2
+  ${EndIf}
+  ${If} $1 == ""
+    StrCpy $1 "${FALLBACK}"
+  ${EndIf}
+!macroend
 
 ; $0 is 0 when a process SplitLane.exe other than this one ($1, its PID) runs, in any session and from any folder.
 !macro splitlaneFindWindow
@@ -148,13 +167,7 @@
     Pop $0 ; the exit code, or "error"
     Pop $1 ; the output
     ${If} $0 != 0
-      Push $1
-      Push ""
-      Call splitlaneLine
-      Pop $1
-      ${If} $1 == ""
-        StrCpy $1 "splitlane-helper.exe prepare: $0"
-      ${EndIf}
+      !insertmacro splitlaneReason PREPARE "splitlane-helper.exe prepare: $0"
       MessageBox MB_OK|MB_ICONSTOP "SplitLane не установлен: $1" /SD IDOK
       SetErrorLevel 2
       Quit
@@ -181,13 +194,7 @@
   Pop $0
   Pop $1
   ${If} $0 != 0
-    Push $1
-    Push ""
-    Call splitlaneLine
-    Pop $1
-    ${If} $1 == ""
-      StrCpy $1 "splitlane-helper.exe install: $0"
-    ${EndIf}
+    !insertmacro splitlaneReason INSTALL "splitlane-helper.exe install: $0"
     MessageBox MB_OK|MB_ICONSTOP "SplitLane не установлен: $1" /SD IDOK
     SetErrorLevel 2
     Abort
@@ -246,13 +253,7 @@
     Pop $0
     Pop $1
     ${If} $0 != 0
-      Push $1
-      Push ""
-      Call un.splitlaneLine
-      Pop $1
-      ${If} $1 == ""
-        StrCpy $1 "splitlane-helper.exe uninstall: $0"
-      ${EndIf}
+      !insertmacro splitlaneReason UNINSTALL "splitlane-helper.exe uninstall: $0"
       MessageBox MB_OK|MB_ICONSTOP "SplitLane не удалён: $1" /SD IDOK
       SetErrorLevel 2
       Abort
