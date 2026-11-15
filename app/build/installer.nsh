@@ -4,18 +4,26 @@
 ; un.onInit. The helper's subcommands print progress lines and end with <CMD>-OK or <CMD>-REFUSED: <reason>
 ; (exit code 0, else 7; 2 is a usage error); uninstall --purge also prints UNINSTALL-NOTE: ...
 ;
-; Installer, in the order of installSection.nsh:
+; Installer, in the order of installer.nsi and installSection.nsh:
+;   customInit (.onInit, after initMultiUser): $INSTDIR is %ProgramFiles%\SplitLane whatever /D= or an earlier
+;     InstallLocation says (spec 2: the folder is fixed).
 ;   customCheckAppRunning (before the uninstaller of an earlier version and before any file is extracted):
 ;     the window is closed (splitlaneCloseWindow); then splitlane-helper.exe of this version, from dist\helper
 ;     at build time, runs from $PLUGINSDIR as `prepare --session-user`: it stops the helper of the earlier
 ;     version with the exit node given back and waits until its processes are gone; a refusal stops the setup
-;     (exit code 2) with nothing changed; then the six files of the stage 1 layout leave the root of $INSTDIR.
-;   customInstall (after the files): `helper\splitlane-helper.exe install --session-user` in place.
+;     (exit code 2) with nothing changed, and a window the setup closed is started again; then the six files
+;     of the stage 1 layout leave the root of $INSTDIR.
+;   customInstall (after the files): `helper\splitlane-helper.exe install --session-user` in place; the copy
+;     of the installer that the template puts into %LocalAppData% goes (splitlaneDropInstallerCopy).
 ; Uninstaller:
 ;   customUnWelcomePage: the page with the check box that adds --purge (silent: the parameter /PURGE).
 ;   customCheckAppRunning: the window is closed (no prepare: the helper's uninstall stops the helper itself).
 ;   customUnInstall (before the files are removed; nothing when a newer installer runs it to replace the
-;     files): `helper\splitlane-helper.exe uninstall [--purge]`; a refusal stops the removal, files stay.
+;     files): `helper\splitlane-helper.exe uninstall [--purge]`; a refusal stops the removal, files stay, and a
+;     window the uninstaller closed is started again. A helper that cannot be started at all (missing,
+;     quarantined) does not block the removal: the user is asked (silent: only when no helper and no core
+;     runs), then the task goes by schtasks and the data folder stays. Then the window's autostart value and
+;     the installer's copy in %LocalAppData% go.
 ;
 ; Why not the stock _CHECK_APP_RUNNING of electron-builder 26.18: with PowerShell it finds and kills every
 ; process whose image lies under $INSTDIR, so the helper and its core (helper\, and the root in the stage 1
@@ -92,6 +100,8 @@
   !insertmacro splitlaneLineFunction ""
   !define SPLITLANE_UN ""
 !endif
+; "1" when splitlaneCloseWindow found the window and ended it: a refusal starts it again (splitlaneStartWindow)
+Var splitlaneClosed
 
 ; $1, the output of a refused subcommand LABEL, becomes the reason for the message box: its last line without
 ; "<LABEL>-REFUSED: ", or FALLBACK when that leaves nothing. Uses $2 and $3.
@@ -147,7 +157,38 @@
         StrCpy $2 0
       ${EndIf}
     ${Loop}
+    StrCpy $splitlaneClosed "1"
   ${EndIf}
+!macroend
+
+; After a refusal: the window that splitlaneCloseWindow ended starts again, installed SplitLane.exe as the user of
+; the desktop, not elevated (StdUtils.ExecShellAsUser, as the template's StartApp), so that there is a window for the
+; helper that keeps running. Uses $0. Not when the window was not running or SplitLane.exe is not in $INSTDIR.
+!macro splitlaneStartWindow
+  ${If} $splitlaneClosed == "1"
+  ${AndIf} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+    ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" ""
+  ${EndIf}
+!macroend
+
+; The template copies the running installer into %LocalAppData%\<name>-updater\installer.exe of the elevated user
+; (installApplicationFiles in include\installer.nsh, unconditional in app-builder-lib 26.18: no option or define
+; turns it off): an elevated write into a folder that user controls, never removed. It goes here, and its folder
+; when that is empty (RMDir without /r removes a junction itself, never what it points to). Keeps the registers.
+!macro splitlaneDropInstallerCopy
+  Push $0
+  ${If} $installMode == "all"
+    SetShellVarContext current
+  ${EndIf}
+  Delete "$LOCALAPPDATA\${APP_INSTALLER_STORE_FILE}"
+  ${StdUtils.GetParentPath} $0 "$LOCALAPPDATA\${APP_INSTALLER_STORE_FILE}"
+  ${If} $0 != ""
+    RMDir "$0"
+  ${EndIf}
+  ${If} $installMode == "all"
+    SetShellVarContext all
+  ${EndIf}
+  Pop $0
 !macroend
 
 !ifndef BUILD_UNINSTALLER
@@ -169,6 +210,7 @@
     ${If} $0 != 0
       !insertmacro splitlaneReason PREPARE "splitlane-helper.exe prepare: $0"
       MessageBox MB_OK|MB_ICONSTOP "SplitLane не установлен: $1" /SD IDOK
+      !insertmacro splitlaneStartWindow
       SetErrorLevel 2
       Quit
     ${EndIf}
@@ -179,6 +221,13 @@
     Delete "$INSTDIR\sing-box-LICENSE"
     Delete "$INSTDIR\LICENSE"
     Delete "$INSTDIR\THIRD-PARTY.md"
+  !macroend
+!endif
+
+!ifndef BUILD_UNINSTALLER
+  ; spec 2: the folder is fixed. initMultiUser (just before) takes an earlier InstallLocation or /D=; neither counts.
+  !macro customInit
+    StrCpy $INSTDIR "$PROGRAMFILES64\SplitLane"
   !macroend
 !endif
 
@@ -193,6 +242,7 @@
   nsExec::ExecToStack `"$INSTDIR\helper\splitlane-helper.exe" install --session-user`
   Pop $0
   Pop $1
+  !insertmacro splitlaneDropInstallerCopy
   ${If} $0 != 0
     !insertmacro splitlaneReason INSTALL "splitlane-helper.exe install: $0"
     MessageBox MB_OK|MB_ICONSTOP "SplitLane не установлен: $1" /SD IDOK
@@ -249,23 +299,72 @@
     ${Else}
       StrCpy $2 ""
     ${EndIf}
-    nsExec::ExecToStack `"$INSTDIR\helper\splitlane-helper.exe" uninstall$2`
-    Pop $0
-    Pop $1
-    ${If} $0 != 0
+    ${If} ${FileExists} "$INSTDIR\helper\splitlane-helper.exe"
+      nsExec::ExecToStack `"$INSTDIR\helper\splitlane-helper.exe" uninstall$2`
+      Pop $0 ; the exit code, or "error" when it could not be started
+      Pop $1 ; the output
+    ${Else}
+      StrCpy $0 "error"
+      StrCpy $1 ""
+    ${EndIf}
+    ${If} $0 == "error"
+      !insertmacro splitlaneUninstallWithoutHelper
+    ${ElseIf} $0 != 0
       !insertmacro splitlaneReason UNINSTALL "splitlane-helper.exe uninstall: $0"
       MessageBox MB_OK|MB_ICONSTOP "SplitLane не удалён: $1" /SD IDOK
+      !insertmacro splitlaneStartWindow
       SetErrorLevel 2
       Abort
-    ${EndIf}
-    ${If} $splitlanePurge == "1"
+    ${ElseIf} $splitlanePurge == "1"
       Push $1
-      Push "UNINSTALL-NOTE:"
+      Push "UNINSTALL-NOTE: "
       Call un.splitlaneLine
       Pop $1
+      StrLen $2 "UNINSTALL-NOTE: "
+      StrCpy $1 $1 "" $2
       ${If} $1 != ""
         MessageBox MB_OK|MB_ICONINFORMATION "$1" /SD IDOK
       ${EndIf}
     ${EndIf}
+    ; the window's autostart (loginItem.ts names it SplitLane) and the installer's copy of the template
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "SplitLane"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "SplitLane"
+    !insertmacro splitlaneDropInstallerCopy
   ${EndIf}
 !macroend
+
+!ifdef BUILD_UNINSTALLER
+  ; $0 is 0 when a process with the image name IMAGE runs, in any session and from any folder.
+  !macro splitlaneFindImage IMAGE
+    nsExec::Exec `"$SYSDIR\cmd.exe" /C ""$SYSDIR\tasklist.exe" /FI "IMAGENAME eq ${IMAGE}" /FO CSV /NH | "$SYSDIR\findstr.exe" /B /I /C:"\"${IMAGE}\"""`
+    Pop $0
+  !macroend
+
+  ; helper\splitlane-helper.exe cannot be started (missing, or blocked by an antivirus): the uninstall cannot give
+  ; the exit node back, but it must not make SplitLane impossible to remove. The user decides (No: the removal
+  ; stops, exit code 2); silent, it goes on only while no helper and no core runs. Then the task goes; the data
+  ; folder stays (only the helper removes it: it does not follow junctions).
+  !macro splitlaneUninstallWithoutHelper
+    ${If} ${Silent}
+      !insertmacro splitlaneFindImage "splitlane-helper.exe"
+      ${If} $0 != 0
+        !insertmacro splitlaneFindImage "sing-box.exe"
+      ${EndIf}
+      ${If} $0 == 0
+        !insertmacro splitlaneStartWindow
+        SetErrorLevel 2
+        Abort
+      ${EndIf}
+    ${ElseIfNot} ${Cmd} `MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "Служебный процесс SplitLane не запускается, поэтому удаление не может проверить, что exit node Tailscale включён. Удалить SplitLane всё равно? Если после удаления не работает VPN, включите exit node в приложении Tailscale." IDYES`
+      !insertmacro splitlaneStartWindow
+      SetErrorLevel 2
+      Abort
+    ${EndIf}
+    ; schtasks of the system folder; a task that is not there ends it with code 1, which is no error here
+    nsExec::Exec `"$SYSDIR\schtasks.exe" /Delete /TN "SplitLane Helper" /F`
+    Pop $0
+    ${If} $splitlanePurge == "1"
+      MessageBox MB_OK|MB_ICONINFORMATION "Служебный процесс не запустился, поэтому папка %ProgramData%\SplitLane с данными и входом в Tailscale осталась: её можно удалить вручную. Настройки окна в %AppData%\SplitLane тоже остались." /SD IDOK
+    ${EndIf}
+  !macroend
+!endif

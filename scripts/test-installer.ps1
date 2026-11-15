@@ -1,14 +1,17 @@
 # SplitLane: the check of the installer on a CI runner (spec 7 of stage 2). In this order: the stage 1 layout
 # (the six files of the helper at the root of %ProgramFiles%\SplitLane); the silent install over it, then the
 # files, the task and its command, setup.json, the access list of the data folder, the Electron fuses and the
-# version info of the installed SplitLane.exe; the install over the installed product, with marker files in
-# %ProgramData%\SplitLane and %AppData%\SplitLane that must stay; the silent uninstall without /PURGE (the
-# data stays); the install and the silent uninstall with /PURGE (the data goes). The helper is never started
-# and the network is not touched.
+# version info of the installed SplitLane.exe; the install over the installed product with /D= pointing
+# elsewhere (the folder is fixed), with marker files in %ProgramData%\SplitLane and %AppData%\SplitLane that
+# must stay; the silent uninstall without /PURGE (the data stays, the window's autostart value goes); the
+# install and the silent uninstall with /PURGE (the data goes). After every install the template's copy of
+# the installer in %LocalAppData%\splitlane-app-updater must be gone. The helper is never started and the
+# network is not touched.
 # It changes the machine: %ProgramFiles%\SplitLane, %ProgramData%\SplitLane, %AppData%\SplitLane of this user,
-# the task "SplitLane Helper", the uninstall entry and the shortcuts. So it runs only as an administrator on a
-# machine without SplitLane and without Tailscale (the runner of GitHub Actions); anywhere else it stops with
-# TEST-REFUSED before it changes anything. Never run it on a PC where SplitLane is installed.
+# the task "SplitLane Helper", the uninstall entry, the shortcuts and the value SplitLane under HKCU Run. So it
+# runs only as an administrator on a machine without SplitLane and without Tailscale (the runner of GitHub
+# Actions); anywhere else it stops with TEST-REFUSED before it changes anything. Never run it on a PC where
+# SplitLane is installed.
 # Needs what scripts\build-installer.ps1 leaves: dist\helper (the six files) and app\node_modules (the order
 # of the fuses is that of @electron/fuses as electron-builder resolves it), and node in PATH.
 # The NSIS uninstaller copies itself to %TEMP%\~nsuA.tmp, starts that copy and ends at once; the copy removes
@@ -30,6 +33,14 @@ $helper = Join-Path $product 'helper'
 $data = Join-Path $env:ProgramData 'SplitLane'
 $userData = Join-Path $env:APPDATA 'SplitLane'
 $marker = 'splitlane-test-marker.txt'
+# the folder of the template's copy of the installer (<package name>-updater), removed by the installer
+$installerCopy = Join-Path $env:LOCALAPPDATA 'splitlane-app-updater'
+# the window's autostart value (app\src\main\loginItem.ts LOGIN_ITEM_NAME), removed by the uninstaller
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$approvedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run'
+$runName = 'SplitLane'
+# what /D= names in the reinstall step; the installer must not install there
+$elsewhere = Join-Path $env:SystemDrive 'SplitLane-elsewhere'
 # install.Files: the helper's files, in helper\ now and at the root in the stage 1 layout
 $six = 'splitlane-helper.exe', 'sing-box.exe', 'libcronet.dll', 'sing-box-LICENSE', 'LICENSE', 'THIRD-PARTY.md'
 $taskCommand = Join-Path $helper 'splitlane-helper.exe'
@@ -99,6 +110,12 @@ function Save-Log([string]$name, [string[]]$lines) {
     }
 }
 
+# True when the registry key $key has a value $name.
+function Get-RegValue([string]$key, [string]$name) {
+    if (-not (Test-Path -LiteralPath $key)) { return $false }
+    return $null -ne (Get-Item -LiteralPath $key).GetValue($name, $null)
+}
+
 # Empty when the machine may run the test, else why not. Nothing is changed before this passes.
 function Get-Refusal {
     if (Test-Path -LiteralPath $product) { return "$product is there: SplitLane is installed here" }
@@ -110,6 +127,11 @@ function Get-Refusal {
     if (@(Get-UninstallEntries).Count -gt 0) { return 'an uninstall entry SplitLane is there' }
     if (Test-Path -LiteralPath $data) { return "$data is there; the purge step would remove it" }
     if (Test-Path -LiteralPath $userData) { return "$userData is there; the purge step would remove it" }
+    if (Test-Path -LiteralPath $installerCopy) { return "$installerCopy is there; the install step checks that it is not made" }
+    if (Test-Path -LiteralPath $elsewhere) { return "$elsewhere is there; the reinstall step names it in /D=" }
+    foreach ($key in $runKey, $approvedKey) {
+        if (Get-RegValue $key $runName) { return "the value $runName under $key is there; the uninstall step removes it" }
+    }
     if ((Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Tailscale')) -or (Get-Service -Name 'Tailscale' -ErrorAction SilentlyContinue)) {
         return 'Tailscale is installed: the test runs on a machine without it'
     }
@@ -216,14 +238,19 @@ function Show-HelperOutput([string]$exe, [string]$arguments) {
     Save-Log "helper-$(($arguments -split ' ')[0] -replace '[^A-Za-z0-9-]', '').txt" (@("splitlane-helper.exe $arguments") + $lines)
 }
 
-function Install-Product {
-    $code = Invoke-Program $Installer '/S' 600
+function Install-Product([string]$arguments = '/S') {
+    $code = Invoke-Program $Installer $arguments 600
     if ($code -ne 0) {
         Show-HelperOutput (Join-Path $dist 'splitlane-helper.exe') 'prepare --session-user'
         if (Test-Path -LiteralPath $taskCommand) { Show-HelperOutput $taskCommand 'install --session-user' }
-        throw "the installer /S ended with exit code $code"
+        throw "the installer $arguments ended with exit code $code"
     }
-    Say 'the installer /S ended with exit code 0'
+    Say "the installer $arguments ended with exit code 0"
+    if (Test-Path -LiteralPath $installerCopy) {
+        $left = @(Get-ChildItem -LiteralPath $installerCopy -Force | ForEach-Object { $_.Name })
+        throw "the copy of the installer is left in $installerCopy (in it: $($left -join ', '))"
+    }
+    Say "no copy of the installer in $installerCopy"
 }
 
 # What an uninstall left: the program folder (some of its files), the uninstall entries $entries, the task.
@@ -397,19 +424,35 @@ try {
     Assert-Installed $dataSddl $order
 
     $script:step = 'reinstall'
-    Write-Host '== 3. silent install over the installed product'
+    Write-Host "== 3. silent install over the installed product, /D=$elsewhere"
     Set-Content -LiteralPath (Join-Path $data $marker) -Value 'data folder'
     New-Item -ItemType Directory -Force -Path $userData | Out-Null
     Set-Content -LiteralPath (Join-Path $userData $marker) -Value 'settings folder'
-    Install-Product
+    # /D= comes last and without quotes (NSIS)
+    Install-Product "/S /D=$elsewhere"
     Assert-Markers
     Assert-Installed $dataSddl $order
+    # the template's .onInit makes the /D= folder (SetOutPath) before customInit fixes $INSTDIR: it stays empty
+    if (Test-Path -LiteralPath $elsewhere) {
+        $there = @(Get-ChildItem -LiteralPath $elsewhere -Recurse -Force | ForEach-Object { $_.Name })
+        if ($there.Count -gt 0) { throw "the installer put files into the /D= folder ${elsewhere}: $($there -join ', ')" }
+        Remove-Item -LiteralPath $elsewhere -Force
+    }
+    Say "the installer ignored /D=$elsewhere"
 
     $script:step = 'uninstall'
     Write-Host '== 4. silent uninstall without /PURGE'
+    # the values the window writes for its autostart
+    New-ItemProperty -Path $runKey -Name $runName -Value "`"$product\SplitLane.exe`" --hidden" -PropertyType String -Force | Out-Null
+    if (-not (Test-Path -LiteralPath $approvedKey)) { New-Item -Path $approvedKey -Force | Out-Null }
+    New-ItemProperty -Path $approvedKey -Name $runName -Value ([byte[]](2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) -PropertyType Binary -Force | Out-Null
     Uninstall-Product '/S'
     if (Get-Task) { throw "the task $taskName is still there" }
     Say "no task $taskName, no $product"
+    foreach ($key in $runKey, $approvedKey) {
+        if (Get-RegValue $key $runName) { throw "the value $runName under $key is still there" }
+    }
+    Say "the autostart value $runName is gone"
     if (-not (Test-Path -LiteralPath $data -PathType Container)) { throw "$data is gone" }
     Assert-Markers
 
