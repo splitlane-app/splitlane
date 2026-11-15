@@ -161,7 +161,7 @@
         "action": "route",
         "outbound": "vpn",
         "process_path_regex": [
-          "(?i)^C:\\\\Program Files\\\\SplitLane\\\\splitlane-helper\\.exe$"
+          "(?i)^C:\\\\Program Files\\\\SplitLane\\\\helper\\\\splitlane-helper\\.exe$"
         ]
       },
       {

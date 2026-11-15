@@ -61,7 +61,7 @@ type Options struct {
 	UserSID    string    // install: the setup user, plain S-1-... (--user-sid); the pipe and export\ give him access
 	Purge      bool      // uninstall: remove the data folder too (--purge)
 	Exe        string    // the running splitlane-helper.exe: install copies the files of its folder
-	ProgramDir string    // %ProgramFiles%\SplitLane (place.ProgramDir)
+	ProgramDir string    // %ProgramFiles%\SplitLane\helper (place.ProgramDir)
 	DataDir    string    // %ProgramData%\SplitLane (place.DataDir)
 	Hostname   string    // the computer's name: the device <Hostname>-splitlane of the uninstall note when state.json names none
 	Out        io.Writer // the lines for the window: "<INSTALL|UNINSTALL>: " steps, INSTALL-OK, INSTALL-REFUSED: <reason>, UNINSTALL-NOTE: ..., UNINSTALL-OK

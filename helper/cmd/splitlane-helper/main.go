@@ -2,7 +2,8 @@
 // console window (-H=windowsgui) and starts the core without a window.
 //
 // Without flags it is the product (spec 4.2, 4.3): the scheduled task "SplitLane Helper" starts
-// <ProgramDir>\splitlane-helper.exe; the data folder is %ProgramData%\SplitLane, the core is
+// <ProgramDir>\splitlane-helper.exe (ProgramDir is %ProgramFiles%\SplitLane\helper, the window is at the
+// root of %ProgramFiles%\SplitLane); the data folder is %ProgramData%\SplitLane, the core is
 // <ProgramDir>\sing-box.exe, the user of the pipe comes from setup.json, and a helper that no window
 // reaches ends 60 s after the start-up. For development it runs from an elevated terminal with paths
 // in the repository: --dev --data-dir <folder> --core <sing-box.exe>.

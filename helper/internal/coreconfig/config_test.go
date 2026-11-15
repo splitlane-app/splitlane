@@ -17,7 +17,7 @@ func testOptions(dataDir string) Options {
 	return Options{
 		Mode:         ModeVPN,
 		DataDir:      dataDir,
-		HelperPath:   `C:\Program Files\SplitLane\splitlane-helper.exe`,
+		HelperPath:   `C:\Program Files\SplitLane\helper\splitlane-helper.exe`,
 		TailscaleDir: `C:\Program Files\Tailscale`,
 		Hostname:     "PC-splitlane",
 		ExitNode:     "100.64.0.1",

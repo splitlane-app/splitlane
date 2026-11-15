@@ -52,15 +52,27 @@ var (
 	windowsDir = windows.GetSystemWindowsDirectory
 )
 
-// ProgramDir is %ProgramFiles%\SplitLane (spec 4.2): the helper, the core and the licence texts,
-// written only by administrators. Program Files is the folder the registry names, never the
-// environment variable: only binaries that administrators write may run elevated (spec 11).
-func ProgramDir() (string, error) {
+// HelperName is the folder of the helper and the core inside the product folder.
+const HelperName = "helper"
+
+// ProductDir is %ProgramFiles%\SplitLane (spec 4.2): the window and the uninstaller at its root, the
+// helper in helper\. Written only by administrators. Program Files is the folder the registry names,
+// never the environment variable: only binaries that administrators write may run elevated (spec 11).
+func ProductDir() (string, error) {
 	dir, err := programFiles()
 	if err != nil {
 		return "", fmt.Errorf("the Program Files folder: %w", err)
 	}
 	return inside(dir, "the Program Files folder")
+}
+
+// ProgramDir is <ProductDir>\helper: the helper, the core and the licence texts.
+func ProgramDir() (string, error) {
+	dir, err := ProductDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, HelperName), nil
 }
 
 // DataDir is %ProgramData%\SplitLane (spec 4.2). ProgramData is the value the registry names, never the

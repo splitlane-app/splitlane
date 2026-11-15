@@ -1,5 +1,6 @@
-# SplitLane: build dist\helper\, the files that install copies into %ProgramFiles%\SplitLane (spec 4.2, 4.3,
-# 14): splitlane-helper.exe without a console window, the unchanged sing-box.exe and libcronet.dll of the
+# SplitLane: build dist\helper\, the six files of the helper. The installer (NSIS, built with the window)
+# puts them into %ProgramFiles%\SplitLane\helper\ next to the window at the root (spec 2, 4.2, 4.3, 14):
+# splitlane-helper.exe without a console window, the unchanged sing-box.exe and libcronet.dll of the
 # core, the core's licence as sing-box-LICENSE, LICENSE and THIRD-PARTY.md of SplitLane (it also carries
 # the licence text of libcronet.dll, BSD-3-Clause of Chromium, that its binary form needs). The window runs
 # dist\helper\splitlane-helper.exe install --user-sid <SID> with UAC. The test tools slctl and slguard are
@@ -7,8 +8,9 @@
 # before they are copied.
 # ASCII only: Windows PowerShell 5.1 reads a script without BOM in the ANSI code page.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-helper.ps1
-# Needs: Go in %LOCALAPPDATA%\Programs\go\bin, the core from scripts\fetch-core.ps1.
-# Result: last line BUILD-OK dist\helper or BUILD-FAILED <reason>.
+# The version is "version" of app\package.json (x.y.z); the helper gets it as main.version.
+# Needs: Go in %LOCALAPPDATA%\Programs\go\bin (else go from PATH), the core from scripts\fetch-core.ps1.
+# Result: last line BUILD-OK dist\helper <version> or BUILD-FAILED <reason>.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $name = 'sing-box-1.14.4-windows-amd64'
@@ -29,7 +31,16 @@ function Get-Sha256([string]$path) { (Get-FileHash -LiteralPath $path -Algorithm
 try {
     $go = Join-Path $env:LOCALAPPDATA 'Programs\go\bin\go.exe'
     if (-not (Test-Path -LiteralPath $go)) {
-        Write-Host "BUILD-FAILED no Go toolchain at $go"
+        $found = Get-Command go -ErrorAction SilentlyContinue
+        if (-not $found) {
+            Write-Host "BUILD-FAILED no Go toolchain at $go or in PATH"
+            exit 1
+        }
+        $go = $found.Source
+    }
+    $version = (Get-Content -LiteralPath (Join-Path $root 'app\package.json') -Raw | ConvertFrom-Json).version
+    if ($version -isnot [string] -or $version -notmatch '^\d+\.\d+\.\d+$') {
+        Write-Host "BUILD-FAILED version in app\package.json is not x.y.z: $version"
         exit 1
     }
     foreach ($file in 'sing-box.exe', 'libcronet.dll') {
@@ -53,7 +64,7 @@ try {
     Push-Location (Join-Path $root 'helper')
     try {
         $ErrorActionPreference = 'Continue'
-        & $go build -ldflags '-H=windowsgui' -o (Join-Path $out 'splitlane-helper.exe') ./cmd/splitlane-helper
+        & $go build -ldflags "-H=windowsgui -X main.version=$version" -o (Join-Path $out 'splitlane-helper.exe') ./cmd/splitlane-helper
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = 'Stop'
@@ -68,7 +79,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $core 'LICENSE') -Destination (Join-Path $out 'sing-box-LICENSE')
     Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $out
     Copy-Item -LiteralPath (Join-Path $root 'THIRD-PARTY.md') -Destination $out
-    Write-Host 'BUILD-OK dist\helper'
+    Write-Host "BUILD-OK dist\helper $version"
 } catch {
     Write-Host "BUILD-FAILED $($_.Exception.Message)"
     exit 1

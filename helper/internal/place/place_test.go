@@ -48,7 +48,7 @@ func fake(t *testing.T, f *func() (string, error), value string, err error) {
 func TestProgramDirFromRegistryValue(t *testing.T) {
 	t.Setenv("ProgramFiles", `C:\Users\u\AppData\Local\Fake`)
 	fake(t, &programFiles, `D:\Apps`, nil)
-	if dir, err := ProgramDir(); err != nil || dir != `D:\Apps\SplitLane` {
+	if dir, err := ProgramDir(); err != nil || dir != `D:\Apps\SplitLane\helper` {
 		t.Fatalf("%q %v", dir, err)
 	}
 	for _, bad := range []string{`%ProgramFiles%`, `%SystemDrive%\Program Files`, `Program Files`, `\Program Files`, ``} {
@@ -56,6 +56,42 @@ func TestProgramDirFromRegistryValue(t *testing.T) {
 		if dir, err := ProgramDir(); err == nil {
 			t.Errorf("%q gave %q", bad, dir)
 		}
+	}
+	fake(t, &programFiles, "", errors.New("The system cannot find the file specified."))
+	if _, err := ProgramDir(); err == nil || !strings.Contains(err.Error(), "cannot find") {
+		t.Fatalf("a failed read: %v", err)
+	}
+}
+
+// The product folder is <Program Files>\SplitLane, Program Files from the registry value, never from the
+// environment (the window and the uninstaller live there).
+func TestProductDirIsUnderProgramFiles(t *testing.T) {
+	t.Setenv("ProgramFiles", `C:\Users\u\AppData\Local\Fake`)
+	fake(t, &programFiles, `D:\Apps`, nil)
+	if dir, err := ProductDir(); err != nil || dir != `D:\Apps\SplitLane` {
+		t.Fatalf("%q %v", dir, err)
+	}
+	for _, bad := range []string{`%ProgramFiles%`, `Program Files`, ``} {
+		fake(t, &programFiles, bad, nil)
+		if dir, err := ProductDir(); err == nil {
+			t.Errorf("%q gave %q", bad, dir)
+		}
+	}
+	fake(t, &programFiles, "", errors.New("The system cannot find the file specified."))
+	if _, err := ProductDir(); err == nil || !strings.Contains(err.Error(), "cannot find") {
+		t.Fatalf("a failed read: %v", err)
+	}
+}
+
+// The program folder, where the helper and the core live, is the helper folder of the product folder.
+func TestProgramDirIsTheHelperFolder(t *testing.T) {
+	fake(t, &programFiles, `D:\Apps`, nil)
+	if dir, err := ProgramDir(); err != nil || dir != `D:\Apps\SplitLane\helper` {
+		t.Fatalf("%q %v", dir, err)
+	}
+	fake(t, &programFiles, `%ProgramFiles%`, nil)
+	if dir, err := ProgramDir(); err == nil {
+		t.Fatalf("an unexpanded value gave %q", dir)
 	}
 	fake(t, &programFiles, "", errors.New("The system cannot find the file specified."))
 	if _, err := ProgramDir(); err == nil || !strings.Contains(err.Error(), "cannot find") {
@@ -162,8 +198,12 @@ func TestLivePlacesReadOnly(t *testing.T) {
 	if os.Getenv("SPLITLANE_LIVE_READONLY") != "1" {
 		t.Skip("SPLITLANE_LIVE_READONLY is not set")
 	}
+	prod, err := ProductDir()
+	if err != nil || !strings.EqualFold(filepath.Base(prod), "SplitLane") {
+		t.Fatalf("product folder %q %v", prod, err)
+	}
 	prog, err := ProgramDir()
-	if err != nil || !strings.EqualFold(filepath.Base(prog), "SplitLane") {
+	if err != nil || !strings.EqualFold(filepath.Base(prog), "helper") || filepath.Dir(prog) != prod {
 		t.Fatalf("program folder %q %v", prog, err)
 	}
 	data, err := DataDir()
