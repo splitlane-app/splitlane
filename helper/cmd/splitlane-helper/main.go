@@ -261,7 +261,16 @@ func run(args []string) int {
 		},
 		OnExit: func() { close(exit) },
 	})
-	srv, err = pipe.Listen(o.pipe, userSID, eng, logf)
+	var check pipe.Check // spec 5: the product serves SplitLane programs and elevated callers; --dev everyone
+	if !o.dev {
+		dir, err := productDir()
+		if err != nil {
+			logf("product folder: %v", err)
+			return exitInternal
+		}
+		check = pipe.ProductCheck(dir)
+	}
+	srv, err = pipe.Listen(o.pipe, userSID, eng, logf, check)
 	if err != nil {
 		logf("%s (%v)", pipeTakenLabel, err)
 		return exitPipeTaken

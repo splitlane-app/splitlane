@@ -35,6 +35,7 @@ type Server struct {
 	h         Handler
 	l         net.Listener
 	log       func(format string, args ...any)
+	check     Check // nil: every client is served
 	mu        sync.Mutex
 	clients   map[*client]bool
 	wg        sync.WaitGroup // the reader and writer of every client
@@ -56,8 +57,9 @@ type client struct {
 	detailFor  string // the detailFor of the subscription, "" for none (s.mu)
 }
 
-// Listen creates the pipe. It fails when the pipe already exists: another helper runs.
-func Listen(name, userSID string, h Handler, log func(string, ...any)) (*Server, error) {
+// Listen creates the pipe. It fails when the pipe already exists: another helper runs. A client
+// that check refuses is closed without an answer; a nil check serves everyone (dev mode, tests).
+func Listen(name, userSID string, h Handler, log func(string, ...any), check Check) (*Server, error) {
 	l, err := winio.ListenPipe(name, &winio.PipeConfig{
 		SecurityDescriptor: SDDL(userSID),
 		InputBufferSize:    64 * 1024,
@@ -66,15 +68,15 @@ func Listen(name, userSID string, h Handler, log func(string, ...any)) (*Server,
 	if err != nil {
 		return nil, err
 	}
-	return newServer(l, h, log), nil
+	return newServer(l, h, log, check), nil
 }
 
 // newServer serves the connections of l; the tests give it a listener of their own.
-func newServer(l net.Listener, h Handler, log func(string, ...any)) *Server {
+func newServer(l net.Listener, h Handler, log func(string, ...any), check Check) *Server {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &Server{h: h, l: l, log: log, clients: map[*client]bool{}, done: make(chan struct{})}
+	return &Server{h: h, l: l, log: log, check: check, clients: map[*client]bool{}, done: make(chan struct{})}
 }
 
 // acceptPause is the wait before Accept is tried again after an error.
@@ -96,10 +98,25 @@ func (s *Server) Serve() error {
 			continue
 		}
 		c := &client{conn: conn, out: make(chan []byte, 64)}
-		s.wg.Add(2)
-		go s.write(c)
-		go s.read(c)
+		s.wg.Add(1)
+		go s.admit(c)
 	}
+}
+
+// admit runs the check in the goroutine of the client, before its first line is read: the Accept
+// loop never waits for it. A refused client is closed and is never counted.
+func (s *Server) admit(c *client) {
+	if s.check != nil {
+		if err := s.check(c.conn); err != nil {
+			s.log("pipe: refused a client: %v", err)
+			c.conn.Close()
+			s.wg.Done()
+			return
+		}
+	}
+	s.wg.Add(1)
+	go s.write(c)
+	s.read(c)
 }
 
 // Close stops accepting and the activity events, lets the answers in flight reach their queues (the

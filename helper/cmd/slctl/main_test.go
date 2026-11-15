@@ -212,7 +212,7 @@ func serveHelper(name string, f *fakeHelper) (*pipe.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	srv, err := pipe.Listen(name, u.User.Sid.String(), f, nil)
+	srv, err := pipe.Listen(name, u.User.Sid.String(), f, nil, nil)
 	if err != nil {
 		return nil, err
 	}

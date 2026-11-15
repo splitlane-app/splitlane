@@ -65,7 +65,7 @@ func serve(t *testing.T) (*Server, *fakeHandler, string) {
 	t.Helper()
 	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
 	h := &fakeHandler{}
-	s, err := Listen(name, currentSID(t), h, t.Logf)
+	s, err := Listen(name, currentSID(t), h, t.Logf, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestShutdownReplyIsNotLost(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
 		h := &exitOnShutdown{}
-		s, err := Listen(name, currentSID(t), h, nil)
+		s, err := Listen(name, currentSID(t), h, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,7 +334,7 @@ func (l *flakyListener) Addr() net.Addr { return &net.UnixAddr{Name: "flaky", Ne
 // only after Close.
 func TestAcceptErrorDoesNotStopServing(t *testing.T) {
 	l := newFlakyListener(errors.New("CreateNamedPipe: All pipe instances are busy."))
-	s := newServer(l, &fakeHandler{}, t.Logf)
+	s := newServer(l, &fakeHandler{}, t.Logf, nil)
 	served := make(chan error, 1)
 	began := time.Now()
 	go func() { served <- s.Serve() }()
@@ -373,7 +373,7 @@ func TestAcceptErrorDoesNotStopServing(t *testing.T) {
 // A second helper cannot take the same pipe: one instance at a time.
 func TestSecondListenFails(t *testing.T) {
 	_, _, name := serve(t)
-	if _, err := Listen(name, currentSID(t), &fakeHandler{}, nil); err == nil {
+	if _, err := Listen(name, currentSID(t), &fakeHandler{}, nil, nil); err == nil {
 		t.Fatal("the pipe name is taken")
 	}
 }
