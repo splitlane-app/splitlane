@@ -38,6 +38,10 @@ type State struct {
 	WasOn            bool                `json:"wasOn"`
 	Core             *CoreIdentity       `json:"core,omitempty"`
 	ProbeURL         string              `json:"probeUrl"`
+	// Connector is the way out of the VPN lane: "" (an old file) is Tailscale, else a connector id.
+	Connector string `json:"connector,omitempty"`
+	// SelectedServer is the id of the chosen proxy server (an id, not a secret).
+	SelectedServer string `json:"selectedServer,omitempty"`
 }
 
 // Journal is restore.json: what to give back to the system Tailscale (spec 5.7).
@@ -59,6 +63,7 @@ type Dir struct {
 
 func (d Dir) state() string   { return filepath.Join(d.Path, "state.json") }
 func (d Dir) journal() string { return filepath.Join(d.Path, "restore.json") }
+func (d Dir) servers() string { return filepath.Join(d.Path, "servers.json") }
 
 // ErrIO marks a file that is there but could not be read (access denied, a sharing violation): its
 // content is unknown, so it stays where it is and must not be taken for missing or written over.

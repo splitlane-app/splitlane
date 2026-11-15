@@ -47,6 +47,10 @@ func fakeCore(args []string) {
 	if args[0] == "check" {
 		// the environment the check got, for TestCoreAndCLIGetTheSystemEnvironment
 		os.WriteFile(args[2]+".env", []byte(strings.Join(os.Environ(), "\n")), 0o644)
+		if bytes.Contains(config, []byte("leak")) {
+			os.Stdout.WriteString("FATAL decode outbound: vless://11111111-2222-3333-4444-555555555555@h.example:443?pbk=SECRETKEYVALUE#n\n")
+			os.Exit(1)
+		}
 		if bytes.Contains(config, []byte("bad")) {
 			os.Stdout.WriteString("FATAL decode config: bad field\n")
 			os.Exit(1)
@@ -402,4 +406,19 @@ func TestInterruptStopsTheCore(t *testing.T) {
 		t.Fatal("the core did not stop within 5 s after CTRL_BREAK")
 	}
 	waitLog(t, d, "interrupted")
+}
+
+// Spec 3: the output of check names a server; its secrets never reach the error (config_invalid, the log).
+func TestCheckMasksServerSecrets(t *testing.T) {
+	d, config := fakeDriver(t)
+	os.WriteFile(config, []byte(`{"leak":true}`), 0o644)
+	err := d.Check(context.Background(), config)
+	if err == nil || !strings.Contains(err.Error(), "h.example") {
+		t.Fatalf("got %v", err)
+	}
+	for _, secret := range []string{"11111111-2222", "SECRETKEYVALUE"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("%s leaked: %v", secret, err)
+		}
+	}
 }

@@ -20,6 +20,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"splitlane/helper/internal/connector"
 	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/engine"
 	"splitlane/helper/internal/place"
@@ -129,7 +130,8 @@ func (d *Driver) Check(ctx context.Context, configPath string) error {
 	cmd.SysProcAttr = hidden(windows.CREATE_NO_WINDOW)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		text := strings.TrimSpace(string(out))
+		// masked before it is cut: a cut could leave the head of a secret that no rule matches
+		text := connector.Mask(strings.TrimSpace(string(out)))
 		if len(text) > 400 {
 			text = text[:400]
 		}

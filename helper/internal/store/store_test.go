@@ -292,3 +292,79 @@ func TestExportPaths(t *testing.T) {
 		t.Fatalf("logs %q", got)
 	}
 }
+
+func TestOldStateIsTailscale(t *testing.T) {
+	d := Dir{Path: t.TempDir()}
+	os.WriteFile(filepath.Join(d.Path, "state.json"), []byte(`{"version":1,"defaultLane":"vpn"}`), 0o644)
+	s, err := d.LoadState()
+	if err != nil || s.Connector != "" || s.SelectedServer != "" {
+		t.Fatalf("%+v %v", s, err)
+	}
+	s.Connector, s.SelectedServer = "proxy", "abc"
+	d.SaveState(s)
+	if got, _ := d.LoadState(); got.Connector != "proxy" || got.SelectedServer != "abc" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestServersRoundTrip(t *testing.T) {
+	d := Dir{Path: filepath.Join(t.TempDir(), "data")}
+	s, err := d.LoadServers()
+	if err != nil || s.Version != 1 || s.Servers == nil || s.Subscriptions == nil {
+		t.Fatalf("%+v %v", s, err)
+	}
+	s.Servers = []StoredServer{{ID: "a", Name: "Сервер", Source: "manual", Text: "trojan://x@h:443"}}
+	s.Subscriptions = []StoredSubscription{{ID: "s", Name: "n", URL: "https://e.example/sub", UpdatedAt: "2026-11-16T10:00:00Z", Count: 1}}
+	if err := d.SaveServers(s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.LoadServers()
+	if err != nil || got.Servers[0] != s.Servers[0] || got.Subscriptions[0] != s.Subscriptions[0] {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestServersLimits(t *testing.T) {
+	d := Dir{Path: t.TempDir()}
+	s := EmptyServers()
+	s.Servers = make([]StoredServer, MaxServers)
+	if err := d.SaveServers(s); err != nil {
+		t.Fatal(err)
+	}
+	s.Servers = make([]StoredServer, MaxServers+1)
+	if err := d.SaveServers(s); !errors.Is(err, ErrTooMany) {
+		t.Fatalf("got %v", err)
+	}
+	s = EmptyServers()
+	s.Subscriptions = make([]StoredSubscription, MaxSubscriptions+1)
+	if err := d.SaveServers(s); !errors.Is(err, ErrTooMany) {
+		t.Fatalf("got %v", err)
+	}
+	if got, _ := d.LoadServers(); len(got.Servers) != MaxServers {
+		t.Fatal("a refused save must leave the file as it was")
+	}
+}
+
+func TestCorruptServersIsSetAside(t *testing.T) {
+	d := Dir{Path: t.TempDir()}
+	os.WriteFile(filepath.Join(d.Path, "servers.json"), []byte("{broken"), 0o644)
+	s, err := d.LoadServers()
+	if err == nil || errors.Is(err, ErrIO) || !strings.Contains(err.Error(), "set aside as servers.json.bad") || len(s.Servers) != 0 {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(d.Path, "servers.json.bad")); string(b) != "{broken" {
+		t.Fatalf("%q", b)
+	}
+}
+
+func TestServersIOErrorKeepsTheFile(t *testing.T) {
+	d := Dir{Path: t.TempDir()}
+	d.SaveServers(EmptyServers())
+	failRead(t, "servers.json", errSharing)
+	if _, err := d.LoadServers(); !errors.Is(err, ErrIO) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d.Path, "servers.json")); err != nil {
+		t.Fatal(err)
+	}
+}

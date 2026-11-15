@@ -288,3 +288,22 @@ func TestExportBadParams(t *testing.T) {
 		t.Fatalf("not logged: %v", h.rec.list())
 	}
 }
+
+// Spec 3, 11: servers.json holds links and subscription addresses; the archive never has it.
+func TestExportLeavesServersOut(t *testing.T) {
+	h := newHarness(t)
+	data := exportData(h)
+	h.load()
+	if err := os.WriteFile(filepath.Join(data, "servers.json"), []byte("trojan://hunter2secretpass@h.example:443"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := export(h, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range archiveEntries(t, path) {
+		if name == "servers.json" || strings.Contains(text, "hunter2secretpass") {
+			t.Fatalf("%s leaks servers.json", name)
+		}
+	}
+}
