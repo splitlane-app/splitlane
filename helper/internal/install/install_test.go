@@ -349,6 +349,16 @@ func lastLine(s string) string {
 	return lines[len(lines)-1]
 }
 
+// afterLast is what the log holds after the last entry of the step (all of it without one).
+func afterLast(log []string, step string) string {
+	for i := len(log) - 1; i >= 0; i-- {
+		if strings.HasPrefix(log[i], step+" ") {
+			return strings.Join(log[i+1:], ",")
+		}
+	}
+	return strings.Join(log, ",")
+}
+
 // Install goes in the order of spec 4.3: the user of the elevated process, the SHA-256 of the core and
 // its library, the helper that runs stopped, the files copied, the access lists of the data folder and
 // of export\, setup.json, the task. The bytes copied are the ones that were hashed.
@@ -442,6 +452,10 @@ func TestInstallRefusesWrongCoreHash(t *testing.T) {
 		}
 		if got := steps(f.log); got != "sid,hash,stop" { // stop: the result's check of the data folder
 			t.Errorf("%s: steps %s", c.name, got)
+		}
+		// no helper stopped: after the files only the result for the window checks the data folder
+		if got := afterLast(f.log, "hash"); got != "stop check "+o.DataDir {
+			t.Errorf("%s: after the files %q", c.name, got)
 		}
 	}
 }
@@ -736,7 +750,8 @@ func TestInstallRunsOnlyFromTheProgramFolder(t *testing.T) {
 	} {
 		f, o, out := setup(t)
 		o.Exe = exe(o)
-		if err := Install(o, f); err == nil || steps(f.log) != "sid,stop" ||
+		// no file read and no helper stopped: after the user only the result for the window checks the data folder
+		if err := Install(o, f); err == nil || steps(f.log) != "sid,stop" || afterLast(f.log, "sid") != "stop check "+o.DataDir ||
 			lastLine(out.String()) != "INSTALL-REFUSED: install runs from "+o.ProgramDir+", where the installer puts the files" {
 			t.Errorf("%s: %v\n%s\n%v", o.Exe, err, out, f.log)
 		}
@@ -774,6 +789,10 @@ func TestInstallStillChecksTheCore(t *testing.T) {
 	}
 	if got := steps(f.log); got != "sid,hash,stop" {
 		t.Fatalf("steps %s", got)
+	}
+	// no helper stopped: after the files only the result for the window checks the data folder
+	if got := afterLast(f.log, "hash"); got != "stop check "+o.DataDir {
+		t.Fatalf("after the files %q", got)
 	}
 }
 
@@ -984,6 +1003,37 @@ func TestPrepareKeepsSplittingOn(t *testing.T) {
 		if loadState(t, d).WasOn {
 			t.Fatalf("only prepare writes \"was on\" back:\n%s", out)
 		}
+	}
+}
+
+// The helper that ran with splitting on was stopped (helper.shutdown wrote "was on" off), then prepare refuses
+// because processes stay: "was on" is written back before the refusal, so the window that the installer starts
+// again and its helper return to splitting as it was. Splitting that was off stays off.
+func TestPrepareRefusalAfterTheStopKeepsSplittingOn(t *testing.T) {
+	f, o, out := setup(t)
+	f.helper = "ends"
+	d := wasOnState(t, o, true)
+	f.stay = []Proc{{PID: 10, Image: filepath.Join(o.ProductDir, "sing-box.exe")}}
+	if err := Prepare(o, f); err == nil ||
+		lastLine(out.String()) != "PREPARE-REFUSED: sing-box.exe still running (process 10); the files cannot be replaced" {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !slices.Contains(f.log, "stop saved wasOn=false") {
+		t.Fatalf("the helper did not end; log:\n%s", strings.Join(f.log, "\n"))
+	}
+	if st := loadState(t, d); !st.WasOn || st.DeviceName != "desk-7-splitlane" {
+		t.Fatalf("state.json after the refusal: wasOn %v, device %q", st.WasOn, st.DeviceName)
+	}
+	if !strings.Contains(out.String(), "PREPARE: splitting was on: state.json says so again; the helper of this version switches it on after its start\n") {
+		t.Fatalf("output:\n%s", out)
+	}
+
+	f, o, out = setup(t)
+	f.helper = "ends"
+	d = wasOnState(t, o, false)
+	f.stay = []Proc{{PID: 10}}
+	if err := Prepare(o, f); err == nil || loadState(t, d).WasOn || strings.Contains(out.String(), "splitting was on") {
+		t.Fatalf("splitting was off: %v\n%s", err, out)
 	}
 }
 

@@ -253,9 +253,10 @@ func install(o Options, s Sys, say sayFunc) error {
 // (stopOld), then the wait until no process of the product is left. It changes no file of the program, no
 // access list and no task; stopOld may give the system exit node back, drop restore.json after a confirmed
 // return and stop a core left from an earlier run. An update keeps splitting as it was: helper.shutdown
-// writes "was on" off in state.json, so prepare reads it before and writes it back after (keepOn). A refusal
-// is recorded for the window (recordResult); a success is not: install records the outcome of the setup. It
-// prints PREPARE-OK, or PREPARE-REFUSED: <reason> and returns the error.
+// writes "was on" off in state.json, so prepare reads it before and writes it back after (keepOn), also
+// when the wait refuses after the stop (the installer then starts the window of the old version again). A
+// refusal is recorded for the window (recordResult); a success is not: install records the outcome of the
+// setup. It prints PREPARE-OK, or PREPARE-REFUSED: <reason> and returns the error.
 func Prepare(o Options, s Sys) error {
 	say := progress(o, "PREPARE")
 	err := prepare(o, s, say)
@@ -286,13 +287,13 @@ func prepare(o Options, s Sys, say sayFunc) error {
 	if err := stopOld(o, s, there, say); err != nil {
 		return err
 	}
-	if err := waitGone(o, s, say); err != nil {
-		return err
-	}
+	// The helper is stopped now, so "was on" goes back even when the wait refuses: the installer then starts
+	// the window again, and its helper returns to splitting as it was.
+	err = waitGone(o, s, say)
 	if wasOn {
 		keepOn(d, say)
 	}
-	return nil
+	return err
 }
 
 // keepOn writes "was on" back into state.json after the helper that ran with splitting on has ended:
