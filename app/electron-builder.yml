@@ -20,9 +20,18 @@ nsis:
   createStartMenuShortcut: true
   runAfterFinish: true
   deleteAppDataOnUninstall: false
+  # the wizard in English and Russian (spec 4 of stage 2 part 3), no language selector: NSIS takes the Windows
+  # display language (GetUserDefaultUILanguage) when it matches a language here, then its primary language
+  # (any ru-*), else the language whose table the script makes first. That is English: messages.nsh of
+  # electron-builder, in the header of the script, gives every string in English first (installer.nsh makes
+  # no table: its strings are in customHeader), and en_US leads this list, which loads the languages. The
+  # uninstaller picks the same way at its start; nothing stores the language. The version information of
+  # the .exe is English (language unset: 1033).
   installerLanguages:
+    - en_US
     - ru_RU
-  language: "1049"
+  multiLanguageInstaller: true
+  displayLanguageSelector: false
   include: build/installer.nsh
   artifactName: SplitLane-Setup-${version}.${ext}
   uninstallDisplayName: SplitLane

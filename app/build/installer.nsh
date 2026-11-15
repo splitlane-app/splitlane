@@ -35,10 +35,33 @@
 ; prepare stopped it. Without PowerShell it kills without /F, which a window that hides to the tray survives.
 ; splitlaneCloseWindow keeps its prompts and order (ask, close, retry) but looks for SplitLane.exe by name.
 ;
-; UTF-8 with BOM: the wizard's texts are Russian.
+; UTF-8 with BOM: the wizard's texts are Russian and English (spec 4 of stage 2 part 3), as LangString in
+; customHeader; NSIS picks the language by the Windows display language (electron-builder.yml says how).
 
 !include LogicLib.nsh
 !include nsDialogs.nsh
+
+; The texts of this file. customHeader comes after the languages are loaded (addLangs in installer.nsi), so
+; ${LANG_RUSSIAN} and ${LANG_ENGLISH} are defined there and this file makes no language table of its own: the
+; first table, which NSIS takes for a language that is not here, stays the one electron-builder makes first
+; (English). A $(name) used before customHeader (the uninstaller's page) is resolved when the script ends.
+!macro customHeader
+  LangString splitlanePreparing ${LANG_RUSSIAN} "Подготовка: служебный процесс прежней версии останавливается…"
+  LangString splitlanePreparing ${LANG_ENGLISH} "Preparing: stopping the service of the previous version…"
+  ; the message is "<this>: <reason>"; the reason is the helper's (English) or "splitlane-helper.exe <cmd>: <code>"
+  LangString splitlaneNotInstalled ${LANG_RUSSIAN} "SplitLane не установлен"
+  LangString splitlaneNotInstalled ${LANG_ENGLISH} "SplitLane wasn't installed"
+  LangString splitlaneNotUninstalled ${LANG_RUSSIAN} "SplitLane не удалён"
+  LangString splitlaneNotUninstalled ${LANG_ENGLISH} "SplitLane wasn't uninstalled"
+  LangString splitlanePurgeBox ${LANG_RUSSIAN} "Удалить настройки и вход в Tailscale"
+  LangString splitlanePurgeBox ${LANG_ENGLISH} "Remove the settings and the Tailscale login"
+  LangString splitlanePurgeNote ${LANG_RUSSIAN} "Без галочки настройки окна и вход встроенного узла в Tailscale остаются для следующей установки."
+  LangString splitlanePurgeNote ${LANG_ENGLISH} "If unchecked, the window settings and the Tailscale login of SplitLane's built-in node are kept for the next installation."
+  LangString splitlaneNoHelperAsk ${LANG_RUSSIAN} "Служебный процесс SplitLane не запускается, поэтому удаление не может проверить, что exit node Tailscale включён. Удалить SplitLane всё равно? Если после удаления не работает VPN, включите exit node в приложении Tailscale."
+  LangString splitlaneNoHelperAsk ${LANG_ENGLISH} "The SplitLane service won't start, so the uninstaller can't check that the Tailscale exit node is on. Uninstall SplitLane anyway? If the VPN doesn't work afterwards, turn on the exit node in the Tailscale app."
+  LangString splitlaneNoHelperKept ${LANG_RUSSIAN} "Служебный процесс не запустился, поэтому папка %ProgramData%\SplitLane с данными и входом в Tailscale осталась: её можно удалить вручную. Настройки окна в %AppData%\SplitLane тоже остались."
+  LangString splitlaneNoHelperKept ${LANG_ENGLISH} "The service didn't start, so the folder %ProgramData%\SplitLane with the data and the Tailscale login was kept. You can delete it manually. The window settings in %AppData%\SplitLane were kept too."
+!macroend
 
 ; ${UN}splitlaneLine: Push <output>, Push <prefix>, Call, Pop <line>. With the prefix "" the line is the last
 ; line of the output that is not empty; else the first line that starts with the prefix. "" when there is none.
@@ -200,7 +223,7 @@ Var splitlaneClosed
     ; installSection.nsh hides the details of the wizard (none; both when silent); this step shows its line
     ; above the progress bar while it runs, then the setting is put back
     SetDetailsPrint textonly
-    DetailPrint "Подготовка: служебный процесс прежней версии останавливается…"
+    DetailPrint "$(splitlanePreparing)"
     ${If} ${Silent}
       SetDetailsPrint both
     ${Else}
@@ -212,7 +235,7 @@ Var splitlaneClosed
     Pop $1 ; the output
     ${If} $0 != 0
       !insertmacro splitlaneReason PREPARE "splitlane-helper.exe prepare: $0"
-      MessageBox MB_OK|MB_ICONSTOP "SplitLane не установлен: $1" /SD IDOK
+      MessageBox MB_OK|MB_ICONSTOP "$(splitlaneNotInstalled): $1" /SD IDOK
       !insertmacro splitlaneStartWindow
       SetErrorLevel 2
       Quit
@@ -248,7 +271,7 @@ Var splitlaneClosed
   !insertmacro splitlaneDropInstallerCopy
   ${If} $0 != 0
     !insertmacro splitlaneReason INSTALL "splitlane-helper.exe install: $0"
-    MessageBox MB_OK|MB_ICONSTOP "SplitLane не установлен: $1" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "$(splitlaneNotInstalled): $1" /SD IDOK
     ; the window of the new files (Abort skips --force-run): its repair screen and the result of the update
     !insertmacro splitlaneStartWindow
     SetErrorLevel 2
@@ -264,12 +287,12 @@ Var splitlaneClosed
     ${If} $0 == error
       Abort
     ${EndIf}
-    ${NSD_CreateCheckbox} 0 0 100% 12u "Удалить настройки и вход в Tailscale"
+    ${NSD_CreateCheckbox} 0 0 100% 12u "$(splitlanePurgeBox)"
     Pop $splitlanePurgeBox
     ${If} $splitlanePurge == "1"
       ${NSD_Check} $splitlanePurgeBox
     ${EndIf}
-    ${NSD_CreateLabel} 0 20u 100% 36u "Без галочки настройки окна и вход встроенного узла в Tailscale остаются для следующей установки."
+    ${NSD_CreateLabel} 0 20u 100% 36u "$(splitlanePurgeNote)"
     Pop $0
     ; the next page removes at once: the button says so
     GetDlgItem $0 $HWNDPARENT 1
@@ -316,7 +339,7 @@ Var splitlaneClosed
       !insertmacro splitlaneUninstallWithoutHelper
     ${ElseIf} $0 != 0
       !insertmacro splitlaneReason UNINSTALL "splitlane-helper.exe uninstall: $0"
-      MessageBox MB_OK|MB_ICONSTOP "SplitLane не удалён: $1" /SD IDOK
+      MessageBox MB_OK|MB_ICONSTOP "$(splitlaneNotUninstalled): $1" /SD IDOK
       !insertmacro splitlaneStartWindow
       SetErrorLevel 2
       Abort
@@ -360,7 +383,7 @@ Var splitlaneClosed
         SetErrorLevel 2
         Abort
       ${EndIf}
-    ${ElseIfNot} ${Cmd} `MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "Служебный процесс SplitLane не запускается, поэтому удаление не может проверить, что exit node Tailscale включён. Удалить SplitLane всё равно? Если после удаления не работает VPN, включите exit node в приложении Tailscale." IDYES`
+    ${ElseIfNot} ${Cmd} `MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "$(splitlaneNoHelperAsk)" IDYES`
       !insertmacro splitlaneStartWindow
       SetErrorLevel 2
       Abort
@@ -369,7 +392,7 @@ Var splitlaneClosed
     nsExec::Exec `"$SYSDIR\schtasks.exe" /Delete /TN "SplitLane Helper" /F`
     Pop $0
     ${If} $splitlanePurge == "1"
-      MessageBox MB_OK|MB_ICONINFORMATION "Служебный процесс не запустился, поэтому папка %ProgramData%\SplitLane с данными и входом в Tailscale осталась: её можно удалить вручную. Настройки окна в %AppData%\SplitLane тоже остались." /SD IDOK
+      MessageBox MB_OK|MB_ICONINFORMATION "$(splitlaneNoHelperKept)" /SD IDOK
     ${EndIf}
   !macroend
 !endif
