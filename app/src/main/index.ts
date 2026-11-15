@@ -13,7 +13,7 @@ import { Games, type GamesFs } from './games'
 import { IconCache, type IconFs } from './icons'
 import { exportPath, mergePrograms, registerIpc, runCommand, toHelperError } from './ipc'
 import { HelperLink, SHUTDOWN_TIMEOUT_MS } from './link'
-import { loginItemSettings, startupLoginItem } from './loginItem'
+import { APP_USER_MODEL_ID, loginItemSettings, startupLoginItem } from './loginItem'
 import { PageCrashReload } from './pageCrash'
 import { dialPipe } from './pipe'
 import { installedPrograms, pickedFile, resolveDropped, startMenuDirs, type DropReaders, type ProgramsFs } from './programs'
@@ -27,8 +27,17 @@ import {
   installHelper
 } from './setup'
 import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
+import { forbiddenSwitch } from './switches'
 import { runTask, systemTools, taskRegistered, type Exec } from './task'
 import { AppTray, MAIN_TEXT, windowIcon } from './tray'
+
+// The helper serves the installed window without elevation: started with a debugger or V8 switch, it exits at once,
+// before any window or the pipe (switches.ts).
+const forbidden = app.isPackaged ? forbiddenSwitch((name) => app.commandLine.hasSwitch(name)) : null
+if (forbidden !== null) {
+  log(`startup refused: the switch --${forbidden} is not allowed`)
+  app.exit(1)
+}
 
 /** schtasks and whoami answer at once; the Store listing takes about a second. */
 const QUICK_EXEC_TIMEOUT_MS = 30_000
@@ -125,7 +134,7 @@ function describeLink(s: LinkStatus): string {
 
 app.setName('SplitLane')
 app.setPath('userData', join(app.getPath('appData'), 'SplitLane'))
-app.setAppUserModelId('SplitLane')
+app.setAppUserModelId(APP_USER_MODEL_ID)
 
 const startHidden = process.argv.includes('--hidden')
 const exec = execText(QUICK_EXEC_TIMEOUT_MS)
@@ -549,7 +558,9 @@ async function main(): Promise<void> {
   link.start()
 }
 
-if (!app.requestSingleInstanceLock()) {
+if (forbidden !== null) {
+  // app.exit(1) above ends the process; nothing starts in the meantime
+} else if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   Menu.setApplicationMenu(null)
