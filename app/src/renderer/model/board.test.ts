@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Activity, ActivityApp, AppRule, Lane, Traffic } from '../../shared/protocol'
-import { t } from '../i18n/t'
+import { setLang, t } from '../i18n/t'
 import { boardView, fileName, protectedLane } from './board'
 
 const GAME = String.raw`C:\Games\Game\game.exe`
@@ -189,6 +189,26 @@ describe('boardView', () => {
     const want = [ALPHA_DIR, `${CURL_DIR}curl-direct.exe`, `${CURL_DIR}curl-vpn.exe`, 'system', 'unattributed']
     for (const busy of ['vpn', 'direct', 'alpha'] as const) {
       expect(boardView([], 'vpn', tick(busy), addresses, '').vpn.unpinned.map((c) => c.key), busy).toEqual(want)
+    }
+  })
+
+  it('programs sort by the current language, and the tiles take its names', () => {
+    const ZOOM_DIR = 'C:\\Apps\\Zoom\\'
+    const YA_DIR = 'C:\\Apps\\Ya\\'
+    const act = activity([
+      entry(ZOOM_DIR, { name: 'Zoom', exe: `${ZOOM_DIR}zoom.exe` }),
+      entry(YA_DIR, { name: 'Яндекс', exe: `${YA_DIR}ya.exe` }),
+      systemTile()
+    ])
+    const order = (): string[] => boardView([], 'vpn', act, addresses, '').vpn.unpinned.map((c) => c.name)
+    try {
+      // the Russian collation puts Cyrillic first, the English one Latin
+      setLang('ru')
+      expect(order()).toEqual(['Яндекс', 'Zoom', 'Службы Windows', 'WSL и виртуальные машины'])
+      setLang('en')
+      expect(order()).toEqual(['Zoom', 'Яндекс', 'Windows services', 'WSL and virtual machines'])
+    } finally {
+      setLang('ru')
     }
   })
 

@@ -2,12 +2,16 @@ import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { Command, Snapshot } from '../../shared/ipc'
 import type { HelperState } from '../../shared/protocol'
-import { DEFAULT_SETTINGS } from '../../shared/settings'
+import { DEFAULT_SETTINGS, type WindowSettings } from '../../shared/settings'
+import { setLang } from '../i18n/t'
 import { sendCommand } from '../services'
 import { fakeBridge, renderWith, servicesFor, snap, state } from '../testing'
 import { ConnectionScreen, ConnectScreen } from './ConnectScreen'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  setLang('ru')
+})
 
 const withTs = (
   over: Partial<HelperState['tailscale']>,
@@ -320,8 +324,8 @@ test('ConnectionScreen shows the update line and the check button', async () => 
     act(() => services.store.getState().setSnapshot({ ...withTs({}, { phase: 'off' }, true), update }))
   show({ kind: 'upToDate' })
   expect(screen.getByText('Установлена последняя версия')).toBeTruthy()
-  show({ kind: 'checkFailed', reason: 'HTTP 403' })
-  expect(screen.getByText('Не удалось проверить обновления: HTTP 403')).toBeTruthy()
+  show({ kind: 'checkFailed', reason: 'HTTP 403 (GitHub request limit?)' })
+  expect(screen.getByText('Не удалось проверить обновления: HTTP 403 (превышен лимит запросов к GitHub?)')).toBeTruthy()
   show({ kind: 'available', version: '1.2.0', notesUrl: NOTES, hidden: true })
   expect(screen.getByText('Доступна версия 1.2.0')).toBeTruthy()
   await act(async () => {
@@ -349,6 +353,48 @@ test('the check button is disabled while checking or downloading', () => {
   expect(button().disabled).toBe(true)
   show({ kind: 'upToDate' })
   expect(button().disabled).toBe(false)
+})
+
+test('the language selector saves the setting', async () => {
+  const setSettings = vi.fn(async (patch: Partial<WindowSettings>) => ({ ...DEFAULT_SETTINGS, ...patch }))
+  const { bridge } = fakeBridge({ setSettings })
+  const services = servicesFor(bridge, withTs({}, { phase: 'off' }, true))
+  renderWith(<ConnectionScreen />, services)
+  const select = (name: string): HTMLSelectElement => screen.getByRole('combobox', { name }) as HTMLSelectElement
+  const options = (s: HTMLSelectElement): [string, string, string | null][] =>
+    [...s.options].map((o) => [o.value, o.textContent ?? '', o.getAttribute('lang')])
+
+  // the names of the languages in their own language; «Как в Windows» in the language of the window
+  expect(select('Язык').value).toBe('system')
+  expect(options(select('Язык'))).toEqual([
+    ['system', 'Как в Windows', null],
+    ['ru', 'Русский', 'ru'],
+    ['en', 'English', 'en']
+  ])
+  fireEvent.change(select('Язык'), { target: { value: 'en' } })
+  expect(setSettings).toHaveBeenLastCalledWith({ language: 'en' })
+
+  // the main process answers with a snapshot in the new language
+  const s = withTs({}, { phase: 'off' }, true)
+  act(() => services.store.getState().setSnapshot({ ...s, settings: { ...s.settings, language: 'en' }, language: 'en' }))
+  expect(select('Language').value).toBe('en')
+  expect(options(select('Language'))).toEqual([
+    ['system', 'Same as Windows', null],
+    ['ru', 'Русский', 'ru'],
+    ['en', 'English', 'en']
+  ])
+  fireEvent.change(select('Language'), { target: { value: 'system' } })
+  expect(setSettings).toHaveBeenLastCalledWith({ language: 'system' })
+  fireEvent.change(select('Language'), { target: { value: 'ru' } })
+  expect(setSettings).toHaveBeenLastCalledWith({ language: 'ru' })
+  expect(setSettings).toHaveBeenCalledTimes(3)
+
+  // a failed save says so, in the language of the window
+  setSettings.mockRejectedValueOnce(new Error('EPERM'))
+  await act(async () => {
+    fireEvent.change(select('Language'), { target: { value: 'ru' } })
+  })
+  expect(services.store.getState().notice).toBe("Couldn't save the setting")
 })
 
 test('the checkUpdates toggle saves the setting', () => {

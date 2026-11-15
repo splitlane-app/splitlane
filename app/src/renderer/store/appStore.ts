@@ -1,8 +1,8 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import type { CommandResult, Snapshot, SplitLaneBridge } from '../../shared/ipc'
 import type { Activity, HelperError, HelperState, Phase } from '../../shared/protocol'
-import { ru, type Key } from '../i18n/ru'
-import { t } from '../i18n/t'
+import type { Key } from '../i18n/ru'
+import { isKey, setLang, t } from '../i18n/t'
 import { ruleName } from '../model/board'
 import { layoutOf, type Layout } from '../model/layout'
 import { LayoutQueue, type LayoutOp } from './layoutQueue'
@@ -69,7 +69,7 @@ export interface AppStoreDeps {
 
 /** The text of a code from the helper; an unknown code (a newer helper) gets the fallback. */
 function text(key: string, fallback: Key): string {
-  return Object.hasOwn(ru, key) ? t(key as Key) : t(fallback)
+  return isKey(key) ? t(key) : t(fallback)
 }
 
 /** The notice of a failed command: the text of its error code. */
@@ -169,6 +169,8 @@ export function createAppStore(deps: AppStoreDeps): UseBoundStore<StoreApi<AppSt
       loginRequested: false,
 
       setSnapshot(s) {
+        // the texts first: whatever renders on this snapshot is in its language
+        setLang(s.language)
         const live = s.state !== null && LIVE_PHASES.has(s.state.phase)
         const { activity, history } = get()
         if (live || (activity === null && Object.keys(history).length === 0)) set({ snapshot: s })

@@ -102,10 +102,11 @@ export const ru = {
   'tile.system': 'Службы Windows',
   'tile.unattributed': 'WSL и виртуальные машины',
 
-  // speed units
+  // speed units and the decimal separator of the numbers
   'unit.bps': 'Б/с',
   'unit.kbps': 'КБ/с',
   'unit.mbps': 'МБ/с',
+  'unit.decimal': ',',
 
   // state banners (spec 9.5)
   'banner.off': 'Выключено. Программы ходят как обычно, без деления',
@@ -157,6 +158,37 @@ export const ru = {
   'update.action.retry': 'Повторить',
   'update.action.dismiss': 'Закрыть',
   'update.check': 'Проверить обновления',
+
+  // the reasons of the updater: the main process gives them in English, model/update.ts maps the known ones here
+  'update.reason.notInstalled': 'обновления доступны только для установленного SplitLane',
+  'update.reason.notStarted': 'установщик не начал обновление',
+  'update.reason.cancelled': 'отменено',
+  'update.reason.aborted': 'запрос прерван',
+  'update.reason.releaseGone': 'выпуск недоступен',
+  'update.reason.checksumTooLarge': 'файл контрольной суммы больше 1 КБ',
+  'update.reason.checksumInvalid': 'неверный файл контрольной суммы',
+  'update.reason.fileLargerThanRelease': 'файл больше, чем указано в выпуске',
+  'update.reason.fileTooLarge': 'файл больше 400 МБ',
+  'update.reason.checksumMismatch': 'файл не совпадает с контрольной суммой',
+  'update.reason.answerTooLarge': 'ответ о выпуске больше 1 МБ',
+  'update.reason.answerNotJson': 'ответ о выпуске не в формате JSON',
+  'update.reason.stalled': 'нет данных 60 секунд',
+  'update.reason.addressNotAllowed': 'адрес не разрешён',
+  'update.reason.redirectNotAllowed': 'перенаправление на неразрешённый узел',
+  'update.reason.tooManyRedirects': 'слишком много перенаправлений',
+  'update.reason.redirectNoLocation': 'перенаправление без адреса',
+  'update.reason.redirectBadAddress': 'перенаправление на неверный адрес',
+  'update.reason.http403': 'HTTP 403 (превышен лимит запросов к GitHub?)',
+  'update.reason.http': 'ошибка HTTP {status}',
+  'update.reason.noBody': 'сервер не прислал данных',
+  'update.reason.powershellExit': 'PowerShell завершился с кодом {code}',
+  'update.reason.releaseNotObject': 'неверный ответ о выпуске',
+  'update.reason.releaseDraft': 'выпуск — черновик или предварительный',
+  'update.reason.releaseTag': 'неверная метка выпуска',
+  'update.reason.currentVersion': 'неверный номер текущей версии',
+  'update.reason.releaseFiles': 'в выпуске должен быть ровно один файл {name}',
+  'update.reason.releaseAddress': 'адрес файла выпуска не тот, что ожидался',
+  'update.reason.installerSize': 'размер установщика вне допустимых пределов',
 
   // reasons (state.reason.code)
   'reason.no_default_route': 'у компьютера нет подключения к сети',
@@ -275,7 +307,13 @@ export const ru = {
   'connection.checkUpdates': 'Проверять обновления',
   'connection.settings': 'Настройки',
   'connection.saveFailed': 'Не удалось сохранить настройку',
+  'connection.language': 'Язык',
+  'connection.languageSystem': 'Как в Windows',
   'screen.back': 'Назад к дорожкам',
+
+  // the names of the languages: each in its own language, the same in both dictionaries
+  'language.ru': 'Русский',
+  'language.en': 'English'
 } as const
 
 export type Key = keyof typeof ru

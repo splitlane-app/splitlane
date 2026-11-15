@@ -6,7 +6,7 @@ import { t } from '../i18n/t'
 import { boardView, fileName, type CardVM } from '../model/board'
 import { formatSpeed } from '../model/format'
 import { moveTo, pin, setWholeFolder, unpin } from '../model/layout'
-import { useApp, useServices } from '../services'
+import { useApp, useLang, useServices } from '../services'
 import { effectiveLayout, isLivePhase, type LayoutChange } from '../store/appStore'
 import { ExeIcon } from './ExeIcon'
 import styles from './ProgramCard.module.css'
@@ -55,6 +55,8 @@ function CardDialog({ cardKey }: { cardKey: string }): React.JSX.Element | null 
   }, [bridge, cardKey])
 
   const last = useRef<CardVM | null>(null)
+  // the language too: the name of a tile follows it
+  const lang = useLang()
   const cards = useMemo(() => {
     if (layout === null || addresses === null) return null
     const view = boardView(layout.apps, layout.defaultLane, activity, addresses, '')
@@ -66,7 +68,7 @@ function CardDialog({ cardKey }: { cardKey: string }): React.JSX.Element | null 
       ...view.vpn.unpinned,
       ...view.direct.unpinned
     ]
-  }, [layout, addresses, activity])
+  }, [layout, addresses, activity, lang])
   const found = cards?.find((c) => c.key === cardKey)
   if (found !== undefined) last.current = found
   // the program under another key (pinned, moved, unpinned from here): the card follows it

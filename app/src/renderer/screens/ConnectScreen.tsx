@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { isLanguageSetting, type Lang, type LanguageSetting } from '../../shared/i18n'
 import type { Command } from '../../shared/ipc'
 import type { ExitNode, HelperState } from '../../shared/protocol'
 import type { WindowSettings } from '../../shared/settings'
@@ -6,16 +7,58 @@ import { Banner } from '../components/Banner'
 import { UpdateBanner } from '../components/UpdateBanner'
 import { ScreenFrame } from '../components/ScreenFrame'
 import { Toggle } from '../components/Toggle'
-import { t } from '../i18n/t'
+import type { Key } from '../i18n/ru'
+import { currentLang, t } from '../i18n/t'
 import { selectedExitNodeName } from '../model/banners'
 import { connectStep, type ConnectStep } from '../model/connect'
 import { updateBusy, updateStatusLine } from '../model/update'
 import { sendCommand, useApp, useServices } from '../services'
 import styles from './screens.module.css'
 
-/** Online nodes first, then by name. */
+/** Online nodes first, then by name in the order of the current language. */
 function sortedNodes(nodes: ExitNode[]): ExitNode[] {
-  return [...nodes].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name))
+  const lang = currentLang()
+  return [...nodes].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, lang))
+}
+
+/** The choices of «Язык»: the names of the languages in their own language (the `lang` of the option says which). */
+const LANGUAGE_CHOICES: readonly { value: LanguageSetting; text: Key; lang?: Lang }[] = [
+  { value: 'system', text: 'connection.languageSystem' },
+  { value: 'ru', text: 'language.ru', lang: 'ru' },
+  { value: 'en', text: 'language.en', lang: 'en' }
+]
+
+/** «Язык» of the window: the setting goes to the main process, the page follows the language of its next snapshot. */
+function LanguageSelect({
+  value,
+  onChange
+}: {
+  value: LanguageSetting
+  onChange(language: LanguageSetting): void
+}): React.JSX.Element {
+  const id = useId()
+  return (
+    <div className={styles.choice}>
+      <label className={styles.label} htmlFor={id}>
+        {t('connection.language')}
+      </label>
+      <select
+        id={id}
+        className={styles.select}
+        value={value}
+        onChange={(e) => {
+          const next = e.target.value
+          if (isLanguageSetting(next)) onChange(next)
+        }}
+      >
+        {LANGUAGE_CHOICES.map((c) => (
+          <option key={c.value} value={c.value} lang={c.lang}>
+            {t(c.text)}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
 }
 
 /** The exit nodes of the tailnet as a list; choosing one sends tailscale.setExitNode (the helper validates it). */
@@ -199,7 +242,7 @@ const live = (phase: HelperState['phase']): boolean => phase !== 'off' && phase 
 
 /**
  * «Подключение» (spec 9.5, 9.6), opened from the connection pill: the device, the exit node and its change,
- * logout (only while routing is off) and the two settings of the window.
+ * logout (only while routing is off) and the settings of the window, «Язык» among them.
  */
 export function ConnectionScreen(): React.JSX.Element | null {
   const services = useServices()
@@ -271,6 +314,7 @@ export function ConnectionScreen(): React.JSX.Element | null {
           caption={t('connection.enableOnStart')}
           onToggle={() => save({ enableOnStart: !settings.enableOnStart })}
         />
+        <LanguageSelect value={settings.language} onChange={(language) => save({ language })} />
       </div>
       <div className={styles.actions}>
         <button type="button" className={styles.button} onClick={() => store.getState().showConnection(false)}>

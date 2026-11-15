@@ -9,7 +9,7 @@ import { t } from '../i18n/t'
 import { installedRows, onlineRows, searchRows, type AddRow } from '../model/addRows'
 import { boardView, fileName, type CardVM } from '../model/board'
 import { addPrograms, moveTo, pin } from '../model/layout'
-import { useApp, useServices } from '../services'
+import { useApp, useLang, useServices } from '../services'
 import { effectiveLayout, isLivePhase } from '../store/appStore'
 import styles from './AddPanel.module.css'
 import { ExeIcon } from './ExeIcon'
@@ -136,12 +136,14 @@ export function AddPanel(): React.JSX.Element {
     }
   }, [tab, installed, bridge])
 
+  // the language too: the names of the tiles and the order of the rows follow it
+  const lang = useLang()
   const view = useMemo(
     () =>
       layout === null || addresses === null
         ? null
         : boardView(layout.apps, layout.defaultLane, activity, addresses, ''),
-    [layout, addresses, activity]
+    [layout, addresses, activity, lang]
   )
   const onlineAll = useMemo(() => (view === null || !live ? [] : onlineRows(view)), [view, live])
   const online = useMemo(() => searchRows(onlineAll, search), [onlineAll, search])

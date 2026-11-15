@@ -1,5 +1,5 @@
 import type { Activity, ActivityApp, AppRule, HelperState, Lane } from '../../shared/protocol'
-import { t } from '../i18n/t'
+import { currentLang, t } from '../i18n/t'
 
 /** One card of the board: a pinned rule, an unpinned program of the activity or a special tile. */
 export interface CardVM {
@@ -71,11 +71,15 @@ export function matchesSearch(name: string, exe: string, search: string): boolea
   return q === '' || lower(name).includes(q) || lower(exe).includes(q)
 }
 
-/** A stable order of programs: by name, then by file, then by key (the activity's own order follows the traffic). */
+/**
+ * A stable order of programs: by name, then by file, then by key (the activity's own order follows the traffic); the
+ * names compare by the rules of the current language.
+ */
 function byName(a: CardVM, b: CardVM): number {
+  const lang = currentLang()
   return (
-    a.name.localeCompare(b.name, 'ru') ||
-    fileName(a.exe).localeCompare(fileName(b.exe), 'ru') ||
+    a.name.localeCompare(b.name, lang) ||
+    fileName(a.exe).localeCompare(fileName(b.exe), lang) ||
     (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
   )
 }

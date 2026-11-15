@@ -1,9 +1,10 @@
 import { createContext, useContext, useEffect, useSyncExternalStore } from 'react'
 import { useStore, type StoreApi } from 'zustand'
+import type { Lang } from '../shared/i18n'
 import type { Command, SplitLaneBridge } from '../shared/ipc'
 import type { HelperError } from '../shared/protocol'
 import type { IconCache } from './bridge'
-import { t } from './i18n/t'
+import { currentLang, t } from './i18n/t'
 import { errorText, type AppState } from './store/appStore'
 
 /** What the components of the page work with: the store, the bridge and the icon cache. */
@@ -24,6 +25,14 @@ export function useServices(): Services {
 /** A value of the store; the component renders again when it changes (Object.is). */
 export function useApp<T>(selector: (s: AppState) => T): T {
   return useStore(useServices().store, selector)
+}
+
+/**
+ * The language of the texts: the snapshot's, or the one the page started with before the first snapshot. A memo of
+ * texts (the board's view, the drag instructions) takes it as a dependency; the root makes it the document's `lang`.
+ */
+export function useLang(): Lang {
+  return useApp((s) => s.snapshot?.language) ?? currentLang()
 }
 
 const thrown = (e: unknown): HelperError => ({

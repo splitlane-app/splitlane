@@ -3,7 +3,7 @@ import type { Lane as LaneName } from '../../shared/protocol'
 import { BoardDnd } from '../dnd/BoardDnd'
 import { boardView } from '../model/board'
 import { makeDefault } from '../model/layout'
-import { useApp, useServices } from '../services'
+import { useApp, useLang, useServices } from '../services'
 import { effectiveLayout } from '../store/appStore'
 import { AddPanel } from './AddPanel'
 import { Banner } from './Banner'
@@ -25,12 +25,14 @@ export function Board(): React.JSX.Element {
   const addresses = useApp((s) => s.snapshot?.state?.addresses ?? null)
   const search = useApp((s) => s.search)
   const addOpen = useApp((s) => s.ui.addOpen)
+  // the language too: the names of the tiles and the order of the cards follow it
+  const lang = useLang()
   const view = useMemo(
     () =>
       layout === null || addresses === null
         ? null
         : boardView(layout.apps, layout.defaultLane, activity, addresses, search),
-    [layout, activity, addresses, search]
+    [layout, activity, addresses, search, lang]
   )
   const setDefault = (lane: LaneName): void => {
     void store.getState().change((l) => makeDefault(l, lane))

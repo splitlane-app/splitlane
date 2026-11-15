@@ -13,7 +13,7 @@ import {
   type Sensors
 } from '@dnd-kit/dom'
 import { DragDropProvider, useDragOperation, useDroppable } from '@dnd-kit/react'
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, type ReactNode } from 'react'
 import type { StoreApi } from 'zustand'
 import type { Program } from '../../shared/programs'
 import type { Lane } from '../../shared/protocol'
@@ -22,7 +22,7 @@ import { t } from '../i18n/t'
 import { addRowDrop } from '../model/addRows'
 import type { CardVM } from '../model/board'
 import { addPrograms } from '../model/layout'
-import { useServices } from '../services'
+import { useLang, useServices } from '../services'
 import { effectiveLayout, type AppState, type LayoutChange } from '../store/appStore'
 import { changeOf, dropOp, opLabel, parseZone, zoneId, type DropOp, type DropZone } from './dropTarget'
 
@@ -116,6 +116,9 @@ function announcements(store: StoreApi<AppState>): AccessibilityOptions['announc
  */
 const STAY_WHERE_DROPPED: DropAnimationFunction = () => {}
 
+/** The hidden text of the drag instructions that the cards are described by: its id is `${prefix}-${id}`. */
+const INSTRUCTIONS = { prefix: 'splitlane-dnd-instructions', id: 'board' } as const
+
 /**
  * Dragging the cards of the board (spec 9.2) with @dnd-kit/react: a card dropped on a zone of a lane makes the
  * change of dropOp, shown at once and rolled back by the store on an error. A drop that changes nothing (or a
@@ -123,18 +126,31 @@ const STAY_WHERE_DROPPED: DropAnimationFunction = () => {}
  */
 export function BoardDnd({ children }: { children: ReactNode }): React.JSX.Element {
   const { store } = useServices()
+  const lang = useLang()
   const plugins = useMemo(
     () =>
       defaultPreset.plugins.map((p) =>
         p === Accessibility
           ? configure(Accessibility, {
+              id: INSTRUCTIONS.id,
+              idPrefix: { description: INSTRUCTIONS.prefix },
               announcements: announcements(store),
-              screenReaderInstructions: { draggable: t('dnd.instructions') }
+              // read when the plugin makes its hidden text (with the first card): the language of that moment
+              screenReaderInstructions: {
+                get draggable() {
+                  return t('dnd.instructions')
+                }
+              }
             } satisfies AccessibilityOptions)
           : p
       ),
     [store]
   )
+  // the plugin keeps the hidden text it made: a new language rewrites it (the announcements are made when said)
+  useEffect(() => {
+    const text = document.getElementById(`${INSTRUCTIONS.prefix}-${INSTRUCTIONS.id}`)
+    if (text !== null) text.textContent = t('dnd.instructions')
+  }, [lang])
 
   const onDragEnd = (event: DragEndEvent, manager: DragDropManager): void => {
     const drop = event.canceled ? null : dropOf(store, event.operation)

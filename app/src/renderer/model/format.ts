@@ -3,8 +3,9 @@ import { t } from '../i18n/t'
 const KB = 1024
 const MB = 1024 * 1024
 
+/** One digit after the separator of the current language: a comma in Russian, a point in English. */
 function oneDecimal(n: number): string {
-  return n.toFixed(1).replace('.', ',')
+  return n.toFixed(1).replace('.', t('unit.decimal'))
 }
 
 export function formatSpeed(bytesPerSecond: number): string {
