@@ -5,8 +5,10 @@
 # elsewhere (the folder is fixed), with marker files in %ProgramData%\SplitLane and %AppData%\SplitLane that
 # must stay; the silent uninstall without /PURGE (the data stays, the window's autostart value goes); the
 # install and the silent uninstall with /PURGE (the data goes). After every install the template's copy of
-# the installer in %LocalAppData%\splitlane-app-updater must be gone. The helper is never started and the
-# network is not touched.
+# the installer in %LocalAppData%\splitlane-app-updater must be gone, and %ProgramData%\SplitLane\export\
+# last-install.txt (removed before each install) must hold the installer's result for the window: the version
+# of the installer (from its name, SplitLane-Setup-<version>.exe), ok and an empty reason, CRLF, UTF-8 without
+# BOM (spec 6 of stage 2 part 2). The helper is never started and the network is not touched.
 # It changes the machine: %ProgramFiles%\SplitLane, %ProgramData%\SplitLane, %AppData%\SplitLane of this user,
 # the task "SplitLane Helper", the uninstall entry, the shortcuts and the value SplitLane under HKCU Run. So it
 # runs only as an administrator on a machine without SplitLane and without Tailscale (the runner of GitHub
@@ -33,6 +35,8 @@ $helper = Join-Path $product 'helper'
 $data = Join-Path $env:ProgramData 'SplitLane'
 $userData = Join-Path $env:APPDATA 'SplitLane'
 $marker = 'splitlane-test-marker.txt'
+# the installer's result for the window (app\build\installer.nsh splitlaneWriteResult)
+$lastInstall = Join-Path $data 'export\last-install.txt'
 # the folder of the template's copy of the installer (<package name>-updater), removed by the installer
 $installerCopy = Join-Path $env:LOCALAPPDATA 'splitlane-app-updater'
 # the window's autostart value (app\src\main\loginItem.ts LOGIN_ITEM_NAME), removed by the uninstaller
@@ -239,6 +243,8 @@ function Show-HelperOutput([string]$exe, [string]$arguments) {
 }
 
 function Install-Product([string]$arguments = '/S') {
+    # a result of an earlier install must not count for this one
+    if (Test-Path -LiteralPath $lastInstall) { Remove-Item -LiteralPath $lastInstall -Force }
     $code = Invoke-Program $Installer $arguments 600
     if ($code -ne 0) {
         Show-HelperOutput (Join-Path $dist 'splitlane-helper.exe') 'prepare --session-user'
@@ -251,6 +257,20 @@ function Install-Product([string]$arguments = '/S') {
         throw "the copy of the installer is left in $installerCopy (in it: $($left -join ', '))"
     }
     Say "no copy of the installer in $installerCopy"
+    Assert-LastInstall
+}
+
+# The result file of a successful install: the lines <version of the installer>, ok and an empty one, each ended
+# with CRLF, as UTF-8 without BOM, and nothing else.
+function Assert-LastInstall {
+    if (-not (Test-Path -LiteralPath $lastInstall -PathType Leaf)) { throw "no $lastInstall" }
+    $text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($lastInstall)) # keeps a BOM as U+FEFF
+    $want = "$installerVersion`r`nok`r`n`r`n"
+    if ($text -cne $want) {
+        $shown = { param($s) $s.Replace([string][char]0xFEFF, '<BOM>').Replace("`r", '\r').Replace("`n", '\n') }
+        throw "$lastInstall has '$(& $shown $text)', want '$(& $shown $want)'"
+    }
+    Say "$lastInstall says $installerVersion, ok, no reason"
 }
 
 # What an uninstall left: the program folder (some of its files), the uninstall entries $entries, the task.
@@ -405,6 +425,9 @@ try {
     if (-not $Installer) { throw '-Installer <path of SplitLane-Setup-<version>.exe> is required' }
     if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) { throw "no installer $Installer" }
     $Installer = (Resolve-Path -LiteralPath $Installer).Path
+    $leaf = Split-Path -Leaf $Installer
+    if ($leaf -notmatch '^SplitLane-Setup-(\d+\.\d+\.\d+)\.exe$') { throw "the installer's name $leaf is not SplitLane-Setup-<x.y.z>.exe" }
+    $installerVersion = $Matches[1]
     foreach ($f in $six) {
         if (-not (Test-Path -LiteralPath (Join-Path $dist $f) -PathType Leaf)) { throw "no dist\helper\$f; run scripts\build-installer.ps1 first" }
     }

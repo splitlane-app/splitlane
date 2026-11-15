@@ -7,10 +7,11 @@
 # not part of it. The SHA-256 of sing-box.exe and libcronet.dll are checked against scripts\core.sha256
 # before they are copied.
 # ASCII only: Windows PowerShell 5.1 reads a script without BOM in the ANSI code page.
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-helper.ps1
-# The version is "version" of app\package.json (x.y.z); the helper gets it as main.version.
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-helper.ps1 [-Version <x.y.z>]
+# The version (x.y.z) is -Version, else "version" of app\package.json; the helper gets it as main.version.
 # Needs: Go in %LOCALAPPDATA%\Programs\go\bin (else go from PATH), the core from scripts\fetch-core.ps1.
 # Result: last line BUILD-OK dist\helper <version> or BUILD-FAILED <reason>.
+param([string]$Version = '')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $name = 'sing-box-1.14.4-windows-amd64'
@@ -38,9 +39,13 @@ try {
         }
         $go = $found.Source
     }
-    $version = (Get-Content -LiteralPath (Join-Path $root 'app\package.json') -Raw | ConvertFrom-Json).version
-    if ($version -isnot [string] -or $version -notmatch '^\d+\.\d+\.\d+$') {
-        Write-Host "BUILD-FAILED version in app\package.json is not x.y.z: $version"
+    $from = '-Version'
+    if (-not $Version) {
+        $Version = (Get-Content -LiteralPath (Join-Path $root 'app\package.json') -Raw | ConvertFrom-Json).version
+        $from = 'version in app\package.json'
+    }
+    if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+        Write-Host "BUILD-FAILED $from is not x.y.z: $Version"
         exit 1
     }
     foreach ($file in 'sing-box.exe', 'libcronet.dll') {
@@ -64,7 +69,7 @@ try {
     Push-Location (Join-Path $root 'helper')
     try {
         $ErrorActionPreference = 'Continue'
-        & $go build -ldflags "-H=windowsgui -X main.version=$version" -o (Join-Path $out 'splitlane-helper.exe') ./cmd/splitlane-helper
+        & $go build -ldflags "-H=windowsgui -X main.version=$Version" -o (Join-Path $out 'splitlane-helper.exe') ./cmd/splitlane-helper
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = 'Stop'
@@ -79,7 +84,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $core 'LICENSE') -Destination (Join-Path $out 'sing-box-LICENSE')
     Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $out
     Copy-Item -LiteralPath (Join-Path $root 'THIRD-PARTY.md') -Destination $out
-    Write-Host "BUILD-OK dist\helper $version"
+    Write-Host "BUILD-OK dist\helper $Version"
 } catch {
     Write-Host "BUILD-FAILED $($_.Exception.Message)"
     exit 1

@@ -4,10 +4,14 @@
 # files that the installer puts into helper\), then in app: the packages, the Electron binary, typecheck,
 # tests, the build of the window and electron-builder --win nsis (app\build\installer.nsh adds the
 # helper's prepare, install and uninstall). The installer is not signed. Stops on the first failure.
-# The version is "version" of app\package.json. GitHub Actions runs the same script.
+# The version (x.y.z) is -Version, else "version" of app\package.json (spec 7 of stage 2 part 2: builds for
+# checks get their own version). The helper gets it (build-helper.ps1 -Version), electron-builder gets it as
+# -c.extraMetadata.version: the window's package.json in the app, SplitLane.exe, the installer and its name;
+# app\package.json is not changed. GitHub Actions runs the same script without -Version.
 # ASCII only: Windows PowerShell 5.1 reads a script without BOM in the ANSI code page.
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-installer.ps1 [-Version <x.y.z>]
 # Result: last line BUILD-OK <full path of the installer> or BUILD-FAILED <reason>.
+param([string]$Version = '')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $app = Join-Path $root 'app'
@@ -19,17 +23,21 @@ function Invoke-Step([string]$label, [scriptblock]$cmd) {
 }
 
 try {
-    $version = (Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json).version
-    if ($version -isnot [string] -or $version -notmatch '^\d+\.\d+\.\d+$') {
-        throw "version in app\package.json is not x.y.z: $version"
+    $from = '-Version'
+    if (-not $Version) {
+        $Version = (Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json).version
+        $from = 'version in app\package.json'
     }
-    $name = "SplitLane-Setup-$version.exe"
+    if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+        throw "$from is not x.y.z: $Version"
+    }
+    $name = "SplitLane-Setup-$Version.exe"
     $installer = Join-Path $app "release\$name"
     $sum = "$installer.sha256"
     foreach ($old in $installer, $sum) {
         if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force }
     }
-    Invoke-Step 'build-helper' { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build-helper.ps1') }
+    Invoke-Step 'build-helper' { powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build-helper.ps1') -Version $Version }
     Push-Location $app
     try {
         Invoke-Step 'pnpm install' { pnpm install --frozen-lockfile }
@@ -38,7 +46,9 @@ try {
         Invoke-Step 'pnpm typecheck' { pnpm typecheck }
         Invoke-Step 'pnpm test' { pnpm test }
         Invoke-Step 'pnpm build' { pnpm build }
-        Invoke-Step 'pnpm run dist' { pnpm run dist }
+        # one argument, quoted: Windows PowerShell 5.1 splits an unquoted -a.b=c at the dot
+        $meta = "-c.extraMetadata.version=$Version"
+        Invoke-Step "pnpm run dist $meta" { pnpm run dist $meta }
     } finally {
         Pop-Location
     }
