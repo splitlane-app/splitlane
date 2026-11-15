@@ -11,9 +11,21 @@ describe('settings', () => {
       enableOnStart: false,
       connectedOnce: false,
       checkUpdates: true,
-      pendingUpdate: null
+      pendingUpdate: null,
+      language: 'system'
     })
     expect(parseSettings('{"connectedOnce":true}').connectedOnce).toBe(true)
+  })
+
+  it('parseSettings reads language with a default', () => {
+    expect(DEFAULT_SETTINGS.language).toBe('system')
+    expect(parseSettings('{}').language).toBe('system')
+    expect(parseSettings('{"language":"en"}').language).toBe('en')
+    expect(parseSettings('{"language":"ru"}').language).toBe('ru')
+    expect(parseSettings('{"language":"system"}').language).toBe('system')
+    for (const bad of ['"de"', '"EN"', '1', 'null', 'true', '{}']) {
+      expect(parseSettings(`{"language":${bad}}`).language).toBe('system')
+    }
   })
 
   it('parseSettings reads checkUpdates and pendingUpdate with defaults', () => {

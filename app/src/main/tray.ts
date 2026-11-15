@@ -1,19 +1,11 @@
 import { Menu, Tray, nativeImage, screen, type NativeImage } from 'electron'
+import type { Lang } from '../shared/i18n'
 import type { HelperState } from '../shared/protocol'
 import type { LinkStatus } from '../shared/status'
+import { mainText } from './mainText'
 import { laneGlyphBitmap, trayIconFor, trayMenuModel, type TrayIcon } from './trayModel'
 
-/** The main process's own strings (the page's dictionary lives in the renderer). */
-export const MAIN_TEXT = {
-  open: 'Открыть',
-  settings: 'Настройки…',
-  checkUpdates: 'Проверить обновления',
-  enable: 'Включить',
-  disable: 'Выключить',
-  quit: 'Выход',
-  programsFilter: 'Программы',
-  zipFilter: 'Архив ZIP'
-} as const
+export { MAIN_TEXT, mainText, type MainText } from './mainText'
 
 const COLORS: Record<TrayIcon, [number, number, number]> = {
   working: [0x8b, 0x7c, 0xff],
@@ -69,12 +61,25 @@ export class AppTray {
   private readonly images = new Map<TrayIcon, NativeImage>()
   private icon: TrayIcon = 'off'
   private toggle: 'enable' | 'disable' | null | undefined = undefined
+  private lang: Lang
 
-  constructor(private readonly actions: TrayActions) {
+  constructor(
+    private readonly actions: TrayActions,
+    lang: Lang
+  ) {
+    this.lang = lang
     this.tray = new Tray(this.image(this.icon))
     this.tray.setToolTip('SplitLane')
     this.tray.on('click', () => actions.open())
     this.update({ kind: 'connecting' }, null)
+  }
+
+  /** A new language: the menu is built again with its texts on the next update. */
+  setLanguage(lang: Lang, link: LinkStatus, state: HelperState | null): void {
+    if (lang === this.lang) return
+    this.lang = lang
+    this.toggle = undefined
+    this.update(link, state)
   }
 
   /** Called on every change of the link status or the state. */
@@ -87,20 +92,21 @@ export class AppTray {
     const { toggle } = trayMenuModel(link, state)
     if (toggle === this.toggle) return
     this.toggle = toggle
+    const text = mainText(this.lang)
     this.tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: MAIN_TEXT.open, click: () => this.actions.open() },
-        { label: MAIN_TEXT.settings, click: () => this.actions.settings() },
+        { label: text.open, click: () => this.actions.open() },
+        { label: text.settings, click: () => this.actions.settings() },
         {
-          label: toggle === 'disable' ? MAIN_TEXT.disable : MAIN_TEXT.enable,
+          label: toggle === 'disable' ? text.disable : text.enable,
           enabled: toggle !== null,
           click: () => {
             if (toggle !== null) this.actions.toggle(toggle)
           }
         },
-        { label: MAIN_TEXT.checkUpdates, click: () => this.actions.checkUpdates() },
+        { label: text.checkUpdates, click: () => this.actions.checkUpdates() },
         { type: 'separator' },
-        { label: MAIN_TEXT.quit, click: () => this.actions.quit() }
+        { label: text.quit, click: () => this.actions.quit() }
       ])
     )
   }

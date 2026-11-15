@@ -303,7 +303,7 @@ function ipcHarness() {
     userCommand: vi.fn(),
     installHelper: vi.fn(async () => {}),
     appInfo: vi.fn(async () => ({ version: '0.2.0', installed: true })),
-    setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, ...p })),
+    setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, language: 'system' as const, ...p })),
     installedPrograms: vi.fn(async () => []),
     pickProgram: vi.fn(async () => null),
     resolveDropped: vi.fn(async (paths: string[]) =>
@@ -391,7 +391,8 @@ test('registerIpc checks the sender and every argument from the page', async () 
     enableOnStart: true,
     connectedOnce: false,
     checkUpdates: true,
-    pendingUpdate: null
+    pendingUpdate: null,
+    language: 'system'
   })
   await expect(h.invoke(IPC.setSettings, { enableOnStart: 1 })).rejects.toThrow()
   expect(h.d.setSettings).toHaveBeenCalledTimes(1)
@@ -411,8 +412,10 @@ test('installed programs merge the Start menu and the Store', () => {
     { exe: 'C:\\Program Files\\WindowsApps\\Vendor.Atlas_2.0.0.0_x64__abcdefghijk\\atlas.exe', name: 'Atlas' }
   ]
   // the Start-menu entry wins a duplicate; the Russian order puts Cyrillic first
-  expect(mergePrograms(start, store).map((p) => p.name)).toEqual(['Заметки', 'Редактор', 'Atlas', 'Viewer'])
-  expect(mergePrograms([], [])).toEqual([])
+  expect(mergePrograms('ru', start, store).map((p) => p.name)).toEqual(['Заметки', 'Редактор', 'Atlas', 'Viewer'])
+  // the English order puts Latin first
+  expect(mergePrograms('en', start, store).map((p) => p.name)).toEqual(['Atlas', 'Viewer', 'Заметки', 'Редактор'])
+  expect(mergePrograms('ru', [], [])).toEqual([])
 })
 
 test('installed programs take in the Steam and Epic games', () => {
@@ -428,7 +431,7 @@ test('installed programs take in the Steam and Epic games', () => {
     { exe: 'C:\\Program Files\\Epic Games\\LumenRush\\Binaries\\Win64\\LumenRush.exe', name: 'Lumen Rush' },
     { exe: 'C:\\Program Files\\Epic Games\\Aurora\\Aurora.exe', name: 'Аврора' }
   ]
-  expect(mergePrograms(start, store, games)).toEqual([
+  expect(mergePrograms('ru', start, store, games)).toEqual([
     { exe: 'C:\\Program Files\\Epic Games\\Aurora\\Aurora.exe', name: 'Аврора' },
     { exe: 'D:\\Games\\SteamLibrary\\steamapps\\common\\Starfall\\bin\\starfall.exe', name: 'Звёздная тактика' },
     { exe: 'C:\\Program Files\\WindowsApps\\Vendor.Atlas_2.0.0.0_x64__abcdefghijk\\atlas.exe', name: 'Atlas' },
@@ -443,6 +446,14 @@ test('exportPath takes the archive path from diagnostics.export', () => {
   expect(exportPath({ path: p })).toBe(p)
   for (const bad of [{}, { path: 42 }, { path: 'export\\a.zip' }, { path: 'C:\\ProgramData\\SplitLane\\export\\a.txt' }, null, 'x']) {
     expect(() => exportPath(bad)).toThrow()
+  }
+})
+
+test('validateSettingsPatch accepts language and refuses other values', () => {
+  for (const ok of ['system', 'ru', 'en'] as const) expect(validateSettingsPatch({ language: ok })).toEqual({ language: ok })
+  expect(validateSettingsPatch({ language: 'en', openAtLogin: true })).toEqual({ language: 'en', openAtLogin: true })
+  for (const bad of ['de', 'EN', '', 1, null, true, {}]) {
+    expect(() => validateSettingsPatch({ language: bad })).toThrow()
   }
 })
 

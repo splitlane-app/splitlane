@@ -1,3 +1,4 @@
+import type { Lang } from '../shared/i18n'
 import type { Dropped, Program, SkipReason } from '../shared/programs'
 
 export function startMenuDirs(env: Record<string, string | undefined>): string[] {
@@ -51,7 +52,7 @@ async function safeUrl(readUrl: ProgramsFs['readUrl'], path: string): Promise<Pr
 }
 
 /** The programs of the Start-menu shortcuts: `.lnk` to an exe (named after the shortcut) and game `.url` files. */
-export async function installedPrograms(fs: ProgramsFs, dirs: string[]): Promise<Program[]> {
+export async function installedPrograms(fs: ProgramsFs, dirs: string[], lang: Lang): Promise<Program[]> {
   const seen = new Set<string>()
   const out: Program[] = []
   const add = (p: Program): void => {
@@ -78,7 +79,7 @@ export async function installedPrograms(fs: ProgramsFs, dirs: string[]): Promise
       }
     }
   }
-  return out.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+  return out.sort((a, b) => a.name.localeCompare(b.name, lang))
 }
 
 /** The file picked in the dialog as one dropped from Explorer: its program, or its name when it is none. */

@@ -1,3 +1,4 @@
+import { isLanguageSetting, type LanguageSetting } from './i18n'
 import { parseVersion } from './update'
 
 /** The window's own settings, kept in %AppData%\SplitLane\settings.json (spec 9.6). */
@@ -10,6 +11,8 @@ export interface WindowSettings {
   checkUpdates: boolean
   /** Version of an installer started by the window and not yet confirmed after the restart; x.y.z or null. */
   pendingUpdate: string | null
+  /** The language of the window: one of the two, or the one of Windows. */
+  language: LanguageSetting
 }
 
 export const DEFAULT_SETTINGS: WindowSettings = {
@@ -17,7 +20,8 @@ export const DEFAULT_SETTINGS: WindowSettings = {
   enableOnStart: false,
   connectedOnce: false,
   checkUpdates: true,
-  pendingUpdate: null
+  pendingUpdate: null,
+  language: 'system'
 }
 
 export function parseSettings(text: string): WindowSettings {
@@ -37,6 +41,7 @@ export function parseSettings(text: string): WindowSettings {
     enableOnStart: pick('enableOnStart'),
     connectedOnce: pick('connectedOnce'),
     checkUpdates: pick('checkUpdates'),
-    pendingUpdate: typeof p === 'string' && parseVersion(p) !== null ? p : null
+    pendingUpdate: typeof p === 'string' && parseVersion(p) !== null ? p : null,
+    language: isLanguageSetting(o.language) ? o.language : DEFAULT_SETTINGS.language
   }
 }

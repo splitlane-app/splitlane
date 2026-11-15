@@ -59,12 +59,15 @@ test('installedPrograms keeps exe targets and game shortcuts, dedupes and sorts'
     },
     readUrl,
   }
-  expect(await installedPrograms(fs, ['C:\\bad', 'C:\\m', 'C:\\u'])).toEqual([
+  expect(await installedPrograms(fs, ['C:\\bad', 'C:\\m', 'C:\\u'], 'ru')).toEqual([
     // a game shortcut of the Start menu is named after its game
     STARFALL,
     { exe: 'C:\\Apps\\Alpha\\alpha.exe', name: 'Alpha' },
     { exe: 'C:\\Apps\\Zeta\\zeta.exe', name: 'Zeta' },
   ])
+  // in English the Latin names come first, whatever the script of the game
+  const en = await installedPrograms(fs, ['C:\\bad', 'C:\\m', 'C:\\u'], 'en')
+  expect(en.map((p) => p.name)).toEqual(['Alpha', 'Zeta', STARFALL.name])
 })
 
 test('resolves dropped files to programs and skips the rest', async () => {

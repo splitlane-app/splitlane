@@ -1,3 +1,4 @@
+import type { Lang } from './i18n'
 import type { Dropped, Program } from './programs'
 import type { Activity, AppRule, HelperError, HelperState, Lane } from './protocol'
 import type { WindowSettings } from './settings'
@@ -17,6 +18,8 @@ export interface Snapshot {
   link: LinkStatus
   state: HelperState | null
   settings: WindowSettings
+  /** The language in force: the setting resolved against the language of Windows. */
+  language: Lang
   install: InstallState
   /** The window's own updates (stage 2 part 2). */
   update: UpdateState

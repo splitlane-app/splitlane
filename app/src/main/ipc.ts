@@ -1,4 +1,5 @@
 import { IPC, LINK_CLOSED, MAX_DROPPED, type AppInfo, type Command, type CommandResult, type Snapshot } from '../shared/ipc'
+import { isLanguageSetting, type Lang } from '../shared/i18n'
 import type { Dropped, Program } from '../shared/programs'
 import { LIMITS, utf8Bytes, type AppRule, type HelperError, type Lane, type MatcherKind } from '../shared/protocol'
 import type { WindowSettings } from '../shared/settings'
@@ -148,14 +149,19 @@ export function validateDetailKey(x: unknown): string | null {
 }
 
 // pendingUpdate belongs to the updater of the main process: the page cannot set it
-const SETTING_KEYS = ['openAtLogin', 'enableOnStart', 'connectedOnce', 'checkUpdates'] as const satisfies readonly (keyof WindowSettings)[]
+const BOOL_SETTING_KEYS = ['openAtLogin', 'enableOnStart', 'connectedOnce', 'checkUpdates'] as const satisfies readonly (keyof WindowSettings)[]
+const SETTING_KEYS = [...BOOL_SETTING_KEYS, 'language'] as const
 
 export function validateSettingsPatch(x: unknown): Partial<WindowSettings> {
   const o = plain(x, 'settings')
   onlyKeys(o, SETTING_KEYS, 'settings')
   const out: Partial<WindowSettings> = {}
-  for (const k of SETTING_KEYS) {
+  for (const k of BOOL_SETTING_KEYS) {
     if (o[k] !== undefined) out[k] = bool(o[k], `settings.${k}`)
+  }
+  if (o.language !== undefined) {
+    if (!isLanguageSetting(o.language)) throw new Error('settings.language: expected "system", "ru" or "en"')
+    out.language = o.language
   }
   return out
 }
@@ -227,8 +233,8 @@ export function exportPath(result: unknown): string {
   return p
 }
 
-/** Start-menu programs, Store apps and games in one list: one entry per exe (the first wins), Russian order. */
-export function mergePrograms(...lists: Program[][]): Program[] {
+/** Start-menu programs, Store apps and games in one list: one entry per exe (the first wins), in the order of the language. */
+export function mergePrograms(lang: Lang, ...lists: Program[][]): Program[] {
   const seen = new Set<string>()
   const out: Program[] = []
   for (const list of lists) {
@@ -239,7 +245,7 @@ export function mergePrograms(...lists: Program[][]): Program[] {
       out.push(p)
     }
   }
-  return out.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
+  return out.sort((a, b) => a.name.localeCompare(b.name, lang))
 }
 
 // ---- registration ----

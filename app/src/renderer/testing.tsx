@@ -34,7 +34,7 @@ export function state(over: Partial<HelperState> = {}): HelperState {
 }
 
 export function snap(over: Partial<HelperState> = {}, link: LinkStatus = ready): Snapshot {
-  return { link, state: state(over), settings: DEFAULT_SETTINGS, install: { kind: 'idle' }, update: { kind: 'idle' } }
+  return { link, state: state(over), settings: DEFAULT_SETTINGS, language: 'ru', install: { kind: 'idle' }, update: { kind: 'idle' } }
 }
 
 export function rule(id: string, name: string, exe: string, lane: Lane): AppRule {

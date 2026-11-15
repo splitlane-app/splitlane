@@ -3,6 +3,7 @@ import type { Dirent } from 'node:fs'
 import { access, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, win32 } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, shell } from 'electron'
+import { resolveLanguage, type Lang } from '../shared/i18n'
 import { IPC, type InstallState, type Snapshot } from '../shared/ipc'
 import type { Dropped } from '../shared/programs'
 import { PIPE_NAME, type HelperError, type HelperState } from '../shared/protocol'
@@ -31,7 +32,8 @@ import {
 import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
 import { forbiddenSwitch } from './switches'
 import { runTask, systemTools, taskRegistered, type Exec } from './task'
-import { AppTray, MAIN_TEXT, windowIcon } from './tray'
+import { mainText } from './mainText'
+import { AppTray, windowIcon } from './tray'
 import { installerOutcome, nodeFs, runInstallerScript, Updater } from './updater'
 
 // The helper serves the installed window without elevation: started with a debugger or V8 switch, it exits at once,
@@ -153,6 +155,8 @@ let allowClose = false
 let exiting = false
 
 let settings: WindowSettings = { ...DEFAULT_SETTINGS }
+/** Resolved from settings.language at the start and on every change of it. */
+let language: Lang = 'en'
 let install: InstallState = { kind: 'idle' }
 let installing: Promise<void> | null = null
 let lastPhase: string | null = null
@@ -284,7 +288,7 @@ function updateState(): UpdateState {
 }
 
 function snapshot(): Snapshot {
-  return { link: link.status(), state: link.state(), settings, install, update: updateState() }
+  return { link: link.status(), state: link.state(), settings, language, install, update: updateState() }
 }
 
 function send(channel: string, data: unknown): void {
@@ -338,9 +342,18 @@ function applyOpenAtLogin(openAtLogin: boolean): void {
   app.setLoginItemSettings(loginItemSettings(openAtLogin, process.execPath))
 }
 
+/** The language in force: the setting against the languages of Windows. */
+function resolveLang(): Lang {
+  return resolveLanguage(settings.language, app.getPreferredSystemLanguages())
+}
+
 async function setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings> {
   settings = { ...settings, ...patch }
   if (patch.openAtLogin !== undefined) applyOpenAtLogin(settings.openAtLogin)
+  if (patch.language !== undefined) {
+    language = resolveLang()
+    tray?.setLanguage(language, link.status(), link.state())
+  }
   pushSnapshot()
   await saveSettings(settings)
   return settings
@@ -454,7 +467,7 @@ async function pickProgram(): Promise<Dropped | null> {
   const options = {
     properties: ['openFile' as const],
     // .url: the shortcuts of Steam and Epic games
-    filters: [{ name: MAIN_TEXT.programsFilter, extensions: ['exe', 'url'] }]
+    filters: [{ name: mainText(language).programsFilter, extensions: ['exe', 'url'] }]
   }
   const r = win !== null ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
   if (r.canceled || r.filePaths.length === 0) return null
@@ -470,7 +483,7 @@ async function saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError 
   }
   const options = {
     defaultPath: join(app.getPath('downloads'), win32.basename(archive)),
-    filters: [{ name: MAIN_TEXT.zipFilter, extensions: ['zip'] }]
+    filters: [{ name: mainText(language).zipFilter, extensions: ['zip'] }]
   }
   const r = win !== null ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
   if (r.canceled || !r.filePath) return { saved: false }
@@ -560,6 +573,7 @@ function createWindow(): void {
 
 async function main(): Promise<void> {
   settings = await settingsFile.load()
+  language = resolveLang()
   // the saved autostart again, for the exe of this start (the unpacked folder may have moved)
   const item = startupLoginItem({ isPackaged: app.isPackaged, execPath: process.execPath }, settings.openAtLogin)
   try {
@@ -582,11 +596,11 @@ async function main(): Promise<void> {
     setSettings,
     installedPrograms: async () => {
       const [start, store, played] = await Promise.all([
-        installedPrograms(programsFs, startMenuDirs(process.env)),
+        installedPrograms(programsFs, startMenuDirs(process.env), language),
         storeApps.get(),
         games.installed()
       ])
-      return mergePrograms(start, store, played)
+      return mergePrograms(language, start, store, played)
     },
     pickProgram,
     resolveDropped: (paths) => resolveDropped(paths, dropReaders),
@@ -620,7 +634,7 @@ async function main(): Promise<void> {
     },
     checkUpdates: checkUpdatesFromTray,
     quit: () => void quit()
-  })
+  }, language)
   tray.update(link.status(), link.state())
   // the page is dark only: Windows then draws a dark title bar and frame too
   nativeTheme.themeSource = 'dark'
