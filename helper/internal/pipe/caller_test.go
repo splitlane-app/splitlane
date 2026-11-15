@@ -215,7 +215,7 @@ func serveWith(t *testing.T, check Check) (*Server, *fakeHandler, string, *logLi
 	return s, h, name, ll
 }
 
-const helloLine = `{"id":1,"method":"hello","params":{"protocol":1}}` + "\n"
+const helloLine = `{"id":1,"method":"hello","params":{"protocol":2}}` + "\n"
 
 // expectEOF sends hello and waits for the end of the stream: a refused client gets no answer.
 func expectEOF(t *testing.T, c *testClient) {
@@ -258,7 +258,7 @@ func TestRejectedClientDoesNotStopTheServer(t *testing.T) {
 	})
 	expectEOF(t, dial(t, name))
 	second := dial(t, name)
-	m := second.send(t, `{"id":2,"method":"hello","params":{"protocol":1}}`)
+	m := second.send(t, `{"id":2,"method":"hello","params":{"protocol":2}}`)
 	if _, ok := m["result"]; !ok {
 		t.Fatalf("hello: %v", m)
 	}
@@ -267,7 +267,7 @@ func TestRejectedClientDoesNotStopTheServer(t *testing.T) {
 func TestNilCheckAcceptsAll(t *testing.T) {
 	_, _, name, _ := serveWith(t, nil)
 	c := dial(t, name)
-	if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`); m["result"] == nil {
+	if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`); m["result"] == nil {
 		t.Fatalf("hello: %v", m)
 	}
 }

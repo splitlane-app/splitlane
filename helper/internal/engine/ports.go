@@ -32,6 +32,11 @@ type Store interface {
 	WriteConfig(config []byte) (string, error)
 	ExportDir() string // the folder of the diagnostics archives (spec 4.2)
 	Logs() []string    // the logs that diagnostics.export takes, full paths (spec 5.1)
+	// LoadServers and SaveServers are servers.json (stage 3 part 1, section 3): the servers and
+	// subscriptions of the proxy connector with their secrets. SaveServers refuses more than the limits
+	// (store.ErrTooMany).
+	LoadServers() (store.Servers, error)
+	SaveServers(store.Servers) error
 }
 
 // CoreProc is one running core process.
@@ -225,6 +230,7 @@ type Deps struct {
 	Sys      SystemTailscale
 	Probe    Prober
 	Host     Host
+	Fetch    connector.Fetcher // downloads subscriptions (stage 3 part 1, section 3); nil refuses every download
 	Rules    rules.Env
 	Settings Settings
 	Log      func(format string, args ...any)

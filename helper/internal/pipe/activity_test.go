@@ -82,7 +82,7 @@ func (c *testClient) activity(t *testing.T) string {
 func hello(t *testing.T, cs ...*testClient) {
 	t.Helper()
 	for _, c := range cs {
-		if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`); m["result"] == nil {
+		if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`); m["result"] == nil {
 			t.Fatalf("hello: %v", m)
 		}
 	}
@@ -183,7 +183,7 @@ func TestResubscribeReplaces(t *testing.T) {
 func TestStalledSubscriberIsDropped(t *testing.T) {
 	s, h, name := serve(t)
 	stalled, reading := dial(t, name), dial(t, name)
-	stalled.conn.Write([]byte(`{"id":1,"method":"hello","params":{"protocol":1}}` + "\n" +
+	stalled.conn.Write([]byte(`{"id":1,"method":"hello","params":{"protocol":2}}` + "\n" +
 		`{"id":2,"method":"activity.subscribe"}` + "\n")) // never reads again
 	hello(t, reading)
 	reading.send(t, `{"id":2,"method":"activity.subscribe"}`)

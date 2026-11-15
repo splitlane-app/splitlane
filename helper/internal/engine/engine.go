@@ -80,6 +80,12 @@ type Engine struct {
 	skip         bool         // "disable without restore" (5.4)
 	wake         chan struct{}
 
+	// The proxy connector (stage 3 part 1, proxy.go): servers.json as it was read or last saved. While
+	// it could not be read (store.ErrIO) the set is empty, nothing is written over the file, and each
+	// proxy command reads it again first.
+	servers    store.Servers
+	serversErr error
+
 	// The connector (spec 7, connector.go).
 	setup       *setupRun  // the setup mode now; nil when it does not run
 	nodeBackend string     // tailscale.backend as the setup core's node says; stopped when it does not run
@@ -132,8 +138,11 @@ func New(d Deps) *Engine {
 	if d.OnExit == nil {
 		d.OnExit = func() {}
 	}
-	e := &Engine{d: d, wake: make(chan struct{}, 1), saved: store.Defaults(), nodeBackend: protocol.BackendStopped,
-		act: liveActivity{tracker: activity.New(d.Rules)}}
+	if d.Fetch == nil {
+		d.Fetch = noFetch{}
+	}
+	e := &Engine{d: d, wake: make(chan struct{}, 1), saved: store.Defaults(), servers: store.EmptyServers(),
+		nodeBackend: protocol.BackendStopped, act: liveActivity{tracker: activity.New(d.Rules)}}
 	e.st = protocol.State{
 		Phase:       protocol.PhaseOff,
 		DefaultLane: protocol.LaneVPN,
@@ -172,10 +181,19 @@ func (e *Engine) load() {
 	case err != nil:
 		e.d.Log("restore journal: %v", err)
 	}
+	servers, serversErr := e.d.Store.LoadServers()
+	switch {
+	case errors.Is(serversErr, store.ErrIO):
+		e.d.Log("servers.json: %v; it is read again by the next proxy command, and not written over until then", serversErr)
+	case serversErr != nil:
+		e.d.Log("servers.json: %v", serversErr)
+		serversErr = nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.saved, e.journal = s, j
 	e.stateErr, e.journalErr = stateErr, journalErr
+	e.servers, e.serversErr = servers, serversErr
 	e.syncSaved()
 }
 
@@ -347,6 +365,7 @@ func (e *Engine) syncSaved() {
 	}
 	e.st.Tailscale.DeviceName = e.hostname()
 	e.st.SystemTailscale.RestoreOnDisable = e.journal != nil || e.journalErr != nil
+	e.syncProxy()
 }
 
 func (e *Engine) hostname() string {
@@ -361,8 +380,8 @@ func (e *Engine) hostname() string {
 // could not be read (load), nothing is written over it: each save reads it again first. Once it
 // reads, the settings it holds are taken over, "was on" stays that of this run, and so does the core
 // identity once this run has started a core; until then the file's stays: the core it names may still
-// run, and the next start must find it (5.7). While a core runs, the exit node it was built with and
-// this run's "logged in" stay too, and the core is to be given the layout of the file (relayout:
+// run, and the next start must find it (5.7). While a core runs, the connector, the exit node and the
+// server it was built with and this run's "logged in" stay too, and the core is to be given the layout of the file (relayout:
 // lanes.set at once, otherwise the next round of 5.5). save then returns errStateLate: the change
 // being saved has given way to the file.
 func (e *Engine) save() error {
@@ -384,6 +403,7 @@ func (e *Engine) save() error {
 		}
 		if e.run != nil {
 			s.SelectedExitNode, s.LoggedIn = e.saved.SelectedExitNode, e.saved.LoggedIn
+			s.Connector, s.SelectedServer = e.saved.Connector, e.saved.SelectedServer
 			e.relayout = true
 		}
 		e.saved, e.stateErr, late = s, nil, true

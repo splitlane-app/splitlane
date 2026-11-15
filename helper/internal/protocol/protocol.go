@@ -10,10 +10,14 @@ import (
 	"io"
 	"net/netip"
 	"regexp"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
-// Version is the pipe protocol version of stage 1 (spec 5.1).
-const Version = 1
+// Version is the pipe protocol version: 2 since stage 3 part 1 (its spec, section 4) added the proxy
+// connector; the window and the helper are installed together and speak the same one.
+const Version = 2
 
 // Methods (spec 5.1). There are no others.
 const (
@@ -30,13 +34,18 @@ const (
 	MethodActivitySubscribe   = "activity.subscribe"
 	MethodDiagnosticsExport   = "diagnostics.export"
 	MethodShutdown            = "helper.shutdown"
+	MethodProxyAdd            = "proxy.add"
+	MethodProxyRefresh        = "proxy.refresh"
+	MethodProxyRemove         = "proxy.remove"
+	MethodProxySelect         = "proxy.select"
 )
 
-// Methods lists every method of spec 5.1.
+// Methods lists every method of spec 5.1 and of stage 3 part 1 (section 4).
 var Methods = []string{
 	MethodHello, MethodStateGet, MethodEnable, MethodDisable, MethodAllDirect, MethodLanesSet,
 	MethodLogin, MethodLogout, MethodSetExitNode, MethodClearSystemExitNode,
 	MethodActivitySubscribe, MethodDiagnosticsExport, MethodShutdown,
+	MethodProxyAdd, MethodProxyRefresh, MethodProxyRemove, MethodProxySelect,
 }
 
 // Error codes: the closed list of spec 5.1.
@@ -50,6 +59,13 @@ const (
 	CodeApplyFailed      = "apply_failed"
 	CodeUnknownExitNode  = "unknown_exit_node"
 	CodeInternal         = "internal"
+	// The proxy methods (stage 3 part 1): no server or subscription has the id; servers.json would
+	// hold more than its limits allow. proxy.refresh also answers with the code of a failed download
+	// (connector.CodeFetch*: fetch_...) or of a subscription that gave no server (the code of its first
+	// rejected line, else CodeEmptySubscription).
+	CodeUnknownServer     = "unknown_server"
+	CodeTooMany           = "too_many"
+	CodeEmptySubscription = "empty_subscription"
 )
 
 // Phases (spec 5.2).
@@ -83,6 +99,21 @@ const (
 	ReasonLoginExpired      = "login_expired"
 	ReasonRestorePending    = "restore_pending"
 	ReasonAdapterLeft       = "adapter_left"
+	// ReasonNoServer: the connector is proxy, but no server is selected or the selected one does not
+	// parse (stage 3 part 1, section 4). not_logged_in, no_exit_node and login_expired are Tailscale's.
+	ReasonNoServer = "no_server"
+)
+
+// Connectors: the way out of the VPN lane (stage 3 part 1, section 2).
+const (
+	ConnectorTailscale = "tailscale"
+	ConnectorProxy     = "proxy"
+)
+
+// Sources of a proxy server (ProxyServer.Source) besides the id of a subscription.
+const (
+	SourceManual = "manual" // pasted
+	SourceFile   = "file"   // a .conf the window read from a file
 )
 
 // Keys of Reason.Params (spec 5.2): restore_pending carries the manual restore command and the
@@ -117,6 +148,12 @@ const (
 	MaxApps    = 500
 	MaxNameLen = 256
 	MaxPathLen = 1024
+
+	// MaxProxyText is the limit of the text of proxy.add (connector.MaxTextLen): a longer text is the
+	// rejection too_long of the whole text, which the window can show. MaxRejected bounds the rejected
+	// lines of one answer; the others are counted in rejectedMore.
+	MaxProxyText = 64 << 10
+	MaxRejected  = 50
 )
 
 // Request is one line from a client.
@@ -214,7 +251,34 @@ type SystemTailscale struct {
 	RestoreOnDisable bool `json:"restoreOnDisable"`
 }
 
-// State is the full state of spec 5.2.
+// ProxyServer is one server of the proxy connector as the state shows it: nothing secret (stage 3
+// part 1, section 4). Source is SourceManual, SourceFile or the id of its subscription.
+type ProxyServer struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Source   string `json:"source"`
+}
+
+// Subscription is one subscription as the state shows it, never with its address. UpdatedAt is the
+// time of the last update that worked (RFC 3339); Error the code of the last one when it failed, null
+// when it worked.
+type Subscription struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	UpdatedAt string  `json:"updatedAt"`
+	Count     int     `json:"count"`
+	Error     *string `json:"error"`
+}
+
+// Proxy is the proxy connector: the servers, the selected one (null: none) and the subscriptions.
+type Proxy struct {
+	Servers       []ProxyServer  `json:"servers"`
+	Selected      *string        `json:"selected"`
+	Subscriptions []Subscription `json:"subscriptions"`
+}
+
+// State is the full state of spec 5.2 with the connector of stage 3 part 1 (section 4).
 type State struct {
 	Phase           string          `json:"phase"`
 	Reason          *Reason         `json:"reason"`
@@ -222,7 +286,9 @@ type State struct {
 	DefaultLane     string          `json:"defaultLane"`
 	Apps            []AppRule       `json:"apps"`
 	Addresses       Addresses       `json:"addresses"`
+	Connector       string          `json:"connector"`
 	Tailscale       Tailscale       `json:"tailscale"`
+	Proxy           Proxy           `json:"proxy"`
 	SystemTailscale SystemTailscale `json:"systemTailscale"`
 }
 
@@ -243,6 +309,12 @@ func (s State) Clone() State {
 	c.Tailscale.AuthURL = copyString(s.Tailscale.AuthURL)
 	c.Tailscale.SelectedExitNode = copyString(s.Tailscale.SelectedExitNode)
 	c.Tailscale.Path = copyString(s.Tailscale.Path)
+	c.Proxy.Servers = append([]ProxyServer{}, s.Proxy.Servers...)
+	c.Proxy.Selected = copyString(s.Proxy.Selected)
+	c.Proxy.Subscriptions = append([]Subscription{}, s.Proxy.Subscriptions...)
+	for i := range c.Proxy.Subscriptions {
+		c.Proxy.Subscriptions[i].Error = copyString(s.Proxy.Subscriptions[i].Error)
+	}
 	return c
 }
 
@@ -285,6 +357,34 @@ type LanesSetParams struct {
 
 type SetExitNodeParams struct {
 	ID string `json:"id"`
+}
+
+// ProxyAddParams are the params of proxy.add: share links (one per line), the text of a WireGuard .conf
+// or one subscription address; Name is the base name of the .conf the window read from a file (never a
+// path), "" for pasted text.
+type ProxyAddParams struct {
+	Text string `json:"text"`
+	Name string `json:"name,omitempty"`
+}
+
+// ProxyIDParams are the params of proxy.refresh (a subscription), proxy.remove (a server or a
+// subscription) and proxy.select (a server).
+type ProxyIDParams struct {
+	ID string `json:"id"`
+}
+
+// ProxyRejection is one rejected line: its 1-based number (0: the whole text) and its code; never the line.
+type ProxyRejection struct {
+	Line int    `json:"line"`
+	Code string `json:"code"`
+}
+
+// ProxyAddResult is the answer of proxy.add and proxy.refresh: the ids of the servers the text or the
+// subscription gave, the first MaxRejected rejected lines and how many more there were.
+type ProxyAddResult struct {
+	Added        []string         `json:"added"`
+	Rejected     []ProxyRejection `json:"rejected"`
+	RejectedMore int              `json:"rejectedMore"`
 }
 
 // DecodeParams decodes params strictly: unknown fields and trailing data are bad_request.
@@ -340,6 +440,43 @@ func ValidateLanes(p LanesSetParams) *Error {
 	}
 	return nil
 }
+
+// ValidateProxyAdd checks proxy.add (spec 11): a text, and a name that is a plain base name of at most
+// MaxNameLen bytes: no folder, no drive, no control character. The length of the text is the parser's
+// (MaxProxyText: a rejection the window can show).
+func ValidateProxyAdd(p ProxyAddParams) *Error {
+	if p.Text == "" {
+		return Errorf(CodeBadRequest, "text is empty")
+	}
+	n := p.Name
+	switch {
+	case len(n) > MaxNameLen:
+		return Errorf(CodeBadRequest, "name is longer than %d bytes", MaxNameLen)
+	case strings.ContainsAny(n, `/\:`) || n == "." || n == "..":
+		return Errorf(CodeBadRequest, "name must be a base name, not a path")
+	case strings.ContainsFunc(n, unicode.IsControl) || !utf8.ValidString(n):
+		return Errorf(CodeBadRequest, "name has a control character")
+	}
+	return nil
+}
+
+var (
+	serverIDRe       = regexp.MustCompile(`^[0-9a-f]{16}$`)
+	subscriptionIDRe = regexp.MustCompile(`^sub-[0-9a-f]{16}$`)
+)
+
+// ValidateProxyID checks the id of proxy.refresh, proxy.remove and proxy.select (spec 11): the id of a
+// server (16 hex digits) or of a subscription (sub- and 16 hex digits). Whether one has it is the
+// engine's to say (unknown_server).
+func ValidateProxyID(id string) *Error {
+	if !serverIDRe.MatchString(id) && !subscriptionIDRe.MatchString(id) {
+		return Errorf(CodeBadRequest, "id is not the id of a server or a subscription")
+	}
+	return nil
+}
+
+// IsSubscriptionID tells the id of a subscription from that of a server.
+func IsSubscriptionID(id string) bool { return subscriptionIDRe.MatchString(id) }
 
 var tailnetV4 = netip.MustParsePrefix("100.64.0.0/10")
 

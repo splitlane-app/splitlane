@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"splitlane/helper/internal/connector"
 	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/protocol"
 	"splitlane/helper/internal/rules"
@@ -108,6 +109,82 @@ type fakeStore struct {
 	stateSaves      int                  // calls of SaveState
 	journalReads    int                  // calls of LoadJournal
 	dataDir         string               // a real folder for diagnostics.export (exportData); "" in the other tests
+
+	servers          store.Servers // servers.json
+	serversReadFails int           // so many next LoadServers calls fail with a read error (store.ErrIO)
+	serversSaveErr   error         // SaveServers fails with it; servers.json keeps what it had
+	serversSaves     int           // calls of SaveServers that wrote
+}
+
+func (s *fakeStore) LoadServers() (store.Servers, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.serversReadFails > 0 {
+		s.serversReadFails--
+		return store.EmptyServers(), readErr("servers.json")
+	}
+	return cloneServers(s.servers), nil
+}
+
+// SaveServers keeps the limits of store.Dir.SaveServers.
+func (s *fakeStore) SaveServers(v store.Servers) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case s.serversSaveErr != nil:
+		return s.serversSaveErr
+	case len(v.Servers) > store.MaxServers || len(v.Subscriptions) > store.MaxSubscriptions:
+		return fmt.Errorf("%w: %d servers, %d subscriptions", store.ErrTooMany, len(v.Servers), len(v.Subscriptions))
+	}
+	s.serversSaves++
+	s.servers = cloneServers(v)
+	return nil
+}
+
+func (s *fakeStore) savedServers() store.Servers {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneServers(s.servers)
+}
+
+// fakeFetcher is the download of subscriptions: a body or an error per address. It records "fetch"
+// without the address: an address holds the token of its subscription.
+type fakeFetcher struct {
+	mu     sync.Mutex
+	rec    *recorder
+	bodies map[string]string
+	errs   map[string]error
+	hold   chan struct{} // when set, every download waits for it to be closed
+}
+
+func (f *fakeFetcher) Get(ctx context.Context, url string) ([]byte, error) {
+	f.mu.Lock()
+	hold := f.hold
+	f.mu.Unlock()
+	f.rec.add("fetch")
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.errs[url]; err != nil {
+		return nil, err
+	}
+	body, ok := f.bodies[url]
+	if !ok {
+		return nil, &connector.FetchError{Code: connector.CodeFetchHTTPStatus, Detail: "status 404", Status: 404}
+	}
+	return []byte(body), nil
+}
+
+func (f *fakeFetcher) set(fn func(f *fakeFetcher)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
 }
 
 // readErr is how the store reports a file that is there but could not be read (store.ErrIO).
@@ -825,6 +902,7 @@ type harness struct {
 	sys    *fakeSys
 	probe  *fakeProbe
 	host   *fakeHost
+	fetch  *fakeFetcher
 	mu     sync.Mutex
 	states []protocol.State
 	exited bool
@@ -834,7 +912,7 @@ var testRules = rules.Env{WindowsDir: `C:\Windows`, ProgramFiles: `C:\Program Fi
 
 func newHarness(t *testing.T) *harness {
 	h := &harness{t: t, rec: &recorder{}, clock: &fakeClock{now: time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)}}
-	h.store = &fakeStore{rec: h.rec, state: store.Defaults()}
+	h.store = &fakeStore{rec: h.rec, state: store.Defaults(), servers: store.EmptyServers()}
 	h.store.state.LoggedIn = true
 	h.store.state.SelectedExitNode = exitNode
 	h.clash = &fakeClash{rec: h.rec, mode: "vpn", refuse: map[string]bool{}}
@@ -842,8 +920,9 @@ func newHarness(t *testing.T) *harness {
 	h.sys = &fakeSys{rec: h.rec, store: h.store, installed: true, on: true, ip: exitNode, allowLAN: true}
 	h.probe = &fakeProbe{vpn: []ProbeResult{atVPN}, direct: []ProbeResult{atDirect}, self: []ProbeResult{atVPN}}
 	h.host = &fakeHost{rec: h.rec, core: h.core}
+	h.fetch = &fakeFetcher{rec: h.rec, bodies: map[string]string{}, errs: map[string]error{}}
 	h.e = New(Deps{
-		Clock: h.clock, Store: h.store, Core: h.core, Sys: h.sys, Probe: h.probe, Host: h.host,
+		Clock: h.clock, Store: h.store, Core: h.core, Sys: h.sys, Probe: h.probe, Host: h.host, Fetch: h.fetch,
 		Rules: testRules,
 		Settings: Settings{HelperPath: `C:\code\router\helper\bin\splitlane-helper.exe`,
 			Hostname: "PC-splitlane", HelperVersion: "0.1.0", CoreVersion: "1.14.4"},

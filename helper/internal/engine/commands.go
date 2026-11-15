@@ -32,6 +32,11 @@ func (e *Engine) Handle(ctx context.Context, method string, params json.RawMessa
 	case protocol.MethodDiagnosticsExport:
 		// Any phase, outside the queue: the archive only reads the state; the answer comes when it is written.
 		return e.cmdExport(params)
+	case protocol.MethodProxyAdd:
+		// A subscription is downloaded outside the queue (up to 20 s); the queue is taken to apply it.
+		return e.cmdProxyAdd(ctx, params)
+	case protocol.MethodProxyRefresh:
+		return e.cmdProxyRefresh(ctx, params)
 	}
 	e.queue.Lock()
 	keep := false // true when a background job took over the queue and unlocks it when done
@@ -52,6 +57,10 @@ func (e *Engine) Handle(ctx context.Context, method string, params json.RawMessa
 		err = e.cmdLanesSet(params)
 	case protocol.MethodSetExitNode:
 		err = e.cmdSetExitNode(params)
+	case protocol.MethodProxyRemove:
+		err = e.cmdProxyRemove(params)
+	case protocol.MethodProxySelect:
+		err = e.cmdProxySelect(params)
 	case protocol.MethodClearSystemExitNode:
 		keep, err = e.cmdClearSystemExitNode(params)
 	case protocol.MethodLogin:
@@ -163,7 +172,7 @@ func (e *Engine) cmdDisable(params json.RawMessage) *protocol.Error {
 }
 
 // reenablesLocked: the current operation enables after its stopping half while "was on" is set:
-// the reconnect of tailscale.setExitNode (7) or the start-up of 5.7; e.mu must be held. Both read
+// the reconnect of tailscale.setExitNode (7) and proxy.select, or the start-up of 5.7; e.mu must be held. Both read
 // "was on" right before they enable, so clearing it gives that enable up (5.1).
 func (e *Engine) reenablesLocked() bool {
 	return e.op != nil && e.saved.WasOn && (e.op.kind == "reconnect" || e.op.kind == "startup")
@@ -462,9 +471,8 @@ func (e *Engine) applyAllDirect(ctx context.Context, on bool) {
 	e.publish()
 }
 
-// cmdSetExitNode saves the choice; while routing is on it disables and enables again (7). The
-// enable follows only while "was on" is still set: a routing.disable during the disabling (phase
-// stopping without restore_pending) clears it, and the reconnect then ends in off (5.1).
+// cmdSetExitNode saves the choice and makes the connector tailscale (stage 3 part 1, section 4); while
+// routing is on it disables and enables again (7, reconnectLocked).
 func (e *Engine) cmdSetExitNode(params json.RawMessage) *protocol.Error {
 	var p protocol.SetExitNodeParams
 	if err := protocol.DecodeParams(params, &p); err != nil {
@@ -472,22 +480,41 @@ func (e *Engine) cmdSetExitNode(params json.RawMessage) *protocol.Error {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	phase := e.st.Phase
-	// A live phase with an operation still in place is the short window after an enable or restart
-	// published it and before its cleanup: the reconnect has no operation to run in, and a phase
-	// "stopping" without one would wedge the helper. Nothing is saved or published then.
-	if e.exiting || phase == protocol.PhaseStarting || phase == protocol.PhaseStopping || (live(phase) && e.op != nil) {
-		return busy()
+	if err := e.reconnectPhaseLocked(); err != nil {
+		return err
 	}
 	if err := protocol.ValidateExitNodeID(p.ID, e.saved.ExitNodes); err != nil {
 		return err
 	}
-	e.saved.SelectedExitNode = p.ID
+	e.saved.SelectedExitNode, e.saved.Connector = p.ID, protocol.ConnectorTailscale
 	e.save()
-	if !live(phase) {
+	if !live(e.st.Phase) {
 		e.publish()
 		return nil
 	}
+	e.reconnectLocked()
+	return nil
+}
+
+// reconnectPhaseLocked is the phase check of a change of the exit node or the server (7): busy in
+// starting and stopping and after helper.shutdown, and in a live phase with an operation still in place:
+// the short window after an enable or restart published it and before its cleanup, where the reconnect
+// has no operation to run in, and a phase "stopping" without one would wedge the helper. Nothing is saved
+// or published then. e.mu must be held.
+func (e *Engine) reconnectPhaseLocked() *protocol.Error {
+	phase := e.st.Phase
+	if e.exiting || phase == protocol.PhaseStarting || phase == protocol.PhaseStopping || (live(phase) && e.op != nil) {
+		return busy()
+	}
+	return nil
+}
+
+// reconnectLocked disables and enables again with the connector, exit node and server saved now (7):
+// tailscale.setExitNode and proxy.select while routing is live; e.mu must be held, the phase checked by
+// reconnectPhaseLocked. The enable follows only while "was on" is still set: a routing.disable during
+// the disabling (phase stopping without restore_pending) clears it, and the reconnect then ends in off
+// (5.1).
+func (e *Engine) reconnectLocked() {
 	e.setPhase(protocol.PhaseStopping, nil)
 	e.startOp("reconnect", func(ctx context.Context) {
 		if !e.teardown() {
@@ -507,7 +534,6 @@ func (e *Engine) cmdSetExitNode(params json.RawMessage) *protocol.Error {
 		e.mu.Unlock()
 		e.runEnable(ctx, false)
 	})
-	return nil
 }
 
 // cmdClearSystemExitNode: in blocked the system exit node is switched off (5.6, 5.7). The clear is

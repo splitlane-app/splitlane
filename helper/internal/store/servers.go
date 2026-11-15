@@ -17,11 +17,13 @@ const (
 var ErrTooMany = errors.New("store: too many servers or subscriptions")
 
 // StoredServer is a server of servers.json: Text is the normalized source (a link or a .conf), a secret.
+// Protocol is for display only: the core config is always built from Text, parsed again.
 type StoredServer struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Source string `json:"source"`
-	Text   string `json:"text"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Source   string `json:"source"`
+	Text     string `json:"text"`
 }
 
 // StoredSubscription is a subscription of servers.json; its URL is a secret.

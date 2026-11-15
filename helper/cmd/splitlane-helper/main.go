@@ -43,6 +43,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"splitlane/helper/internal/connector"
 	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/diag"
 	"splitlane/helper/internal/engine"
@@ -250,6 +251,7 @@ func run(args []string) int {
 		Sys:   sys,
 		Probe: probe.New(),
 		Host:  winhost.Host{},
+		Fetch: connector.NewFetcher(version),
 		Rules: winhost.RulesEnv(protected),
 		Settings: engine.Settings{HelperPath: helperPath, Hostname: host + "-splitlane",
 			DevPin: o.devPin, HelperVersion: version, CoreVersion: singbox.CoreVersion, CoreLogLevel: o.coreLogLevel},

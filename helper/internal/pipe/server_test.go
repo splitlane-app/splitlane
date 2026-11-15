@@ -37,7 +37,7 @@ func (f *fakeHandler) Handle(ctx context.Context, method string, params json.Raw
 }
 
 func (f *fakeHandler) Hello() protocol.HelloResult {
-	return protocol.HelloResult{Protocol: 1, Helper: "0.1.0", Core: "1.14.4"}
+	return protocol.HelloResult{Protocol: protocol.Version, Helper: "0.1.0", Core: "1.14.4"}
 }
 
 func (f *fakeHandler) SetClients(n int) {
@@ -138,9 +138,9 @@ func TestHelloFirst(t *testing.T) {
 	if code := errCode(c.send(t, `{"id":1,"method":"state.get"}`)); code != protocol.CodeBadRequest {
 		t.Fatalf("before hello: %s", code)
 	}
-	m := c.send(t, `{"id":2,"method":"hello","params":{"protocol":1}}`)
+	m := c.send(t, `{"id":2,"method":"hello","params":{"protocol":2}}`)
 	res, _ := m["result"].(map[string]any)
-	if m["id"].(float64) != 2 || res["core"] != "1.14.4" || res["protocol"].(float64) != 1 {
+	if m["id"].(float64) != 2 || res["core"] != "1.14.4" || res["protocol"].(float64) != protocol.Version {
 		t.Fatalf("hello: %v", m)
 	}
 	if code := errCode(c.send(t, `{"id":3,"method":"nope"}`)); code != protocol.CodeUnknownMethod {
@@ -158,9 +158,9 @@ func TestHelloFirst(t *testing.T) {
 func TestProtocolMismatch(t *testing.T) {
 	_, h, name := serve(t)
 	c := dial(t, name)
-	m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`) // the window of stage 2
 	e, _ := m["error"].(map[string]any)
-	if errCode(m) != protocol.CodeProtocolMismatch || e["protocol"].(float64) != 1 {
+	if errCode(m) != protocol.CodeProtocolMismatch || e["protocol"].(float64) != protocol.Version {
 		t.Fatalf("mismatch: %v", m)
 	}
 	if code := errCode(c.send(t, `{"id":2,"method":"state.get"}`)); code != protocol.CodeProtocolMismatch {
@@ -180,8 +180,8 @@ func TestProtocolMismatch(t *testing.T) {
 func TestBroadcastToEveryClient(t *testing.T) {
 	s, h, name := serve(t)
 	a, b, silent := dial(t, name), dial(t, name), dial(t, name)
-	a.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`)
-	b.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`)
+	a.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	b.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
 	_ = silent
 	deadline := time.Now().Add(5 * time.Second)
 	for h.count() != 2 && time.Now().Before(deadline) {
@@ -209,8 +209,8 @@ func TestBroadcastToEveryClient(t *testing.T) {
 func TestStalledClientIsDropped(t *testing.T) {
 	s, h, name := serve(t)
 	stalled, live := dial(t, name), dial(t, name)
-	stalled.conn.Write([]byte(`{"id":1,"method":"hello","params":{"protocol":1}}` + "\n")) // never reads again
-	live.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`)
+	stalled.conn.Write([]byte(`{"id":1,"method":"hello","params":{"protocol":2}}` + "\n")) // never reads again
+	live.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
 	big := protocol.State{Phase: protocol.PhaseOn}
 	for i := 0; i < 40; i++ {
 		big.Apps = append(big.Apps, protocol.AppRule{ID: fmt.Sprint(i), Name: strings.Repeat("x", 250), Exe: strings.Repeat("y", 250)})
@@ -285,7 +285,7 @@ func TestShutdownReplyIsNotLost(t *testing.T) {
 		h.srv = s
 		go s.Serve()
 		c := dial(t, name)
-		c.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`)
+		c.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
 		c.conn.Write([]byte(`{"id":2,"method":"helper.shutdown"}` + "\n"))
 		c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		text, err := c.r.ReadString('\n')
@@ -360,7 +360,7 @@ func TestAcceptErrorDoesNotStopServing(t *testing.T) {
 		t.Fatalf("Accept was tried again after %s, want a pause of %s", waited, acceptPause)
 	}
 	c := &testClient{conn: peer, r: bufio.NewReader(peer)}
-	if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`); m["result"] == nil {
+	if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`); m["result"] == nil {
 		t.Fatalf("the client after the error is not served: %v", m)
 	}
 	select {

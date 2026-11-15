@@ -110,9 +110,108 @@ func TestCloneIsDeep(t *testing.T) {
 func TestStateJSONHasEmptyListsAndNulls(t *testing.T) {
 	s := State{Phase: PhaseOff, DefaultLane: LaneVPN, Apps: []AppRule{}, Tailscale: Tailscale{Backend: "stopped", ExitNodes: []ExitNode{}}}
 	b, _ := json.Marshal(s)
-	for _, want := range []string{`"reason":null`, `"apps":[]`, `"addresses":{"vpn":null,"direct":null}`, `"exitNodes":[]`, `"selectedExitNode":null`} {
+	for _, want := range []string{`"reason":null`, `"apps":[]`, `"addresses":{"vpn":null,"direct":null}`, `"exitNodes":[]`, `"selectedExitNode":null`, `"connector":""`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("state JSON lacks %s: %s", want, b)
+		}
+	}
+}
+
+// Protocol version 2 (spec of stage 3 part 1, section 4): the proxy methods, the connector and the
+// proxy block of the state.
+func TestVersionTwoHasTheProxyMethods(t *testing.T) {
+	if Version != 2 {
+		t.Fatalf("version %d", Version)
+	}
+	for _, m := range []string{MethodProxyAdd, MethodProxyRefresh, MethodProxyRemove, MethodProxySelect} {
+		found := false
+		for _, k := range Methods {
+			found = found || k == m
+		}
+		if !found {
+			t.Errorf("%s is not in Methods", m)
+		}
+	}
+	if MethodProxyAdd != "proxy.add" || MethodProxyRefresh != "proxy.refresh" || MethodProxyRemove != "proxy.remove" ||
+		MethodProxySelect != "proxy.select" || ReasonNoServer != "no_server" || ConnectorTailscale != "tailscale" || ConnectorProxy != "proxy" {
+		t.Fatal("names of version 2")
+	}
+}
+
+func TestProxyStateJSON(t *testing.T) {
+	s := State{Phase: PhaseOff, DefaultLane: LaneVPN, Apps: []AppRule{}, Connector: ConnectorTailscale,
+		Tailscale: Tailscale{Backend: "stopped", ExitNodes: []ExitNode{}},
+		Proxy:     Proxy{Servers: []ProxyServer{}, Subscriptions: []Subscription{}}}
+	b, _ := json.Marshal(s)
+	for _, want := range []string{`"connector":"tailscale"`, `"proxy":{"servers":[],"selected":null,"subscriptions":[]}`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("state JSON lacks %s: %s", want, b)
+		}
+	}
+	sel, errText := "0123456789abcdef", "fetch_timeout"
+	s.Proxy = Proxy{
+		Servers:       []ProxyServer{{ID: sel, Name: "a", Protocol: "vless", Source: "sub-0123456789abcdef"}},
+		Selected:      &sel,
+		Subscriptions: []Subscription{{ID: "sub-0123456789abcdef", Name: "example.com", UpdatedAt: "2026-11-16T12:00:00Z", Count: 1, Error: &errText}},
+	}
+	b, _ = json.Marshal(s.Proxy)
+	want := `{"servers":[{"id":"0123456789abcdef","name":"a","protocol":"vless","source":"sub-0123456789abcdef"}],"selected":"0123456789abcdef",` +
+		`"subscriptions":[{"id":"sub-0123456789abcdef","name":"example.com","updatedAt":"2026-11-16T12:00:00Z","count":1,"error":"fetch_timeout"}]}`
+	if string(b) != want {
+		t.Fatalf("proxy JSON\n%s\nwant\n%s", b, want)
+	}
+	c := s.Clone()
+	c.Proxy.Servers[0].Name = "b"
+	*c.Proxy.Selected = "x"
+	c.Proxy.Subscriptions[0].Count = 7
+	*c.Proxy.Subscriptions[0].Error = "y"
+	if s.Proxy.Servers[0].Name != "a" || *s.Proxy.Selected != sel || s.Proxy.Subscriptions[0].Count != 1 || *s.Proxy.Subscriptions[0].Error != errText {
+		t.Fatal("clone shares the proxy block with the original")
+	}
+	r, _ := json.Marshal(ProxyAddResult{Added: []string{}, Rejected: []ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3})
+	if string(r) != `{"added":[],"rejected":[{"line":2,"code":"bad_link"}],"rejectedMore":3}` {
+		t.Fatalf("result %s", r)
+	}
+}
+
+// The params of the proxy methods are strict (spec 11): unknown fields are bad_request, the name of a
+// .conf is a base name (never a path), the id a server's or a subscription's.
+func TestProxyParams(t *testing.T) {
+	var p ProxyAddParams
+	if err := DecodeParams(json.RawMessage(`{"text":"vless://x","name":"home.conf"}`), &p); err != nil || p.Text != "vless://x" || p.Name != "home.conf" {
+		t.Fatalf("%v %+v", err, p)
+	}
+	for _, raw := range []string{`{"text":"x","path":"C:\\a.conf"}`, `{"text":1}`, `{"id":"x"}`} {
+		var q ProxyAddParams
+		if err := DecodeParams(json.RawMessage(raw), &q); err == nil || err.Code != CodeBadRequest {
+			t.Errorf("%s: want bad_request, got %v", raw, err)
+		}
+	}
+	var id ProxyIDParams
+	if err := DecodeParams(json.RawMessage(`{"id":"0123456789abcdef","x":1}`), &id); err == nil || err.Code != CodeBadRequest {
+		t.Fatalf("unknown field: %v", err)
+	}
+	for _, name := range []string{"", "home", "home.conf", "дом 2.conf", strings.Repeat("a", MaxNameLen)} {
+		if err := ValidateProxyAdd(ProxyAddParams{Text: "x", Name: name}); err != nil {
+			t.Errorf("name %q: %v", name, err)
+		}
+	}
+	for _, name := range []string{`C:\wg\home.conf`, "wg/home.conf", "..", "C:home.conf", "a\x00b", "a\nb", strings.Repeat("a", MaxNameLen+1)} {
+		if err := ValidateProxyAdd(ProxyAddParams{Text: "x", Name: name}); err == nil || err.Code != CodeBadRequest {
+			t.Errorf("name %q: want bad_request, got %v", name, err)
+		}
+	}
+	if err := ValidateProxyAdd(ProxyAddParams{}); err == nil || err.Code != CodeBadRequest {
+		t.Errorf("empty text: want bad_request, got %v", err)
+	}
+	for _, good := range []string{"0123456789abcdef", "sub-0123456789abcdef"} {
+		if err := ValidateProxyID(good); err != nil {
+			t.Errorf("%s: %v", good, err)
+		}
+	}
+	for _, bad := range []string{"", "0123456789ABCDEF", "0123456789abcde", "sub-", "sub-0123456789abcdef0", "../servers.json", "100.64.0.1"} {
+		if err := ValidateProxyID(bad); err == nil || err.Code != CodeBadRequest {
+			t.Errorf("%q: want bad_request, got %v", bad, err)
 		}
 	}
 }

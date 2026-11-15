@@ -189,8 +189,10 @@ func (f *fakeHelper) Handle(ctx context.Context, method string, params json.RawM
 	return nil, protocol.Errorf(protocol.CodeUnknownMethod, "unknown")
 }
 
-func (f *fakeHelper) Hello() protocol.HelloResult { return protocol.HelloResult{Protocol: 1} }
-func (f *fakeHelper) SetClients(int)              {}
+func (f *fakeHelper) Hello() protocol.HelloResult {
+	return protocol.HelloResult{Protocol: protocol.Version}
+}
+func (f *fakeHelper) SetClients(int) {}
 
 func testPipeName() string { return fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63()) }
 
@@ -838,7 +840,7 @@ func rawFake(t *testing.T, serve func(r *bufio.Reader, c net.Conn)) string {
 func TestSilentOrDyingHelper(t *testing.T) {
 	hello := func(r *bufio.Reader, c net.Conn) {
 		r.ReadString('\n')
-		io.WriteString(c, `{"id":1,"result":{"protocol":1}}`+"\n")
+		io.WriteString(c, `{"id":1,"result":{"protocol":2}}`+"\n")
 	}
 	cases := []struct {
 		what    string
