@@ -42,6 +42,19 @@ type Server struct {
 	answering sync.WaitGroup // requests between their arrival and their queued answer
 	closing   bool
 	done      chan struct{} // closed by the first Close: RunActivity returns
+
+	// ctx ends with Close; the context of each request ends with it and with its client's connection,
+	// so a download under way is given up when nobody is left to answer (stage 3 part 1).
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// concurrent are the methods answered in a goroutine of their own (stage 3 part 1): proxy.add and
+// proxy.refresh may download a subscription for up to 20 s, diagnostics.export writes an archive. The
+// requests after one on the same connection, routing.disable among them, are answered meanwhile; the
+// answers are matched by id, so a client that depends on the effect of one waits for its answer.
+var concurrent = map[string]bool{
+	protocol.MethodProxyAdd: true, protocol.MethodProxyRefresh: true, protocol.MethodDiagnosticsExport: true,
 }
 
 // closeWait bounds each wait of Close: answers in flight, then the queues written out.
@@ -76,7 +89,9 @@ func newServer(l net.Listener, h Handler, log func(string, ...any), check Check)
 	if log == nil {
 		log = func(string, ...any) {}
 	}
-	return &Server{h: h, l: l, log: log, check: check, clients: map[*client]bool{}, done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Server{h: h, l: l, log: log, check: check, clients: map[*client]bool{}, done: make(chan struct{}),
+		ctx: ctx, cancel: cancel}
 }
 
 // acceptPause is the wait before Accept is tried again after an error.
@@ -128,9 +143,10 @@ func (s *Server) admit(c *client) {
 	s.read(c)
 }
 
-// Close stops accepting and the activity events, lets the answers in flight reach their queues (the
-// answer to helper.shutdown among them: the helper exits right after Close), writes every queue out
-// and closes the clients. Each wait is bounded; a client that does not read is closed anyway.
+// Close stops accepting and the activity events, gives up the downloads under way, lets the answers in
+// flight reach their queues (the answer to helper.shutdown among them: the helper exits right after
+// Close), writes every queue out and closes the clients. Each wait is bounded; a client that does not
+// read is closed anyway.
 func (s *Server) Close() {
 	s.l.Close()
 	s.mu.Lock()
@@ -139,6 +155,7 @@ func (s *Server) Close() {
 	}
 	s.closing = true
 	s.mu.Unlock()
+	s.cancel()
 	waitFor(&s.answering, closeWait)
 	s.mu.Lock()
 	var conns []net.Conn
@@ -252,8 +269,12 @@ func (s *Server) reply(c *client, line []byte) {
 	}
 }
 
+// read answers the requests of a client one after another, but the concurrent methods, which get a
+// goroutine each. The context of the requests ends when the client's connection does, or with Close.
 func (s *Server) read(c *client) {
+	ctx, cancel := context.WithCancel(s.ctx)
 	defer s.wg.Done()
+	defer cancel()
 	defer func() {
 		s.mu.Lock()
 		s.end(c, !s.closing) // while closing, the writer writes the queue out first
@@ -268,19 +289,26 @@ func (s *Server) read(c *client) {
 		}
 		s.answering.Add(1)
 		s.mu.Unlock()
-		var req protocol.Request
-		if err := json.Unmarshal(sc.Bytes(), &req); err != nil || req.Method == "" {
+		var req protocol.Request // Unmarshal copies id and params: the scanner's buffer is reused
+		switch err := json.Unmarshal(sc.Bytes(), &req); {
+		case err != nil || req.Method == "":
 			s.reply(c, protocol.EncodeError(req.ID, protocol.Errorf(protocol.CodeBadRequest, "not a request")))
-		} else {
-			s.reply(c, s.answer(c, req))
+		case concurrent[req.Method]:
+			go func() {
+				defer s.answering.Done()
+				s.reply(c, s.answer(ctx, c, req))
+			}()
+			continue
+		default:
+			s.reply(c, s.answer(ctx, c, req))
 		}
 		s.answering.Done()
 	}
 }
 
 // answer applies the hello rules of 5.1, answers activity.subscribe itself (activity.go) and passes
-// everything else to the handler.
-func (s *Server) answer(c *client, req protocol.Request) []byte {
+// everything else to the handler, with ctx.
+func (s *Server) answer(ctx context.Context, c *client, req protocol.Request) []byte {
 	s.mu.Lock()
 	hello, mismatch := c.hello, c.mismatch
 	s.mu.Unlock()
@@ -310,7 +338,7 @@ func (s *Server) answer(c *client, req protocol.Request) []byte {
 	case req.Method == protocol.MethodActivitySubscribe:
 		return s.subscribe(c, req)
 	}
-	res, err := s.h.Handle(context.Background(), req.Method, req.Params)
+	res, err := s.h.Handle(ctx, req.Method, req.Params)
 	if err != nil {
 		return protocol.EncodeError(req.ID, err)
 	}

@@ -380,9 +380,11 @@ type ProxyRejection struct {
 }
 
 // ProxyAddResult is the answer of proxy.add and proxy.refresh: the ids of the servers the text or the
-// subscription gave, the first MaxRejected rejected lines and how many more there were.
+// subscription added (new to the list), how many it gave that were there already (not added again), the
+// first MaxRejected rejected lines and how many more there were.
 type ProxyAddResult struct {
 	Added        []string         `json:"added"`
+	Existing     int              `json:"existing"`
 	Rejected     []ProxyRejection `json:"rejected"`
 	RejectedMore int              `json:"rejectedMore"`
 }

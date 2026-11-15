@@ -197,18 +197,42 @@ func (e *Engine) proxyPhaseLocked(touchesSelected bool) *protocol.Error {
 }
 
 // selectFirstLocked: the first server added becomes the selected one when none is (stage 3 part 1,
-// section 4). In off and error, with no operation in place, the connector becomes proxy with it, so that
-// routing.enable uses it; while routing is live, starting or stopping the connector stays: only
-// proxy.select reconnects. e.mu must be held.
-func (e *Engine) selectFirstLocked(added []string) {
+// section 4). The connector becomes proxy with it only when Tailscale is not ready (not logged in, or no
+// exit node selected) and routing is off or error with no operation in place, so that routing.enable uses
+// the server; otherwise the server is selected for later and the connector stays: the user switches by
+// choosing it (proxy.select). True when the connector became proxy: the setup mode is then stopped
+// (stopSetupIfProxy). e.mu must be held.
+func (e *Engine) selectFirstLocked(added []string) bool {
 	if len(added) == 0 || e.serverLocked(e.saved.SelectedServer) != nil {
-		return
+		return false
 	}
 	e.saved.SelectedServer = added[0]
-	if (e.st.Phase == protocol.PhaseOff || e.st.Phase == protocol.PhaseError) && e.op == nil {
+	tailscaleReady := e.saved.LoggedIn && e.saved.SelectedExitNode != ""
+	off := (e.st.Phase == protocol.PhaseOff || e.st.Phase == protocol.PhaseError) && e.op == nil
+	switched := !tailscaleReady && off && connectorOf(e.saved) != protocol.ConnectorProxy
+	if switched {
 		e.saved.Connector = protocol.ConnectorProxy
+		e.d.Log("the first server added: the connector is proxy (Tailscale is not ready)")
 	}
 	e.save()
+	return switched
+}
+
+// stopSetupIfProxy stops the setup mode once the connector has become proxy in off or error (proxy.select,
+// the first server added): the embedded node need not stay online in the tailnet for a connector that does
+// not use it (stage 3 part 1, section 5); tailscale.login starts it again on demand. It waits for the setup
+// core to end with the queue held and e.mu free, so that a tailscale.login after the command is not undone.
+func (e *Engine) stopSetupIfProxy(switched bool) {
+	if !switched {
+		return
+	}
+	e.mu.Lock()
+	running := e.setup != nil
+	e.mu.Unlock()
+	if running {
+		e.d.Log("the connector is proxy: stopping the setup mode")
+		e.stopSetup()
+	}
 }
 
 // dropGoneSelectionLocked clears the selection when no server has its id any more (a refresh or a removal
@@ -225,10 +249,10 @@ func storedServer(s connector.Server, source string) store.StoredServer {
 	return store.StoredServer{ID: s.ID, Name: s.Name, Protocol: s.Protocol, Source: source, Text: s.Text}
 }
 
-// addResult is the answer of proxy.add and proxy.refresh: at most MaxRejected rejected lines, the others
-// counted.
-func addResult(added []string, rejected []connector.Rejection) protocol.ProxyAddResult {
-	r := protocol.ProxyAddResult{Added: append([]string{}, added...), Rejected: []protocol.ProxyRejection{}}
+// addResult is the answer of proxy.add and proxy.refresh: the servers new to the list, how many were there
+// already, at most MaxRejected rejected lines and the number of the others.
+func addResult(added []string, existing int, rejected []connector.Rejection) protocol.ProxyAddResult {
+	r := protocol.ProxyAddResult{Added: append([]string{}, added...), Existing: existing, Rejected: []protocol.ProxyRejection{}}
 	for i, x := range rejected {
 		if i == protocol.MaxRejected {
 			r.RejectedMore = len(rejected) - i
@@ -254,10 +278,11 @@ func codes(rejected []connector.Rejection) string {
 }
 
 // cmdProxyAdd is proxy.add (stage 3 part 1, section 4): links, the text of a .conf, or a subscription
-// address (subscribe). The servers that are not there yet go into servers.json; one that is there (the
-// same id) stays as it is. An add that would take servers.json over its limit adds nothing: the rejection
-// too_many of the whole text. The first server added becomes the selected one when none is
-// (selectFirstLocked). Every phase but after helper.shutdown: nothing of it changes the running core.
+// address (subscribe). The servers that are not there yet go into servers.json and are the answer's
+// added; one that is there (the same id) stays as it is and counts as existing. An add that would take
+// servers.json over its limit adds nothing: the rejection too_many of the whole text. The first server
+// added becomes the selected one when none is (selectFirstLocked). Every phase but after helper.shutdown:
+// nothing of it changes the running core.
 func (e *Engine) cmdProxyAdd(ctx context.Context, params json.RawMessage) (any, *protocol.Error) {
 	var p protocol.ProxyAddParams
 	if err := protocol.DecodeParams(params, &p); err != nil {
@@ -277,12 +302,23 @@ func (e *Engine) cmdProxyAdd(ctx context.Context, params json.RawMessage) (any, 
 	e.queue.Lock()
 	defer e.queue.Unlock()
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if err := e.proxyPhaseLocked(false); err != nil {
+	res, switched, err := e.addServersLocked(servers, rejected, source)
+	e.mu.Unlock()
+	e.stopSetupIfProxy(switched)
+	if err != nil {
 		return nil, err
 	}
+	return res, nil
+}
+
+// addServersLocked is the part of proxy.add under e.mu, for links and a .conf; switched: the connector
+// became proxy (selectFirstLocked).
+func (e *Engine) addServersLocked(servers []connector.Server, rejected []connector.Rejection, source string) (protocol.ProxyAddResult, bool, *protocol.Error) {
+	if err := e.proxyPhaseLocked(false); err != nil {
+		return protocol.ProxyAddResult{}, false, err
+	}
 	if err := e.serversReadyLocked(); err != nil {
-		return nil, err
+		return protocol.ProxyAddResult{}, false, err
 	}
 	next := cloneServers(e.servers)
 	have := map[string]bool{}
@@ -290,27 +326,29 @@ func (e *Engine) cmdProxyAdd(ctx context.Context, params json.RawMessage) (any, 
 		have[s.ID] = true
 	}
 	var added []string
+	existing := 0
 	for _, s := range servers {
-		added = append(added, s.ID)
-		if !have[s.ID] {
-			have[s.ID] = true
-			next.Servers = append(next.Servers, storedServer(s, source))
+		if have[s.ID] {
+			existing++
+			continue
 		}
+		have[s.ID] = true
+		added = append(added, s.ID)
+		next.Servers = append(next.Servers, storedServer(s, source))
 	}
 	if len(next.Servers) > store.MaxServers {
 		e.d.Log("proxy.add: %d servers would be more than %d: nothing added", len(next.Servers), store.MaxServers)
-		return addResult(nil, append([]connector.Rejection{{Code: protocol.CodeTooMany}}, rejected...)), nil
+		return addResult(nil, 0, append([]connector.Rejection{{Code: protocol.CodeTooMany}}, rejected...)), false, nil
 	}
-	fresh := len(next.Servers) - len(e.servers.Servers)
-	if fresh > 0 {
+	if len(added) > 0 {
 		if err := e.saveServersLocked(next); err != nil {
-			return nil, err
+			return protocol.ProxyAddResult{}, false, err
 		}
 	}
-	e.selectFirstLocked(added)
+	switched := e.selectFirstLocked(added)
 	e.publish()
-	e.d.Log("proxy.add: %d servers in the text, %d new; %d lines rejected (%s)", len(servers), fresh, len(rejected), codes(rejected))
-	return addResult(added, rejected), nil
+	e.d.Log("proxy.add: %d servers added, %d there already; %d lines rejected (%s)", len(added), existing, len(rejected), codes(rejected))
+	return addResult(added, existing, rejected), switched, nil
 }
 
 // cmdProxyRefresh is proxy.refresh (stage 3 part 1, section 4): the subscription is downloaded again
@@ -381,22 +419,40 @@ func hostOf(address string) string {
 
 // subscribe is proxy.add of a subscription address (add: a new subscription, or the same address again,
 // which refreshes it) and proxy.refresh (stage 3 part 1, sections 3, 4). The checks come first, so that a
-// refusal costs no download; the download (connector.Fetcher: https only, no local address, 1 MB, 20 s)
-// runs outside the queue of the state-changing commands, and the queue is taken to apply what it gave,
-// after the checks once more. The servers of the subscription are replaced by those it gives now (one
-// that another source holds stays with it); the selected server stays selected when a server with its
-// id is still there, else the selection goes. A download that fails, a subscription without a server and
-// one that would take servers.json over its limit change no server: an existing subscription keeps the
-// code in its error, which the state shows; proxy.add answers with the rejection of the whole text,
-// proxy.refresh with the code as its error. The address is never in an answer, the state or the log.
+// refusal costs no download; one download runs at a time (a second is busy). The download
+// (connector.Fetcher: https only, no local address, 1 MB, 20 s) runs outside the queue of the
+// state-changing commands, and the pipe answers other requests meanwhile; it ends with ctx (the client
+// went, the helper closes the pipe), and then nothing changes. The queue is taken to apply what it gave,
+// after the checks once more: a subscription that was there before the download and is gone after it was
+// removed meanwhile, and is not made again (unknown_server). The servers of the subscription are replaced
+// by those it gives now (one that another source holds stays with it); added are those new to the list,
+// existing those that were there; the selected server stays selected when a server with its id is still
+// there, else the selection goes. A download that fails, a subscription without a server and one that
+// would take servers.json over its limit change no server: an existing subscription keeps the code in its
+// error, which the state shows; proxy.add answers with the rejection of the whole text, proxy.refresh
+// with the code as its error. The address is never in an answer, the state or the log.
 func (e *Engine) subscribe(ctx context.Context, id, address string, add bool) (any, *protocol.Error) {
 	e.mu.Lock()
 	err := e.subscribePhaseLocked(id, add)
+	existed := e.subscriptionLocked(id) != nil
+	if err == nil && e.downloading {
+		err = protocol.Errorf(protocol.CodeBusy, "another subscription is being downloaded")
+	}
+	if err == nil {
+		e.downloading = true
+	}
 	e.mu.Unlock()
 	if err != nil {
 		return refusedSubscription(add, err)
 	}
 	body, ferr := e.d.Fetch.Get(ctx, address)
+	e.mu.Lock()
+	e.downloading = false
+	e.mu.Unlock()
+	if ctx.Err() != nil {
+		e.d.Log("subscription %s: the download was given up, nobody waits for it", id)
+		return nil, protocol.Errorf(protocol.CodeInternal, "the download was given up")
+	}
 	var servers []connector.Server
 	var rejected []connector.Rejection
 	if ferr == nil {
@@ -405,9 +461,23 @@ func (e *Engine) subscribe(ctx context.Context, id, address string, add bool) (a
 	e.queue.Lock()
 	defer e.queue.Unlock()
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	if err := e.subscribePhaseLocked(id, add); err != nil { // the phase or the servers changed during the download
-		return refusedSubscription(add, err)
+	res, switched, err := e.applySubscriptionLocked(id, address, add, existed, servers, rejected, ferr)
+	e.mu.Unlock()
+	e.stopSetupIfProxy(switched)
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// applySubscriptionLocked is the part of subscribe after the download, under the queue and e.mu; switched:
+// the connector became proxy (selectFirstLocked).
+func (e *Engine) applySubscriptionLocked(id, address string, add, existed bool, servers []connector.Server,
+	rejected []connector.Rejection, ferr error) (any, bool, *protocol.Error) {
+	// The phase or the servers changed during the download; a subscription there before is not made again.
+	if err := e.subscribePhaseLocked(id, add && !existed); err != nil {
+		res, rerr := refusedSubscription(add, err)
+		return res, false, rerr
 	}
 	code := ""
 	switch {
@@ -423,17 +493,22 @@ func (e *Engine) subscribe(ctx context.Context, id, address string, add bool) (a
 	}
 	next := cloneServers(e.servers)
 	var added []string
-	count := 0
+	count, existing := 0, 0
 	if code == "" {
 		kept := make([]store.StoredServer, 0, len(next.Servers)+len(servers))
-		have := map[string]bool{}
+		before, have := map[string]bool{}, map[string]bool{}
 		for _, s := range next.Servers {
+			before[s.ID] = true
 			if s.Source != id {
 				kept, have[s.ID] = append(kept, s), true
 			}
 		}
 		for _, s := range servers {
-			added = append(added, s.ID)
+			if before[s.ID] {
+				existing++
+			} else {
+				added = append(added, s.ID)
+			}
 			if !have[s.ID] {
 				have[s.ID] = true
 				kept = append(kept, storedServer(s, id))
@@ -449,7 +524,7 @@ func (e *Engine) subscribe(ctx context.Context, id, address string, add bool) (a
 	if code != "" {
 		e.subscriptionFailedLocked(id, code)
 		if !add {
-			return nil, protocol.Errorf(code, "subscription not refreshed: %s", code)
+			return nil, false, protocol.Errorf(code, "subscription not refreshed: %s", code)
 		}
 		switch {
 		case code == protocol.CodeTooMany:
@@ -457,7 +532,7 @@ func (e *Engine) subscribe(ctx context.Context, id, address string, add bool) (a
 		case ferr != nil || len(rejected) == 0:
 			rejected = []connector.Rejection{{Code: code}}
 		}
-		return addResult(nil, rejected), nil
+		return addResult(nil, 0, rejected), false, nil
 	}
 	sub := store.StoredSubscription{ID: id, Name: hostOf(address), URL: address,
 		UpdatedAt: e.d.Clock.Now().UTC().Format(time.RFC3339), Count: count}
@@ -467,15 +542,17 @@ func (e *Engine) subscribe(ctx context.Context, id, address string, add bool) (a
 		next.Subscriptions = append(next.Subscriptions, sub)
 	}
 	if err := e.saveServersLocked(next); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	e.dropGoneSelectionLocked()
+	switched := false
 	if add {
-		e.selectFirstLocked(added)
+		switched = e.selectFirstLocked(added)
 	}
 	e.publish()
-	e.d.Log("subscription %s: %d servers, %d of them its own; %d lines rejected (%s)", id, len(servers), count, len(rejected), codes(rejected))
-	return addResult(added, rejected), nil
+	e.d.Log("subscription %s: %d servers, %d of them its own, %d new to the list; %d lines rejected (%s)",
+		id, len(servers), count, len(added), len(rejected), codes(rejected))
+	return addResult(added, existing, rejected), switched, nil
 }
 
 // subscriptionFailedLocked keeps the code of a failed update in the subscription, when it is there, for
@@ -501,7 +578,7 @@ func (e *Engine) subscriptionFailedLocked(id, code string) {
 // limit of subscriptions is the rejection too_many of the whole text, as the limit of servers is.
 func refusedSubscription(add bool, err *protocol.Error) (any, *protocol.Error) {
 	if add && err.Code == protocol.CodeTooMany {
-		return addResult(nil, []connector.Rejection{{Code: protocol.CodeTooMany}}), nil
+		return addResult(nil, 0, []connector.Rejection{{Code: protocol.CodeTooMany}}), nil
 	}
 	return nil, err
 }
@@ -562,7 +639,8 @@ func (e *Engine) cmdProxyRemove(params json.RawMessage) *protocol.Error {
 
 // cmdProxySelect is proxy.select (stage 3 part 1, section 4): the server becomes the selected one and the
 // connector proxy; while routing is live it disables and enables again, as tailscale.setExitNode does
-// (reconnectLocked). The same server with the connector already proxy changes nothing.
+// (reconnectLocked); in off and error a change to proxy stops the setup mode (stopSetupIfProxy). The same
+// server with the connector already proxy changes nothing.
 func (e *Engine) cmdProxySelect(params json.RawMessage) *protocol.Error {
 	var p protocol.ProxyIDParams
 	if err := protocol.DecodeParams(params, &p); err != nil {
@@ -572,25 +650,33 @@ func (e *Engine) cmdProxySelect(params json.RawMessage) *protocol.Error {
 		return err
 	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	switched, err := e.selectServerLocked(p.ID)
+	e.mu.Unlock()
+	e.stopSetupIfProxy(switched)
+	return err
+}
+
+// selectServerLocked is proxy.select under e.mu; switched: the connector became proxy in off or error.
+func (e *Engine) selectServerLocked(id string) (bool, *protocol.Error) {
 	if err := e.reconnectPhaseLocked(); err != nil {
-		return err
+		return false, err
 	}
 	if err := e.serversReadyLocked(); err != nil {
-		return err
+		return false, err
 	}
-	if e.serverLocked(p.ID) == nil {
-		return protocol.Errorf(protocol.CodeUnknownServer, "no server has this id")
+	if e.serverLocked(id) == nil {
+		return false, protocol.Errorf(protocol.CodeUnknownServer, "no server has this id")
 	}
-	if e.saved.SelectedServer == p.ID && connectorOf(e.saved) == protocol.ConnectorProxy {
-		return nil
+	wasProxy := connectorOf(e.saved) == protocol.ConnectorProxy
+	if e.saved.SelectedServer == id && wasProxy {
+		return false, nil
 	}
-	e.saved.SelectedServer, e.saved.Connector = p.ID, protocol.ConnectorProxy
+	e.saved.SelectedServer, e.saved.Connector = id, protocol.ConnectorProxy
 	e.save()
 	if !live(e.st.Phase) {
 		e.publish()
-		return nil
+		return !wasProxy, nil
 	}
 	e.reconnectLocked()
-	return nil
+	return false, nil
 }

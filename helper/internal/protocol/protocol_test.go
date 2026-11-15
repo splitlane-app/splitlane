@@ -168,8 +168,8 @@ func TestProxyStateJSON(t *testing.T) {
 	if s.Proxy.Servers[0].Name != "a" || *s.Proxy.Selected != sel || s.Proxy.Subscriptions[0].Count != 1 || *s.Proxy.Subscriptions[0].Error != errText {
 		t.Fatal("clone shares the proxy block with the original")
 	}
-	r, _ := json.Marshal(ProxyAddResult{Added: []string{}, Rejected: []ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3})
-	if string(r) != `{"added":[],"rejected":[{"line":2,"code":"bad_link"}],"rejectedMore":3}` {
+	r, _ := json.Marshal(ProxyAddResult{Added: []string{}, Existing: 1, Rejected: []ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3})
+	if string(r) != `{"added":[],"existing":1,"rejected":[{"line":2,"code":"bad_link"}],"rejectedMore":3}` {
 		t.Fatalf("result %s", r)
 	}
 }

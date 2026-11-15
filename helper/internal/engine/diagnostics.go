@@ -32,6 +32,8 @@ func (e *Engine) cmdExport(params json.RawMessage) (any, *protocol.Error) {
 	if err := noParams(params); err != nil {
 		return nil, err
 	}
+	e.exporting.Lock() // two at once would write one name and prune each other's archives
+	defer e.exporting.Unlock()
 	now := e.d.Clock.Now().Local()
 	e.mu.Lock()
 	state, err := json.MarshalIndent(e.saved, "", "  ")

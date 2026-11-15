@@ -83,8 +83,9 @@ type Engine struct {
 	// The proxy connector (stage 3 part 1, proxy.go): servers.json as it was read or last saved. While
 	// it could not be read (store.ErrIO) the set is empty, nothing is written over the file, and each
 	// proxy command reads it again first.
-	servers    store.Servers
-	serversErr error
+	servers     store.Servers
+	serversErr  error
+	downloading bool // a subscription is being downloaded: one at a time, a second one is busy
 
 	// The connector (spec 7, connector.go).
 	setup       *setupRun  // the setup mode now; nil when it does not run
@@ -93,6 +94,8 @@ type Engine struct {
 	connector   sync.Mutex // logouts one at a time; stopSetup waits for the one under way
 
 	act liveActivity // the live activity (spec 8.4, activity.go)
+
+	exporting sync.Mutex // diagnostics.export one at a time: the pipe answers it beside other requests
 }
 
 // coreRun is one running core with its ports, the rule files it reads now and its API service.

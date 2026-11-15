@@ -70,7 +70,7 @@ func Build(zipPath string, in Input) error {
 		}
 		data = redact(data)
 		if coreLog(name) {
-			data = []byte(connector.Mask(string(data)))
+			data = maskCoreLog(data)
 		}
 		if err := add(zw, "logs/"+name, data, now); err != nil {
 			return err
@@ -106,6 +106,54 @@ func coreLog(name string) bool {
 	p := coreconfig.PathsFor("")
 	name = strings.TrimSuffix(name, ".prev")
 	return strings.EqualFold(name, filepath.Base(p.CoreLog)) || strings.EqualFold(name, filepath.Base(p.SetupLog))
+}
+
+// maskCoreLog is connector.Mask over each line of a core log that may hold what Mask hides: a link or an
+// address ("://"), a key, a query or a line of a .conf ('='), JSON ('"'), or a UUID. Mask changes no other
+// line (every one of its rules needs one of these), so those are copied as they are; each masked line comes
+// out as Mask makes it on its own. Mask over the whole of an 8 MiB log takes about 2 s.
+func maskCoreLog(text []byte) []byte {
+	var out bytes.Buffer
+	out.Grow(len(text))
+	for len(text) > 0 {
+		line := text
+		if i := bytes.IndexByte(text, '\n'); i >= 0 {
+			line, text = text[:i+1], text[i+1:]
+		} else {
+			text = nil
+		}
+		if mayHoldSecret(line) {
+			out.WriteString(connector.Mask(string(line)))
+		} else {
+			out.Write(line)
+		}
+	}
+	return out.Bytes()
+}
+
+// mayHoldSecret is the prefilter of maskCoreLog.
+func mayHoldSecret(line []byte) bool {
+	return bytes.Contains(line, []byte("://")) || bytes.IndexByte(line, '=') >= 0 || bytes.IndexByte(line, '"') >= 0 || hasUUID(line)
+}
+
+// hasUUID: 8-4-4-4-12 hex digits anywhere in b, as Mask finds a UUID.
+func hasUUID(b []byte) bool {
+	for i := 0; i+36 <= len(b); i++ {
+		if b[i+8] != '-' || b[i+13] != '-' || b[i+18] != '-' || b[i+23] != '-' {
+			continue
+		}
+		ok := true
+		for j := 0; j < 36 && ok; j++ {
+			if j != 8 && j != 13 && j != 18 && j != 23 {
+				c := b[i+j]
+				ok = c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
 }
 
 func add(zw *zip.Writer, name string, data []byte, at time.Time) error {

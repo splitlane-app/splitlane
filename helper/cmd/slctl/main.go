@@ -625,7 +625,7 @@ func proxyResult(c *client, method string, params any) int {
 	for _, r := range res.Rejected {
 		c.print("REJECTED line=%d code=%s", r.Line, r.Code)
 	}
-	c.print("SLCTL: added=%d rejected=%d more=%d", len(res.Added), len(res.Rejected), res.RejectedMore)
+	c.print("SLCTL: added=%d existing=%d rejected=%d more=%d", len(res.Added), res.Existing, len(res.Rejected), res.RejectedMore)
 	return exitOK
 }
 

@@ -163,7 +163,7 @@ func (f *fakeHelper) Handle(ctx context.Context, method string, params json.RawM
 	f.mu.Unlock()
 	switch method {
 	case protocol.MethodProxyAdd:
-		return protocol.ProxyAddResult{Added: []string{"00112233445566aa"}, Rejected: []protocol.ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3}, nil
+		return protocol.ProxyAddResult{Added: []string{"00112233445566aa"}, Existing: 2, Rejected: []protocol.ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3}, nil
 	case protocol.MethodProxyRefresh:
 		return nil, protocol.Errorf("fetch_timeout", "subscription not refreshed: fetch_timeout")
 	case protocol.MethodProxyRemove, protocol.MethodProxySelect:
@@ -818,7 +818,7 @@ func TestProxyCommands(t *testing.T) {
 	}
 	const link = "trojan://hunter2secretpass@example.com:443#T"
 	code, out := slctl("proxy", "add", link)
-	if code != exitOK || !strings.Contains(out, "SLCTL: added=1 rejected=1 more=3\n") || !strings.Contains(out, "REJECTED line=2 code=bad_link\n") ||
+	if code != exitOK || !strings.Contains(out, "SLCTL: added=1 existing=2 rejected=1 more=3\n") || !strings.Contains(out, "REJECTED line=2 code=bad_link\n") ||
 		strings.Contains(out, "hunter2secretpass") {
 		t.Fatalf("add: %d\n%s", code, out)
 	}

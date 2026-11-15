@@ -14,14 +14,23 @@ import (
 	"splitlane/helper/internal/store"
 )
 
-// proxyEnabled is a helper in phase on with the proxy connector after 5.3: the servers of links, the
-// first selected; logged in to Tailscale with an exit node selected, so that nothing but the connector
-// decides the lane.
+// useProxy adds the servers of links and selects the first (proxy.select): the connector is then proxy,
+// also with Tailscale ready (logged in, an exit node selected), so that nothing but the connector decides
+// the lane.
+func useProxy(h *harness, links ...string) {
+	h.t.Helper()
+	mustAdd(h, strings.Join(links, "\n"), "")
+	if err := call(h, protocol.MethodProxySelect, protocol.ProxyIDParams{ID: serverID(links[0])}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// proxyEnabled is a helper in phase on with the proxy connector after 5.3 (useProxy).
 func proxyEnabled(t *testing.T, links ...string) *harness {
 	t.Helper()
 	h := newHarness(t)
 	h.load()
-	mustAdd(h, strings.Join(links, "\n"), "")
+	useProxy(h, links...)
 	startEnable(h)
 	h.waitPhase(protocol.PhaseOn)
 	return h
@@ -49,7 +58,7 @@ func TestEnableWithProxy(t *testing.T) {
 	logEvents(h)
 	h.load()
 	t.Cleanup(func() { shutdown(t, h) })
-	mustAdd(h, linkVLESS+"\n"+linkTrojan, "")
+	useProxy(h, linkVLESS, linkTrojan)
 	h.e.SetClients(1)
 	time.Sleep(30 * time.Millisecond)
 	nodeUntouched(t, h)
@@ -86,13 +95,54 @@ func TestEnableWithProxy(t *testing.T) {
 	noSecrets(t, h)
 }
 
+// When the connector becomes proxy in off or error, the setup mode stops (its node need not stay online in
+// the tailnet): by proxy.select, and by the first server added while Tailscale is not ready. A window that
+// comes later does not start it again; tailscale.login does, on demand.
+func TestProxyConnectorStopsTheSetupMode(t *testing.T) {
+	h, setup := setupRunning(t)
+	mustAdd(h, linkTrojan, "")
+	if !setup.alive() || h.e.State().Connector != protocol.ConnectorTailscale {
+		t.Fatal("with Tailscale ready an added server is for later: the setup mode runs on")
+	}
+	if err := call(h, protocol.MethodProxySelect, protocol.ProxyIDParams{ID: serverID(linkTrojan)}); err != nil {
+		t.Fatal(err)
+	}
+	if setup.alive() || h.core.setupAlive() || h.e.State().Connector != protocol.ConnectorProxy {
+		t.Fatalf("proxy.select stops the setup mode: %v", h.rec.list())
+	}
+	h.e.SetClients(0)
+	h.e.SetClients(1)
+	time.Sleep(30 * time.Millisecond)
+	if h.core.setupAlive() {
+		t.Fatal("a window does not start the setup mode for the proxy connector")
+	}
+	if err := call(h, protocol.MethodLogin, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("the setup mode on demand", h.core.setupAlive)
+
+	h = newHarness(t)
+	h.store.state.LoggedIn = false
+	h.core.node.set(func(n *fakeNode) { n.state = NodeState{Backend: protocol.BackendNeedsLogin, AuthURL: loginURL} })
+	h.load()
+	t.Cleanup(func() { shutdown(t, h) })
+	if err := call(h, protocol.MethodLogin, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("the setup mode", h.core.setupAlive)
+	mustAdd(h, linkTrojan, "")
+	if h.core.setupAlive() || h.e.State().Connector != protocol.ConnectorProxy {
+		t.Fatalf("the first server added while Tailscale is not ready stops the setup mode: %v", h.rec.list())
+	}
+}
+
 // The login line of the core's log belongs to the embedded node: with the proxy connector it is never a
 // login_expired, neither at the start of the core nor while it runs.
 func TestProxyRunIgnoresTheLoginLine(t *testing.T) {
 	h := newHarness(t)
 	h.core.needLogin = true
 	h.load()
-	mustAdd(h, linkTrojan, "")
+	useProxy(h, linkTrojan)
 	startEnable(h)
 	h.waitPhase(protocol.PhaseOn)
 	h.core.appendLog("INFO endpoint/tailscale[vpn]: Waiting for authentication: https://login.example/x")
@@ -282,10 +332,13 @@ func TestConnectorSwitchWhileLive(t *testing.T) {
 func TestWrongServerIsTunnelNotProven(t *testing.T) {
 	h := newHarness(t)
 	h.load()
-	mustAdd(h, linkTrojan, "")
+	useProxy(h, linkTrojan)
 	h.probe.script([]ProbeResult{noAnswer}, []ProbeResult{atDirect}, nil)
 	startEnable(h)
 	wantError(t, h, protocol.ReasonTunnelNotProven)
+	if o := h.core.options(); o.Lane.Proxy == nil {
+		t.Fatalf("lane %+v", o.Lane)
+	}
 	if r := h.e.State().Reason; len(r.Params) != 0 || h.rec.count("core:start") != 2 || h.core.anyAlive() {
 		t.Fatalf("reason %+v, starts %d", r, h.rec.count("core:start"))
 	}
@@ -315,7 +368,7 @@ func TestWrongServerIsTunnelNotProven(t *testing.T) {
 func TestConfigInvalidIsMasked(t *testing.T) {
 	h := newHarness(t)
 	h.load()
-	mustAdd(h, linkTrojan, "")
+	useProxy(h, linkTrojan)
 	h.core.checkErr = fmt.Errorf("sing-box check: exit status 1: FATAL decode config: outbound vpn: %s", linkTrojan)
 	startEnable(h)
 	wantError(t, h, protocol.ReasonConfigInvalid)

@@ -101,14 +101,14 @@ func proxyHarness(t *testing.T, links ...string) *harness {
 
 // proxy.add with links (stage 3 part 1, section 4): every server goes into servers.json with its text, its
 // name and protocol; the state shows id, name, protocol and source only. Each rejected line comes back with
-// its number and code. The first server added becomes the selected one, and in phase off the connector is
-// proxy; a server that is there already is not added twice.
+// its number and code. The first server added becomes the selected one, and with Tailscale not ready in
+// phase off the connector is proxy; a server that is there already is not added twice: it is counted as
+// existing, and added lists only the new ones.
 func TestProxyAddLinks(t *testing.T) {
-	h := newHarness(t)
-	h.load()
+	h := proxyHarness(t)
 	res := mustAdd(h, linkVLESS+"\n\nvless://not-a-uuid@example.com:443\n"+linkTrojan+"\n", "")
 	want := []string{serverID(linkVLESS), serverID(linkTrojan)}
-	if fmt.Sprint(res.Added) != fmt.Sprint(want) || len(res.Rejected) != 1 || res.Rejected[0].Line != 3 ||
+	if fmt.Sprint(res.Added) != fmt.Sprint(want) || res.Existing != 0 || len(res.Rejected) != 1 || res.Rejected[0].Line != 3 ||
 		res.Rejected[0].Code != connector.CodeBadLink || res.RejectedMore != 0 {
 		t.Fatalf("answer %+v", res)
 	}
@@ -129,7 +129,7 @@ func TestProxyAddLinks(t *testing.T) {
 		t.Fatalf("state.json %+v", st)
 	}
 	res = mustAdd(h, linkTrojan+"\n"+linkSecond, "")
-	if fmt.Sprint(res.Added) != fmt.Sprint([]string{want[1], serverID(linkSecond)}) || len(h.store.savedServers().Servers) != 3 {
+	if fmt.Sprint(res.Added) != fmt.Sprint([]string{serverID(linkSecond)}) || res.Existing != 1 || len(h.store.savedServers().Servers) != 3 {
 		t.Fatalf("a server that is there is not added twice: %+v, %+v", res, h.store.savedServers().Servers)
 	}
 	if selectedOf(h.e.State()) != want[0] {
@@ -137,6 +137,35 @@ func TestProxyAddLinks(t *testing.T) {
 	}
 	if res, err := add(h, "ftp://example.com\n# a comment\nxhttp", ""); err != nil || len(res.Added) != 0 || len(res.Rejected) != 2 {
 		t.Fatalf("nothing to add: %+v %v", res, err)
+	}
+}
+
+// The ruling on the first server added (stage 3 part 1, section 4): it is always selected when none is; the
+// connector becomes proxy with it only when Tailscale is not ready (not logged in, or no exit node selected)
+// and routing is off or error. With Tailscale ready, or while routing is live, it is selected for later and
+// the connector stays tailscale: the user switches by choosing it (proxy.select).
+func TestFirstServerConnectorRule(t *testing.T) {
+	for _, c := range []struct {
+		name            string
+		loggedIn        bool
+		exitNode, phase string
+		wantConnector   string
+	}{
+		{"ready, off", true, exitNode, protocol.PhaseOff, protocol.ConnectorTailscale},
+		{"ready, error", true, exitNode, protocol.PhaseError, protocol.ConnectorTailscale},
+		{"not logged in, off", false, exitNode, protocol.PhaseOff, protocol.ConnectorProxy},
+		{"no exit node, error", true, "", protocol.PhaseError, protocol.ConnectorProxy},
+		{"not logged in, stopping", false, "", protocol.PhaseStopping, protocol.ConnectorTailscale},
+	} {
+		h := newHarness(t)
+		h.store.state.LoggedIn, h.store.state.SelectedExitNode = c.loggedIn, c.exitNode
+		h.load()
+		setPhase(h, c.phase)
+		mustAdd(h, linkTrojan, "")
+		if s := h.e.State(); s.Connector != c.wantConnector || selectedOf(s) != serverID(linkTrojan) || h.store.saved().Connector != c.wantConnector &&
+			!(c.wantConnector == protocol.ConnectorTailscale && h.store.saved().Connector == "") {
+			t.Errorf("%s: connector %s (state.json %q), selected %s", c.name, s.Connector, h.store.saved().Connector, selectedOf(s))
+		}
 	}
 }
 
@@ -220,7 +249,7 @@ func TestProxyAddLimits(t *testing.T) {
 	if res := mustAdd(h, linkTrojan, ""); len(res.Added) != 1 || len(h.store.savedServers().Servers) != store.MaxServers {
 		t.Fatalf("the 500th server: %+v", res)
 	}
-	if res := mustAdd(h, linkTrojan, ""); len(res.Added) != 1 || len(res.Rejected) != 0 {
+	if res := mustAdd(h, linkTrojan, ""); len(res.Added) != 0 || res.Existing != 1 || len(res.Rejected) != 0 {
 		t.Fatalf("a server that is there takes no room: %+v", res)
 	}
 }
@@ -322,7 +351,8 @@ func TestProxyAddSubscriptionAgainRefreshesIt(t *testing.T) {
 	mustAdd(h, subURL, "")
 	h.fetch.set(func(f *fakeFetcher) { f.bodies[subURL] = subscriptionBody(linkVLESS, linkSecond) })
 	res := mustAdd(h, subURL, "")
-	if s := h.e.State(); len(res.Added) != 2 || len(s.Proxy.Subscriptions) != 1 || s.Proxy.Subscriptions[0].Count != 2 || len(s.Proxy.Servers) != 2 {
+	if s := h.e.State(); fmt.Sprint(res.Added) != fmt.Sprint([]string{serverID(linkSecond)}) || res.Existing != 1 || len(s.Proxy.Subscriptions) != 1 ||
+		s.Proxy.Subscriptions[0].Count != 2 || len(s.Proxy.Servers) != 2 {
 		t.Fatalf("%+v %+v", res, s.Proxy)
 	}
 }
@@ -358,7 +388,7 @@ func TestProxyRefresh(t *testing.T) {
 	h.fetch.set(func(f *fakeFetcher) { f.bodies[subURL] = subscriptionBody(renamed, linkSecond) })
 	<-h.clock.After(5 * time.Minute)
 	res, err := refresh(h, id)
-	if err != nil || fmt.Sprint(res.Added) != fmt.Sprint([]string{serverID(linkVLESS), serverID(linkSecond)}) {
+	if err != nil || fmt.Sprint(res.Added) != fmt.Sprint([]string{serverID(linkSecond)}) || res.Existing != 1 {
 		t.Fatalf("%+v %v", res, err)
 	}
 	s := h.e.State()
@@ -622,6 +652,95 @@ func TestProxyStateHasNoSecrets(t *testing.T) {
 	noSecrets(t, h)
 	if n := len(h.e.State().Proxy.Servers); n != 4 {
 		t.Fatalf("servers %d", n)
+	}
+}
+
+// One download at a time: a second proxy.add of a subscription or proxy.refresh while one downloads is busy,
+// without a download of its own.
+func TestOneDownloadAtATime(t *testing.T) {
+	h := newHarness(t)
+	h.load()
+	h.fetch.bodies[subURL] = subscriptionBody(linkVLESS)
+	h.fetch.bodies[subURL2] = subscriptionBody(linkSecond)
+	mustAdd(h, subURL, "")
+	hold := make(chan struct{})
+	h.fetch.set(func(f *fakeFetcher) { f.hold = hold })
+	done := make(chan *protocol.Error)
+	go func() {
+		_, err := refresh(h, subID(subURL))
+		done <- err
+	}()
+	h.waitFor("the download", func() bool { return h.rec.count("fetch") == 2 })
+	if _, err := add(h, subURL2, ""); err == nil || err.Code != protocol.CodeBusy {
+		t.Fatalf("a second download: %v", err)
+	}
+	if _, err := refresh(h, subID(subURL)); err == nil || err.Code != protocol.CodeBusy || h.rec.count("fetch") != 2 {
+		t.Fatalf("a second refresh: %v, downloads %d", err, h.rec.count("fetch"))
+	}
+	close(hold)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if res := mustAdd(h, subURL2, ""); len(res.Added) != 1 {
+		t.Fatalf("after the download: %+v", res)
+	}
+}
+
+// A download whose client went (the pipe ends the context) changes nothing: no server, no error in the
+// subscription.
+func TestCancelledDownloadChangesNothing(t *testing.T) {
+	h := newHarness(t)
+	h.load()
+	h.fetch.bodies[subURL] = subscriptionBody(linkVLESS)
+	mustAdd(h, subURL, "")
+	before := h.store.savedServers()
+	hold := make(chan struct{})
+	defer close(hold)
+	h.fetch.set(func(f *fakeFetcher) { f.hold, f.bodies[subURL] = hold, subscriptionBody(linkTrojan) })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *protocol.Error)
+	go func() {
+		raw, _ := json.Marshal(protocol.ProxyIDParams{ID: subID(subURL)})
+		_, err := h.e.Handle(ctx, protocol.MethodProxyRefresh, raw)
+		done <- err
+	}()
+	h.waitFor("the download", func() bool { return h.rec.count("fetch") == 2 })
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("a cancelled download is no success")
+	}
+	if fmt.Sprint(h.store.savedServers()) != fmt.Sprint(before) || h.e.State().Proxy.Subscriptions[0].Error != nil {
+		t.Fatalf("nothing changes: %+v", h.store.savedServers())
+	}
+	if res := mustAdd(h, linkSecond, ""); len(res.Added) != 1 {
+		t.Fatal("the next command runs")
+	}
+}
+
+// proxy.add of a subscription that is there races its proxy.remove: the subscription removed during the
+// download is not made again (unknown_server), and its servers stay gone.
+func TestAddOfARemovedSubscriptionIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.load()
+	h.fetch.bodies[subURL] = subscriptionBody(linkVLESS)
+	mustAdd(h, subURL, "")
+	hold := make(chan struct{})
+	h.fetch.set(func(f *fakeFetcher) { f.hold = hold })
+	done := make(chan *protocol.Error)
+	go func() {
+		_, err := add(h, subURL, "")
+		done <- err
+	}()
+	h.waitFor("the download", func() bool { return h.rec.count("fetch") == 2 })
+	if err := call(h, protocol.MethodProxyRemove, protocol.ProxyIDParams{ID: subID(subURL)}); err != nil {
+		t.Fatal(err)
+	}
+	close(hold)
+	if err := <-done; err == nil || err.Code != protocol.CodeUnknownServer {
+		t.Fatalf("the add after the removal: %v", err)
+	}
+	if s := h.e.State(); len(s.Proxy.Subscriptions) != 0 || len(s.Proxy.Servers) != 0 || len(h.store.savedServers().Subscriptions) != 0 {
+		t.Fatalf("the subscription is not made again: %+v", s.Proxy)
 	}
 }
 

@@ -24,16 +24,40 @@ type fakeHandler struct {
 	methods []string
 	clients int
 	calls   []int // every SetClients
+
+	// When hold is set, proxy.refresh plays a download: it sends on entered, then waits for hold to be
+	// closed or for its context to end, which it reports on cancelled.
+	hold      chan struct{}
+	entered   chan struct{}
+	cancelled chan struct{}
 }
 
 func (f *fakeHandler) Handle(ctx context.Context, method string, params json.RawMessage) (any, *protocol.Error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.methods = append(f.methods, method)
-	if method == "nope" {
+	hold, entered, cancelled := f.hold, f.entered, f.cancelled
+	f.mu.Unlock()
+	switch {
+	case method == "nope":
 		return nil, protocol.Errorf(protocol.CodeUnknownMethod, "unknown")
+	case method == protocol.MethodProxyRefresh && hold != nil:
+		entered <- struct{}{}
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			cancelled <- struct{}{}
+			return nil, protocol.Errorf(protocol.CodeInternal, "cancelled")
+		}
 	}
 	return map[string]string{"ok": method}, nil
+}
+
+// holdDownloads makes proxy.refresh wait (fakeHandler.hold); release lets the waiting ones go.
+func (f *fakeHandler) holdDownloads() (entered, cancelled chan struct{}, release func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hold, f.entered, f.cancelled = make(chan struct{}), make(chan struct{}, 8), make(chan struct{}, 8)
+	return f.entered, f.cancelled, sync.OnceFunc(func() { close(f.hold) })
 }
 
 func (f *fakeHandler) Hello() protocol.HelloResult {
@@ -151,6 +175,56 @@ func TestHelloFirst(t *testing.T) {
 	}
 	if h.count() != 1 {
 		t.Fatalf("clients %d", h.count())
+	}
+}
+
+// Stage 3 part 1: proxy.add and proxy.refresh may download a subscription for up to 20 s, and
+// diagnostics.export writes an archive: they are answered in a goroutine of their own, so the requests that
+// come after one on the same connection (routing.disable, "Повторить") are answered at once; the answers
+// are matched by id. The download is given up when its client goes and when the helper closes the pipe.
+func TestLongRequestsAreAnsweredConcurrently(t *testing.T) {
+	s, h, name := serve(t)
+	entered, cancelled, release := h.holdDownloads()
+	defer release()
+	c := dial(t, name)
+	c.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	c.conn.Write([]byte(`{"id":2,"method":"proxy.refresh","params":{"id":"sub-0123456789abcdef"}}` + "\n"))
+	<-entered
+	if m := c.send(t, `{"id":3,"method":"routing.disable"}`); m["id"].(float64) != 3 || m["result"] == nil {
+		t.Fatalf("routing.disable behind the download: %v", m)
+	}
+	if m := c.send(t, `{"id":4,"method":"diagnostics.export"}`); m["id"].(float64) != 4 {
+		t.Fatalf("diagnostics.export: %v", m)
+	}
+	release()
+	if m := c.next(t); m["id"].(float64) != 2 || m["result"] == nil {
+		t.Fatalf("the answer of the download: %v", m)
+	}
+
+	entered, cancelled, release = h.holdDownloads()
+	defer release()
+	gone := dial(t, name)
+	gone.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	gone.conn.Write([]byte(`{"id":2,"method":"proxy.add","params":{"text":"https://example.com/s"}}` + "\n"))
+	gone.conn.Write([]byte(`{"id":3,"method":"proxy.refresh","params":{"id":"sub-0123456789abcdef"}}` + "\n"))
+	<-entered
+	gone.conn.Close()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the download of a client that went is not given up")
+	}
+
+	entered, cancelled, _ = h.holdDownloads()
+	last := dial(t, name)
+	last.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	last.conn.Write([]byte(`{"id":2,"method":"proxy.refresh","params":{"id":"sub-0123456789abcdef"}}` + "\n"))
+	<-entered
+	s.Close()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close does not give the download up")
 	}
 }
 

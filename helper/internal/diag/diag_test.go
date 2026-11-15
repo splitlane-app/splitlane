@@ -13,7 +13,7 @@ import (
 )
 
 // write puts text into path, creating its folder.
-func write(t *testing.T, path, text string) string {
+func write(t testing.TB, path, text string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
