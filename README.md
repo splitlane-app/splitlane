@@ -1,111 +1,160 @@
 # SplitLane
 
-SplitLane — приложение для Windows 10/11, в котором программы раскладываются по двум дорожкам: «Через VPN» и «Напрямую». Этап 1 работает с Tailscale и exit node. Спецификация: `docs/superpowers/specs/2026-11-13-splitlane-stage1-design.md`.
+[Русская версия](README.ru.md)
 
-Лицензия: GPL-3.0-or-later (файл `LICENSE`). Сторонние компоненты перечислены в `THIRD-PARTY.md`.
+SplitLane is a Windows app for split routing by program. It puts programs on two lanes, **Via VPN** and **Direct**: programs on the VPN lane go through your Tailscale exit node, everything else goes directly through your normal connection. It is for people who use a Tailscale exit node as their VPN and want only some programs to use it, for example because some websites are slow or don't work through the VPN. You arrange programs by dragging them from one lane to the other.
 
-## Установка
+This is a beta. It works with Tailscale only.
 
-1. Скачайте `SplitLane-Setup-<версия>.exe` и `SplitLane-Setup-<версия>.exe.sha256` со страницы выпусков (Releases) репозитория или из артефакта запуска GitHub Actions (раздел «Проверка на GitHub Actions»). Сверка: `(Get-FileHash SplitLane-Setup-<версия>.exe).Hash` совпадает с первым словом файла `.sha256` (без учёта регистра).
-2. Запустите установщик. Он пока не подписан, поэтому SmartScreen показывает «Система Windows защитила ваш компьютер»: нажмите «Подробнее» → «Выполнить в любом случае».
-3. Установщик один раз просит права администратора (UAC), ставит SplitLane для всех пользователей в `%ProgramFiles%\SplitLane` (каталог не выбирается) и настраивает служебный процесс для пользователя, который вошёл в Windows. На последней странице галочка «Запустить SplitLane».
+## How it works
 
-Установка поверх прежней версии (в том числе поверх установки этапа 1) идёт так же: установщик сначала останавливает прежний служебный процесс с возвратом exit node, настройки и вход в Tailscale остаются. Тихая установка: `SplitLane-Setup-<версия>.exe /S` (окно не запускается; отказ — ненулевой код выхода).
+- The SplitLane window runs without administrator rights. It sends commands to the SplitLane service, a background process with administrator rights that Task Scheduler starts when you sign in to Windows.
+- The service runs a bundled network core (sing-box 1.14.4, unmodified). The core captures traffic with a virtual adapter and sends each connection to a lane by the path of the program that opened it.
+- The VPN lane goes through an embedded Tailscale node inside the core. It is a separate device in your tailnet, named `<PC name>-splitlane`, and it uses the exit node you choose. The Direct lane uses your normal connection.
+- One lane is the main lane. Programs you haven't pinned follow it; pinned programs stay on their lane.
+- While split routing is on, SplitLane turns off the exit node in the Tailscale app and turns it back on when you turn split routing off. After a crash or a restart of Windows, it turns it back on the next time the service starts.
 
-## Удаление
+## Requirements
 
-«Параметры» → «Приложения» → SplitLane → «Удалить», или `%ProgramFiles%\SplitLane\Uninstall SplitLane.exe`. Галочка «Удалить настройки и вход в Tailscale» (по умолчанию выключена) удаляет ещё `%ProgramData%\SplitLane` и `%AppData%\SplitLane`; устройство `<имя ПК>-splitlane` при этом остаётся в сети Tailscale — его удаляют в консоли администратора Tailscale. Без галочки настройки остаются для следующей установки.
+- Windows 10 or 11, x64.
+- Tailscale for Windows, installed and logged in, and an exit node in your tailnet that you can use. The exit node must reach the internet from a different address than this PC.
+- A Windows account with administrator rights. You install and use SplitLane under the same account: if you confirm the Windows prompt (UAC) with a different account, the installation stops.
 
-Тихое удаление: `"%ProgramFiles%\SplitLane\Uninstall SplitLane.exe" /S` — данные остаются, с `/S /PURGE` — удаляются. Деинсталлятор NSIS копирует себя во временную папку и сразу возвращает управление; удаление идёт ещё несколько секунд, пока не исчезнет папка `%ProgramFiles%\SplitLane`.
+## Install
 
-## Обновления
+1. Download `SplitLane-Setup-<version>.exe` and `SplitLane-Setup-<version>.exe.sha256` from [Releases](https://github.com/splitlane-app/splitlane/releases).
+2. Verify the download. In PowerShell, in the folder with both files (replace `<version>`):
 
-Окно проверяет последний выпуск на GitHub Releases репозитория `splitlane-app/splitlane`: через 30 секунд после запуска и затем раз в сутки (настройка «Проверять обновления»), а также сразу по пункту «Проверить обновления» в меню значка и кнопке на экране «Подключение». Если версия выпуска новее, плашка предлагает «Обновить»: окно скачивает `SplitLane-Setup-<версия>.exe`, сверяет его SHA-256 с файлом `.sha256` того же выпуска и запускает установщик тихо (`/S --force-run`) с подтверждением Windows (UAC). Установщик останавливает служебный процесс с возвратом exit node, ставит новую версию и запускает окно, деление остаётся, как было. Итог служебный процесс новой версии (его подготовка и настройка, которые запускает установщик) записывает в `%ProgramData%\SplitLane\export\last-install.txt`, только если папка данных создана администратором; окно после перезапуска показывает «SplitLane обновлён до <версия>» или причину отказа. Сверка хеша проверяет целостность, не подлинность: установщик пока не подписан.
+   ```powershell
+   $file = 'SplitLane-Setup-<version>.exe'
+   $expected = (-split (Get-Content "$file.sha256" -Raw))[0]
+   (Get-FileHash $file -Algorithm SHA256).Hash -eq $expected
+   ```
 
-Пока репозиторий закрыт, обновления не находятся: GitHub без входа не отдаёт его выпуски.
+   `True` means the file matches the checksum of the release.
+3. Run the installer. It isn't signed yet, so SmartScreen shows "Windows protected your PC": click **More info**, then **Run anyway**.
+4. The installer asks for administrator rights once, installs SplitLane for all users in `%ProgramFiles%\SplitLane` (the folder can't be changed) and sets up the service for the Windows user who is signed in. The last page has a **Run SplitLane** checkbox.
 
-## Состав
+The installer is in English or Russian, following the language of Windows.
 
-- `helper/` — служебный процесс `splitlane-helper.exe` (Go), единственная часть с правами администратора.
-- `helper/cmd/slctl` — тестовый клиент канала служебного процесса.
-- `helper/cmd/slguard` — сторож для проверок на ПК во время разработки; в поставку не входит.
-- `scripts/` — получение ядра с проверкой контрольной суммы, сборка и проверка установщика.
-- `docs/` — спецификации и планы.
-- `app/` — окно (Electron), см. раздел «Окно»; `app/build/installer.nsh` — дополнения установщика.
-- `.github/workflows/build.yml` — сборка и проверка на GitHub Actions.
+Installing over an older version works the same way: the installer first stops the service of the old version and turns the exit node back on. Your settings and the Tailscale login are kept. Silent install: `SplitLane-Setup-<version>.exe /S` (the window doesn't start; a non-zero exit code means the installation failed).
 
-## Ядро
+winget: coming soon.
 
-Ядро sing-box 1.14.4 в git не хранится. Скрипт скачивает официальный архив и сверяет SHA-256 со значениями из `scripts/core.sha256`:
+## First start
+
+1. If the window shows **First-time setup**, click **Install the service** and confirm the Windows prompt. The installer normally does this for you, so this screen appears only when the service needs to be repaired.
+2. On **Connect a VPN**, click **Log in to Tailscale**. The login page opens in your browser: log in to the tailnet that has your exit node. This logs in the embedded node, the new `<PC name>-splitlane` device. If your tailnet requires device approval, approve the device in the Tailscale admin console; the window continues by itself.
+3. Choose an exit node, then click **Turn on split routing**.
+4. Drag programs onto the lanes. You can move a card from one lane to the other, drop an `.exe` file or a shortcut from Explorer onto a lane, or click **+ Add** to pick a program that is online now, an installed program or a file. The same actions are in the context menu of a card (**Send via VPN**, **Send direct**, **Unpin**) and work from the keyboard.
+
+A pinned program stays on its lane; other programs follow the main lane (**make main** on the other lane switches it). By default a program means its whole folder, so its updaters and helper processes go the same way; you can change this in the program card. **Settings and connection** in the header (or **Settings…** in the tray menu) opens the **Connection** screen: the exit node, logging out of Tailscale, the language and the settings **Start when I sign in to Windows**, **Turn on split routing at startup** and **Check for updates automatically**.
+
+Closing the window keeps SplitLane in the tray. **Quit** in the tray menu turns split routing off and stops the service.
+
+## Updates
+
+SplitLane checks the latest release on [GitHub Releases](https://github.com/splitlane-app/splitlane/releases) 30 seconds after the window starts and then every 24 hours while it runs, when **Check for updates automatically** is on (it is on by default). You can check at any time with **Check for updates** in the tray menu or on the **Connection** screen.
+
+When a newer version is out, a banner offers **Update**. SplitLane downloads the installer, checks its SHA-256 against the `.sha256` file of the same release and runs the installer silently; Windows asks you to confirm. The installer stops the service, turns the exit node back on, installs the new version and starts the window again. Split routing stays on or off, as it was. The window then shows "SplitLane was updated to version X", or the reason the update wasn't installed.
+
+The SHA-256 check confirms that the download is intact, not who made it: the installer isn't signed yet.
+
+## Uninstall
+
+Open **Settings → Apps**, find SplitLane and click **Uninstall**, or run `%ProgramFiles%\SplitLane\Uninstall SplitLane.exe`. The uninstaller turns split routing off and turns the exit node back on in the Tailscale app before it removes anything.
+
+The checkbox **Remove the settings and the Tailscale login** (off by default) also deletes `%ProgramData%\SplitLane` and your `%AppData%\SplitLane`. Without it, they are kept for the next installation.
+
+Either way, the device `<PC name>-splitlane` stays in your tailnet. Remove it in the [Tailscale admin console](https://login.tailscale.com/admin/machines).
+
+Silent uninstall: `"%ProgramFiles%\SplitLane\Uninstall SplitLane.exe" /S` keeps the data, `/S /PURGE` deletes it. The NSIS uninstaller copies itself to a temporary folder and returns at once; it finishes a few seconds later, when the `%ProgramFiles%\SplitLane` folder is gone.
+
+## Privacy
+
+SplitLane has no telemetry and no accounts of its own. In short:
+
+- The window checks GitHub for updates. You can turn the automatic check off.
+- The embedded Tailscale node talks to Tailscale's servers like any Tailscale device.
+- While split routing is on, the service checks both lanes with `api.ipify.org`, and website names are resolved through encrypted DNS at `1.1.1.1` over the VPN lane.
+- Settings and logs stay on your PC. A diagnostics archive leaves it only if you share it.
+
+Details, and how to delete everything: [PRIVACY.md](PRIVACY.md).
+
+## Known limitations of this beta
+
+- The installer and the programs aren't signed. SmartScreen warns about the downloaded installer, and the update check verifies integrity, not authenticity.
+- One Windows user per PC. Split routing applies to the whole PC, so programs in other Windows sessions follow the same lanes, but only the user who installed SplitLane can control it.
+- Tailscale only. "Key or subscription" and "Configuration file" are shown in the app as coming soon.
+- Installation only in `%ProgramFiles%\SplitLane`.
+- The embedded node is a separate device in your tailnet with its own login expiry. When it expires, SplitLane asks you to log in again.
+- DNS is shared by both lanes. While the VPN lane works, names are resolved through it, so content delivery networks may give programs on the Direct lane servers near the exit node. When the VPN server is unreachable or **All direct** is on, all names go to your ISP's DNS.
+- If the Tailscale app manages DNS (its default), MagicDNS names don't resolve while split routing is on, and if your tailnet overrides DNS for all names, split routing doesn't turn on. It has been tested only with DNS management turned off in the Tailscale app.
+- WSL and virtual machines follow the main lane. So do connections whose program the core can't identify (for example `ping`).
+- Programs that go online through shared system processes (for example, the Edge web component) can't be separated from each other.
+- Traffic to private, local and Tailscale addresses always goes directly.
+- IPv6 to the internet doesn't work while split routing is on.
+- There is no kill switch. When the core crashes, traffic goes directly until SplitLane turns the exit node of the Tailscale app back on (about a second), then through that exit node until the core restarts. When SplitLane restarts the core itself (after a network change, when you change the exit node), traffic goes through the exit node of the Tailscale app meanwhile. If no exit node was selected in the Tailscale app, it goes directly in both cases.
+- An exit node that reaches the internet from the same address as this PC can't be used.
+- If the Tailscale app used automatic exit node selection, a specific exit node is selected there after split routing is turned off.
+- SplitLane reads one setting of the Tailscale app through a debug command whose format can change. After you update Tailscale, turn split routing on and off once.
+- Messages of the service (its log, the reasons the installer shows when it stops) are in English in both languages.
+
+## Building from source
+
+You need Windows 10/11 x64 with Windows PowerShell 5.1, Go 1.27.4 (from `%LOCALAPPDATA%\Programs\go\bin`, otherwise from `PATH`), Node.js 24 and pnpm 12.9.1.
+
+1. Get the network core. sing-box 1.14.4 isn't stored in git: the script downloads the official archive and checks its SHA-256 against `scripts/core.sha256`. Result: `.cache\core\sing-box-1.14.4-windows-amd64\sing-box.exe`.
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\fetch-core.ps1
+   ```
+
+2. Build the installer:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-installer.ps1
+   ```
+
+   The steps: `scripts\build-helper.ps1` (the service, into `dist\helper`), then in `app`: `pnpm install --frozen-lockfile`, the Electron binary, type checking, tests, the window build and `electron-builder --win nsis`. Result: `app\release\SplitLane-Setup-<version>.exe` and next to it `SplitLane-Setup-<version>.exe.sha256` (one line: `<sha256>  SplitLane-Setup-<version>.exe`). The last line of the output is `BUILD-OK <path of the installer>`. The version is `version` in `app/package.json`; the service gets the same version. The installer isn't signed.
+
+To build with another version (three numbers `x.y.z`), for example to test updates:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\fetch-core.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Version 0.3.90
 ```
 
-Итог: `.cache\core\sing-box-1.14.4-windows-amd64\sing-box.exe`.
+The service (`scripts\build-helper.ps1 -Version <x.y.z>`, which you can also run on its own), the window, `SplitLane.exe` and the installer with its name and `.sha256` get this version; `app/package.json` doesn't change.
 
-## Сборка служебного процесса
+## License
 
-Нужен Go 1.26 или новее; CGO не нужен.
+SplitLane is licensed under GPL-3.0-or-later (see [LICENSE](LICENSE)). It ships the unmodified sing-box core and other third-party components under their own licenses, listed with links to their source code in [THIRD-PARTY.md](THIRD-PARTY.md) (in Russian). SplitLane is not affiliated with sing-box or Tailscale.
 
-```powershell
-cd helper
-$env:CGO_ENABLED = '0'
-go test ./...
-go build -ldflags "-H=windowsgui" -o bin\splitlane-helper.exe .\cmd\splitlane-helper
-go build -o bin\slctl.exe .\cmd\slctl
-go build -o bin\slguard.exe .\cmd\slguard
-```
+Security issues: see [SECURITY.md](SECURITY.md). Other problems and questions: [GitHub issues](https://github.com/splitlane-app/splitlane/issues).
 
-Проверка конфигов настоящим ядром (ядро ничего не запускает, только читает конфиг): переменная `SPLITLANE_CORE` с полным путём `sing-box.exe` перед `go test ./...`.
+## Development
 
-## Окно
+- **Layout.** `helper/`: the service `splitlane-helper.exe` (Go), the only part with administrator rights. `helper/cmd/slctl`: a test client for the service's pipe. `helper/cmd/slguard`: a guard for live checks on a PC during development, not shipped. `app/`: the window (Electron, React, TypeScript); `app/build/installer.nsh`: additions to the installer. `scripts/`: the core download, the builds and the installer check. `docs/`: specifications and plans, in Russian. `.github/workflows/build.yml`: the CI build.
+- **The service alone** (Go 1.26 or newer, no CGO):
 
-Сборка окна (Electron) вместе со служебным процессом, одной командой (нужны Go, ядро из `scripts\fetch-core.ps1`, Node и pnpm):
+  ```powershell
+  cd helper
+  $env:CGO_ENABLED = '0'
+  go test ./...
+  go build -ldflags "-H=windowsgui" -o bin\splitlane-helper.exe .\cmd\splitlane-helper
+  go build -o bin\slctl.exe .\cmd\slctl
+  go build -o bin\slguard.exe .\cmd\slguard
+  ```
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-app.ps1
-```
+  To check the generated core configs with the real core (it only reads them), set `SPLITLANE_CORE` to the full path of `sing-box.exe` before `go test ./...`.
+- **Unpacked window.** `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-app.ps1` builds `app\release\win-unpacked\SplitLane.exe` with the six service files in `helper\` next to it, as the installer lays them out (last line `BUILD-OK app\release\win-unpacked`). It is for development only: the service works only from `%ProgramFiles%\SplitLane\helper`, and a window outside `%ProgramFiles%\SplitLane` says on **First-time setup** that SplitLane has to be installed with the installer.
+- **Dev mode.** A service built from source runs outside the installed location only with `--dev`, from an elevated process, with absolute paths:
 
-Скрипт собирает `dist\helper`, ставит зависимости, запускает проверку типов и тесты и пакует окно. Итог: `app\release\win-unpacked\SplitLane.exe`, шесть файлов служебного процесса лежат в `helper\` рядом с ним, как их раскладывает установщик. Последняя строка вывода: `BUILD-OK app\release\win-unpacked`.
+  ```text
+  splitlane-helper.exe --dev --data-dir <repo>\.dev\data --core <repo>\.cache\core\sing-box-1.14.4-windows-amd64\sing-box.exe
+  ```
 
-Папка `win-unpacked` — только для разработки: служебный процесс работает только из `%ProgramFiles%\SplitLane\helper`, и окно не из `%ProgramFiles%\SplitLane` на экране «Первая настройка» говорит, что SplitLane нужно установить установщиком (разделы «Установка» и «Сборка»).
-
-## Сборка
-
-Установщик собирается одной командой. Нужны Go 1.27.4 (в `%LOCALAPPDATA%\Programs\go\bin`, иначе из PATH), Node.js 24, pnpm 12.9.1 и ядро:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\fetch-core.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-installer.ps1
-```
-
-Шаги: `scripts\build-helper.ps1` (`dist\helper`), затем в `app`: `pnpm install --frozen-lockfile`, двоичный файл Electron, проверка типов, тесты, сборка окна и `electron-builder --win nsis`. Итог: `app\release\SplitLane-Setup-<версия>.exe` и рядом `SplitLane-Setup-<версия>.exe.sha256` (строка `<sha256>  SplitLane-Setup-<версия>.exe`); последняя строка вывода `BUILD-OK <путь установщика>`. Версия — `version` в `app/package.json`, её же получает служебный процесс. Установщик не подписан.
-
-Сборка для проверки с другой версией (три числа `x.y.z`), например для проверки обновлений:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-installer.ps1 -Version 0.2.90
-```
-
-Эту версию получают служебный процесс (`scripts\build-helper.ps1 -Version <x.y.z>`, его можно запустить и отдельно), окно, `SplitLane.exe` и установщик с его именем и `.sha256`; `app/package.json` не меняется.
-
-## Проверка на GitHub Actions
-
-Рабочий процесс `.github/workflows/build.yml` запускается на каждую отправку в любую ветку, на pull request, на метку `v*` и вручную (Actions → build → Run workflow). Задача `build` на бегуне `windows-latest`: ядро со сверкой SHA-256, `go vet` и `go test` служебного процесса, `scripts\build-installer.ps1`, затем `scripts\test-installer.ps1` и артефакт `SplitLane-Setup-<версия>` (установщик и `.sha256`). Место для артефактов закрытого репозитория — 500 МБ, установщик — около 160 МБ, поэтому артефакт хранится 2 дня и на pull request не создаётся (его создаёт запуск по отправке ветки). При сбое — небольшой артефакт `test-installer-logs` (вывод диагностических запусков служебного процесса и журналы `%ProgramData%\SplitLane\logs`, тоже 2 дня). В сводке запуска — SHA-256 установщика и итог проверки.
-
-`scripts\test-installer.ps1 -Installer <путь>` на бегуне (администратор, без Tailscale и без SplitLane): тихая установка поверх раскладки этапа 1, затем файлы, задача «SplitLane Helper» и её команда, `setup.json`, список доступа `%ProgramData%\SplitLane`, предохранители Electron и сведения о версии `SplitLane.exe`; повторная установка поверх (настройки остаются); тихое удаление без `/PURGE` (данные остаются) и с `/PURGE` (данные удалены); после каждой успешной установки — файл итога `%ProgramData%\SplitLane\export\last-install.txt` с версией установщика и `ok` (отказы на бегуне не проверяются). Служебный процесс не запускается, сеть не трогается. Последняя строка: `TEST-OK`, `TEST-FAIL <шаг>: <что>` или `TEST-REFUSED: <причина>`. Скрипт меняет систему, поэтому на ПК, где уже есть SplitLane или Tailscale, он отказывает, ничего не меняя; на своём ПК его не запускают.
-
-На метке `v<версия>` (должна совпадать с `version` в `app/package.json`, иначе сборка падает) задача `release` создаёт черновик выпуска «SplitLane <версия>» с установщиком и `.sha256`.
-
-Скачать артефакт запуска: `gh run download <id запуска> -n SplitLane-Setup-<версия>`.
-
-## Режим разработки
-
-Служебный процесс этой сборки запускается только с `--dev`, из процесса с правами администратора:
-
-```text
-splitlane-helper.exe --dev --data-dir C:\code\router\.dev\data --core C:\code\router\.cache\core\sing-box-1.14.4-windows-amd64\sing-box.exe
-```
-
-Каталог `.dev\` в git не попадает.
+  `.dev\` isn't committed. In dev mode the service doesn't check which program connects to its pipe, so `slctl` and the scenario check `node scripts/scenario.mjs` work against it.
+- **Update feed for tests.** `SPLITLANE_UPDATE_FEED=http://127.0.0.1:<port>` makes the window take releases from a local server instead of GitHub.
+- **CI.** `.github/workflows/build.yml` runs on every push to any branch, on pull requests, on `v*` tags and by hand (Actions → build → Run workflow), on `windows-latest`: the core with its SHA-256 checked, `go vet` and `go test` of the service, `scripts\build-installer.ps1`, then `scripts\test-installer.ps1` and the artifact `SplitLane-Setup-<version>` (the installer and its `.sha256`, kept 2 days, not made for pull requests). After a failure there is a small `test-installer-logs` artifact. The run summary shows the SHA-256 of the installer and the result of the check. On a tag `v<version>`, which must match `version` in `app/package.json`, the `release` job creates a draft release "SplitLane <version>" with the installer and its `.sha256`. To download an artifact: `gh run download <run id> -n SplitLane-Setup-<version>`.
+- **Installer check.** `scripts\test-installer.ps1 -Installer <path>` installs, reinstalls and uninstalls SplitLane silently and checks files, the task, the access list of the data folder, the Electron fuses and the result file `%ProgramData%\SplitLane\export\last-install.txt`. The last line is `TEST-OK`, `TEST-FAIL <step>: <what>` or `TEST-REFUSED: <reason>`. It changes the system and is meant for a CI runner: on a PC that already has SplitLane or Tailscale, it refuses without changing anything.
