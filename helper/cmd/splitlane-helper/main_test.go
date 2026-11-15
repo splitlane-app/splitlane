@@ -16,6 +16,7 @@ import (
 	"splitlane/helper/internal/pipe"
 	"splitlane/helper/internal/place"
 	"splitlane/helper/internal/protocol"
+	"splitlane/helper/internal/supervise"
 )
 
 func TestParse(t *testing.T) {
@@ -132,28 +133,130 @@ func TestProductPaths(t *testing.T) {
 	}
 	// The whole run, with a file in place of the core: the log in the data folder names the one refused.
 	os.WriteFile(filepath.Join(prog, "sing-box.exe"), []byte("not the core"), 0o644)
-	if code := run(nil); code != exitBadCore || !strings.Contains(helperLog(t, data), "core refused: "+filepath.Join(prog, "sing-box.exe")) {
+	if code := run(worker); code != exitBadCore || !strings.Contains(helperLog(t, data), "core refused: "+filepath.Join(prog, "sing-box.exe")) {
 		t.Fatalf("exit code %d, log:\n%s", code, helperLog(t, data))
 	}
 
 	executable = func() (string, error) { return `C:\Users\u\Downloads\splitlane-helper.exe`, nil }
-	if code := run(nil); code != exitUsage || !strings.Contains(helperLog(t, data), `the product runs only as `+filepath.Join(prog, "splitlane-helper.exe")) {
+	if code := run(worker); code != exitUsage || !strings.Contains(helperLog(t, data), `the product runs only as `+filepath.Join(prog, "splitlane-helper.exe")) {
 		t.Fatalf("a helper outside the program folder: exit code %d, log:\n%s", code, helperLog(t, data))
 	}
 	executable = func() (string, error) { return strings.ToUpper(filepath.Join(prog, "splitlane-helper.exe")), nil }
 
 	os.Remove(filepath.Join(data, "setup.json"))
-	if code := run(nil); code != exitNotInstalled || !strings.Contains(helperLog(t, data), "not installed") {
+	if code := run(worker); code != exitNotInstalled || !strings.Contains(helperLog(t, data), "not installed") {
 		t.Fatalf("no setup.json: exit code %d, log:\n%s", code, helperLog(t, data))
 	}
 
 	os.RemoveAll(data)
-	if code := run(nil); code != exitNotInstalled {
+	if code := run(worker); code != exitNotInstalled {
 		t.Fatalf("no data folder: exit code %d", code)
 	}
 	if _, err := os.Stat(data); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("the helper made the data folder")
 	}
+}
+
+// worker is the command line of the worker copy: what the product does itself, without the supervisor.
+var worker = []string{"--worker"}
+
+// --worker is the product's: with --dev it is a usage error (spec 4).
+func TestWorkerFlagNeedsProductMode(t *testing.T) {
+	args := []string{"--dev", "--worker", "--data-dir", `C:\d`, "--core", `C:\c\sing-box.exe`}
+	if _, err := parse(args); err == nil || !strings.Contains(err.Error(), "--worker") {
+		t.Fatalf("parse: %v", err)
+	}
+	if code := run(args); code != exitUsage {
+		t.Fatalf("exit code %d", code)
+	}
+	if o, err := parse(worker); err != nil || !o.worker || o.dev {
+		t.Fatalf("the product worker: %+v %v", o, err)
+	}
+}
+
+type endedWorker struct{ code int }
+
+func (w endedWorker) Wait() int { return w.code }
+
+// The product without --worker is the supervisor (spec 4): after the place check it starts its own exe
+// with --worker, opens no pipe and keeps no log file open; its lines are appended to helper.log. A
+// refused place starts no worker and returns the code of the refusal.
+func TestProductModeSupervisesItself(t *testing.T) {
+	prog, data := fakePlace(t)
+	if err := place.WriteSetup(data, place.Setup{UserSID: "S-1-5-21-1000-2000-3000-1001"}); err != nil {
+		t.Fatal(err)
+	}
+	logs := filepath.Join(data, "logs")
+	os.MkdirAll(logs, 0o755)
+	logPath := filepath.Join(logs, "helper.log")
+	os.WriteFile(logPath, []byte("an earlier line\n"), 0o644)
+	exe := filepath.Join(prog, "splitlane-helper.exe")
+
+	var gotExe string
+	var gotArgs []string
+	var codes []int
+	old := startWorker
+	startWorker = func(exe string, args []string) (supervise.Worker, error) {
+		gotExe, gotArgs = exe, args
+		code := codes[0]
+		codes = codes[1:]
+		return endedWorker{code}, nil
+	}
+	oldClock := superviseClock
+	superviseClock = instantClock{}
+	t.Cleanup(func() { startWorker, superviseClock = old, oldClock })
+
+	codes = []int{2, 7}
+	if code := run(nil); code != exitRefused {
+		t.Fatalf("exit code %d", code)
+	}
+	if gotExe != exe || len(gotArgs) != 1 || gotArgs[0] != "--worker" {
+		t.Fatalf("the worker was started as %q %q", gotExe, gotArgs)
+	}
+	b, _ := os.ReadFile(logPath)
+	log := string(b)
+	if !strings.HasPrefix(log, "an earlier line\n") || !strings.Contains(log, "supervisor: the helper ended with code 2; starting it again in 5s (restart 1 of 3 in 10m)") ||
+		!strings.Contains(log, "supervisor: the helper ended with code 7; not starting it again") {
+		t.Fatalf("log:\n%s", log)
+	}
+	if err := os.Remove(logPath); err != nil {
+		t.Fatalf("the supervisor keeps the log open: %v", err)
+	}
+	if _, err := os.Stat(logPath + ".prev"); err == nil {
+		t.Fatal("the supervisor rotated the log")
+	}
+
+	// No logs folder: the lines are skipped, the folder is not made.
+	os.RemoveAll(logs)
+	codes = []int{0}
+	if code := run(nil); code != exitOK {
+		t.Fatalf("no logs folder: exit code %d", code)
+	}
+	if _, err := os.Stat(logs); err == nil {
+		t.Fatal("the supervisor made the logs folder")
+	}
+
+	// A refused place: its code, no worker.
+	gotExe = ""
+	executable = func() (string, error) { return `C:\Users\u\Downloads\splitlane-helper.exe`, nil }
+	if code := run(nil); code != exitUsage || gotExe != "" {
+		t.Fatalf("a helper outside the program folder: exit code %d, worker %q", code, gotExe)
+	}
+	executable = func() (string, error) { return exe, nil }
+	os.Remove(filepath.Join(data, place.SetupFile))
+	if code := run(nil); code != exitNotInstalled || gotExe != "" {
+		t.Fatalf("no setup.json: exit code %d, worker %q", code, gotExe)
+	}
+}
+
+// instantClock has no pauses.
+type instantClock struct{}
+
+func (instantClock) Now() time.Time { return time.Now() }
+func (instantClock) After(time.Duration) <-chan time.Time {
+	ch := make(chan time.Time, 1)
+	ch <- time.Now()
+	return ch
 }
 
 // setup.json at logon (spec 4.3): a read that fails for a moment (another program holds the file) is

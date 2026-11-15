@@ -20,6 +20,7 @@ type fakeSystem struct {
 	exitIP         string
 	ignoreSet      int // so many SetExitNode calls change nothing
 	helpers        int
+	workers        int              // of the helpers, so many are worker copies (their parent is a helper)
 	cores          int
 	adapter        bool
 	launchErr      error
@@ -88,7 +89,21 @@ func (f *fakeSystem) KillChildren(parents []uint32, image string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.add(fmt.Sprintf("kill %s children of %d", image, len(parents)))
+	if image == HelperImage {
+		n := f.workers
+		f.workers, f.helpers = 0, f.helpers-n
+		return n
+	}
 	return 0
+}
+
+func (f *fakeSystem) Pids(image string) []uint32 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if image == HelperImage {
+		return ids(f.helpers)
+	}
+	return ids(f.cores)
 }
 
 func (f *fakeSystem) Count(image string) int {
@@ -407,6 +422,36 @@ func TestKillAndLaunchCommands(t *testing.T) {
 	want := "launch helper.exe|kill splitlane-helper.exe|launch helper.exe|kill splitlane-helper.exe|kill tailscale.exe children of 1|set 100.64.0.1 true|kill sing-box.exe"
 	if sys.list() != want {
 		t.Fatalf("events %s", sys.list())
+	}
+}
+
+// kill-worker ends the worker copy of the product helper (the helper whose parent is a helper) and
+// leaves the supervisor, which then starts it again.
+func TestKillWorkerCommand(t *testing.T) {
+	sys := &fakeSystem{exitOn: true, exitIP: "100.64.0.1"}
+	var result string
+	var helpers, workers int
+	g := newGuard(t, sys, func(g *Guard, tick int) {
+		switch tick {
+		case 1: // a supervisor and its worker start after the arming
+			sys.mu.Lock()
+			sys.helpers, sys.workers = 2, 1
+			sys.mu.Unlock()
+			command(g, "kill-worker")
+		case 2: // the command ran on tick 1's reads, before the stop
+			result, _ = lastStatus(t, g)["result"].(string)
+			sys.mu.Lock()
+			helpers, workers = sys.helpers, sys.workers
+			sys.mu.Unlock()
+			os.WriteFile(filepath.Join(g.Dir, "stop.flag"), nil, 0o644)
+		}
+	})
+	g.Run()
+	if result != "worker processes ended: 1" || helpers != 1 || workers != 0 {
+		t.Fatalf("result %q, helpers %d, workers %d, events %s", result, helpers, workers, sys.list())
+	}
+	if !strings.HasPrefix(sys.list(), "kill splitlane-helper.exe children of 2") {
+		t.Fatalf("the supervisor must not be killed by name first: %s", sys.list())
 	}
 }
 

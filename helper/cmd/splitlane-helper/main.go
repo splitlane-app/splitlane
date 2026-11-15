@@ -14,6 +14,10 @@
 //	splitlane-helper.exe uninstall [--purge]
 //
 // Their lines go to the standard output (the window redirects it); a refusal exits with code 7.
+//
+// The product is two processes (spec 4): the scheduled task starts the supervisor, which runs this exe
+// again with --worker and starts it anew after a failure (package supervise); the worker is what the
+// text above describes. The supervisor opens no pipe, starts no core and keeps no file open.
 package main
 
 import (
@@ -25,9 +29,11 @@ import (
 	"log"
 	"maps"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -43,6 +49,7 @@ import (
 	"splitlane/helper/internal/session"
 	"splitlane/helper/internal/singbox"
 	"splitlane/helper/internal/store"
+	"splitlane/helper/internal/supervise"
 	"splitlane/helper/internal/systs"
 	"splitlane/helper/internal/winhost"
 )
@@ -74,6 +81,13 @@ var (
 	executable  = os.Executable
 )
 
+// The supervisor (spec 4): startWorker runs this exe with the arguments, superviseClock paces the
+// restarts; the tests replace both, so that no test starts a process or waits.
+var (
+	startWorker    = startWorkerProcess
+	superviseClock supervise.Clock = realClock{}
+)
+
 // setupReads is how many times the product reads setup.json, setupRetryWait apart (the tests shorten
 // it): at logon another program may hold the file for a moment, and a helper that ends there leaves the
 // journal unrestored and the system exit node off after a reboot. Only a missing file is "not installed".
@@ -97,6 +111,7 @@ type options struct {
 	core         string
 	pipe         string
 	devPin       bool
+	worker       bool
 	coreLogLevel string
 }
 
@@ -106,6 +121,7 @@ func parse(args []string) (options, error) {
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&o.dev, "dev", false, "development mode: the paths below; without it the helper is the product")
 	fs.StringVar(&o.dataDir, "data-dir", "", "development only: data folder (absolute)")
+	fs.BoolVar(&o.worker, "worker", false, "product only: run as the worker the supervisor starts")
 	fs.StringVar(&o.core, "core", "", "development only: full path of sing-box.exe 1.14.4")
 	fs.StringVar(&o.pipe, "pipe", pipe.DefaultName, "development only: pipe name")
 	fs.BoolVar(&o.devPin, "dev-pin", false, "development only: keep the AI assistant's programs on the VPN lane")
@@ -116,6 +132,8 @@ func parse(args []string) (options, error) {
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	switch {
+	case o.worker && o.dev:
+		return o, fmt.Errorf("--worker needs the product: it cannot go with --dev, which has no supervisor")
 	case given["core-log-level"] && !o.dev:
 		return o, fmt.Errorf("--core-log-level needs --dev: the product always writes the core log at level info")
 	case given["dev-pin"] && !o.dev:
@@ -148,6 +166,9 @@ func run(args []string) int {
 	o, err := parse(args)
 	if err != nil {
 		return exitUsage
+	}
+	if !o.dev && !o.worker {
+		return supervisor()
 	}
 	if !o.dev {
 		// The product: the data folder is the one install made with its access list (spec 4.2); the
@@ -264,6 +285,69 @@ func run(args []string) int {
 	watcher.Stop()
 	stopRoutes()
 	return exitOK
+}
+
+// appendWriter writes every line to the end of the file at path: it opens the file for the line and closes
+// it at once, so that nothing stays open; a file that cannot be opened (no logs folder) skips the line.
+type appendWriter struct{ path string }
+
+func (w appendWriter) Write(p []byte) (int, error) {
+	f, err := os.OpenFile(w.path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return len(p), nil
+	}
+	defer f.Close()
+	f.Write(p)
+	return len(p), nil
+}
+
+// supervisor is the product without --worker (spec 4): the process the scheduled task starts. After the
+// check of the place it runs this exe with --worker and starts it again after a failure. It opens no pipe,
+// starts no core and neither makes nor rotates helper.log: its lines are appended to the worker's log in
+// the same format, and without the logs folder they are skipped.
+func supervisor() int {
+	dataDir, err := productData()
+	if err != nil {
+		return exitInternal
+	}
+	if fi, err := os.Stat(dataDir); err != nil || !fi.IsDir() {
+		return exitNotInstalled
+	}
+	logger := log.New(appendWriter{filepath.Join(coreconfig.PathsFor(dataDir).LogsDir, "helper.log")}, "", log.LstdFlags|log.Lmicroseconds)
+	logf := func(format string, a ...any) { logger.Printf(format, a...) }
+	helperPath, err := executable()
+	if err != nil {
+		logf("supervisor: own path: %v", err)
+		return exitInternal
+	}
+	if _, _, code := productPlace(helperPath, dataDir, logf); code != exitOK {
+		return code
+	}
+	return supervise.Run(func() (supervise.Worker, error) {
+		return startWorker(helperPath, []string{"--worker"})
+	}, superviseClock, logf)
+}
+
+// procWorker is a worker process the supervisor waits for.
+type procWorker struct{ cmd *exec.Cmd }
+
+func (w procWorker) Wait() int {
+	w.cmd.Wait()
+	if w.cmd.ProcessState == nil {
+		return exitInternal
+	}
+	return w.cmd.ProcessState.ExitCode() // a crash code (NTSTATUS) comes as the unsigned number
+}
+
+// startWorkerProcess starts exe with args without a console window and with the standard streams on NUL.
+// There is no job object (spec 4).
+func startWorkerProcess(exe string, args []string) (supervise.Worker, error) {
+	cmd := exec.Command(exe, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return procWorker{cmd}, nil
 }
 
 // stateLine is the line of helper.log for a state the engine published: the phase, the code of its reason

@@ -43,6 +43,7 @@ type System interface {
 	SetExitNode(ip string, allowLAN bool) error
 	Kill(image string) []uint32                      // ends every process with this image name, returns their ids
 	KillChildren(parents []uint32, image string) int // ends the processes of image that one of parents started
+	Pids(image string) []uint32                      // the ids of the running processes with this image name, nothing ended
 	Count(image string) int                          // running processes with this image name
 	AdapterPresent() bool                            // the SplitLane adapter
 	Launch(command []string) error
@@ -226,7 +227,7 @@ func (g *Guard) noVPNPath(now time.Time) bool {
 	return now.Sub(g.noPathAt) >= noPathGrace
 }
 
-// command runs one command from cmd.json: kill-helper, launch-helper, finish.
+// command runs one command from cmd.json: kill-helper, kill-worker, kill-core, launch-helper, finish.
 func (g *Guard) command() string {
 	b, err := os.ReadFile(g.path("cmd.json"))
 	if err != nil {
@@ -247,6 +248,11 @@ func (g *Guard) command() string {
 	case "kill-helper":
 		n := len(g.Sys.Kill(HelperImage))
 		g.status("armed", map[string]any{"cmd_id": cmd.ID, "result": fmt.Sprintf("helper processes ended: %d", n)})
+	case "kill-worker":
+		// The product helper is a supervisor and its worker copy (spec 4): the worker is the helper whose
+		// parent is a helper. The supervisor stays and starts a new worker.
+		n := g.Sys.KillChildren(g.Sys.Pids(HelperImage), HelperImage)
+		g.status("armed", map[string]any{"cmd_id": cmd.ID, "result": fmt.Sprintf("worker processes ended: %d", n)})
 	case "kill-core":
 		// A crash of the core while the helper runs (spec 5.5, 12): the helper gives the exit node back and restarts.
 		n := len(g.Sys.Kill(CoreImage))

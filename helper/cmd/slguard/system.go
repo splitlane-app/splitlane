@@ -153,6 +153,8 @@ func terminate(ids []uint32) []uint32 {
 	return ended
 }
 
+func (s *winSystem) Pids(image string) []uint32 { return withImage(snapshot(), image) }
+
 func (s *winSystem) Count(image string) int { return len(withImage(snapshot(), image)) }
 
 func (s *winSystem) Kill(image string) []uint32 { return terminate(withImage(snapshot(), image)) }
