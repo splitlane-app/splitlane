@@ -106,6 +106,7 @@ type coreRun struct {
 	vpn      []byte
 	stopping bool // guarded by Engine.mu: the helper stops this core on purpose
 	cleared  bool // guarded by Engine.mu: this run has switched the system exit node off (step 6 of 5.3)
+	proxy    bool // the lane is a server of the proxy connector: no node, no login, no path (stage 3 part 1, section 5)
 
 	// The node of the core while it runs (spec 7, connector.go).
 	calls    sync.WaitGroup     // the calls of node under way; none begins once stopping is set
@@ -419,14 +420,17 @@ func (e *Engine) save() error {
 }
 
 // publish sends the state to the clients; e.mu must be held. tailscale.backend, authUrl and path come
-// from the connector (spec 7, 5.2). While the main core runs in a live phase: its node (expired once it
-// asked for a login again), no login link (the setup mode gives it), the path read last. Otherwise the
-// node of the setup core with its link, stopped when no core runs, and path null.
+// from the connector (spec 7, 5.2). While the main core of the Tailscale connector runs in a live phase:
+// its node (expired once it asked for a login again), no login link (the setup mode gives it), the path
+// read last. Otherwise the node of the setup core with its link, stopped when no core runs, and path null;
+// a core of the proxy connector has no node (stage 3 part 1, section 5): stopped, no link, path null.
 func (e *Engine) publish() {
 	e.syncSaved()
 	ts := &e.st.Tailscale
 	ts.Backend, ts.AuthURL, ts.Path = e.nodeBackend, nil, nil
-	if r := e.run; r != nil && live(e.st.Phase) {
+	switch r := e.run; {
+	case r != nil && live(e.st.Phase) && r.proxy:
+	case r != nil && live(e.st.Phase):
 		ts.Backend = protocol.BackendRunning
 		switch {
 		case r.expired:
@@ -438,7 +442,7 @@ func (e *Engine) publish() {
 			p := r.path
 			ts.Path = &p
 		}
-	} else if e.nodeAuthURL != "" {
+	case e.nodeAuthURL != "":
 		u := e.nodeAuthURL
 		ts.AuthURL = &u
 	}

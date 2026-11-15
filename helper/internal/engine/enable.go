@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"splitlane/helper/internal/connector"
 	"splitlane/helper/internal/protocol"
 	"splitlane/helper/internal/store"
 )
@@ -122,15 +123,22 @@ func (e *Engine) enable(ctx context.Context, unattended bool) *protocol.Reason {
 	return e.checkSwitch(ctx, r, directIP)
 }
 
-// preflight is step 1 of 5.3.
+// preflight is step 1 of 5.3. The connector decides the first checks (stage 3 part 1, section 4): the
+// Tailscale node is logged in and has an exit node, or a server is selected and parses (no_server).
 func (e *Engine) preflight(ctx context.Context, unattended bool) *protocol.Reason {
 	e.mu.Lock()
 	s := e.saved
+	var why *protocol.Reason
+	if connectorOf(s) == protocol.ConnectorProxy {
+		_, why = e.laneLocked()
+	}
 	e.mu.Unlock()
-	switch {
-	case !s.LoggedIn:
+	switch tailscale := connectorOf(s) == protocol.ConnectorTailscale; {
+	case why != nil:
+		return why
+	case tailscale && !s.LoggedIn:
 		return reason(protocol.ReasonNotLoggedIn)
-	case s.SelectedExitNode == "":
+	case tailscale && s.SelectedExitNode == "":
 		return reason(protocol.ReasonNoExitNode)
 	}
 	if !e.d.Host.HasDefaultRoute() {
@@ -194,14 +202,21 @@ func (e *Engine) startAndProve(ctx context.Context) (*coreRun, string, *protocol
 	}
 }
 
-// startCore is steps 3 and 4 of 5.3. retry is true when the core exited before its start line.
+// startCore is steps 3 and 4 of 5.3. retry is true when the core exited before its start line. The lane
+// is built from the saved connector (laneLocked); a core of the proxy connector has no API service of a
+// node and no login.
 func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, bool) {
 	e.mu.Lock()
 	s := e.saved
 	e.relayout = false // the core is built from the layout in memory
+	lane, why := e.laneLocked()
 	e.mu.Unlock()
+	if why != nil {
+		return nil, why, false
+	}
 	invalid := func(err error) (*coreRun, *protocol.Reason, bool) {
-		return nil, reason(protocol.ReasonConfigInvalid, protocol.ParamError, err.Error()), false
+		// The output of sing-box check may quote a server's secrets (stage 3 part 1, section 3).
+		return nil, reason(protocol.ReasonConfigInvalid, protocol.ParamError, connector.Mask(err.Error())), false
 	}
 	direct, vpn, err := e.d.Core.LaneFiles(s.Apps, e.d.Rules)
 	if err != nil {
@@ -220,10 +235,9 @@ func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, boo
 		direct:  direct,
 		vpn:     vpn,
 		backend: protocol.BackendRunning,
+		proxy:   lane.Proxy != nil,
 	}
 	clashSecret, apiSecret := e.d.Host.Secret(), e.d.Host.Secret()
-	// Only the Tailscale lane for now; the proxy connector comes with protocol version 2.
-	lane := Lane{Tailscale: &TailscaleLane{Hostname: e.hostname(), ExitNode: s.SelectedExitNode}}
 	config, err := e.d.Core.BuildConfig(CoreOptions{
 		Mode: r.mode, HelperPath: e.d.Settings.HelperPath, TailscaleDir: e.d.Sys.Dir(), Lane: lane,
 		Ports: r.ports, ClashSecret: clashSecret, APISecret: apiSecret,
@@ -251,13 +265,16 @@ func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, boo
 	if err != nil {
 		return nil, reason(protocol.ReasonCoreStartTimeout, protocol.ParamError, err.Error()), false
 	}
-	r.proc, r.clash, r.node = proc, e.d.Core.Clash(r.ports.Clash, clashSecret), e.d.Core.Node(r.ports.API, apiSecret)
+	r.proc, r.clash = proc, e.d.Core.Clash(r.ports.Clash, clashSecret)
+	if !r.proxy {
+		r.node = e.d.Core.Node(r.ports.API, apiSecret) // nil for a proxy: nodeCall makes no call
+	}
 	r.callsEnd, r.endCalls = context.WithCancel(context.Background())
 	e.attach(r)
 	deadline := e.d.Clock.Now().Add(startWait)
 	for {
 		ev := e.d.Core.Events(0)
-		if ev.NeedLogin {
+		if ev.NeedLogin && !r.proxy {
 			e.loginLost()
 			return r, reason(protocol.ReasonLoginExpired), false
 		}
@@ -314,7 +331,7 @@ func (e *Engine) proveTunnel(ctx context.Context, r *coreRun) (string, *protocol
 	deadline := began.Add(proveWait)
 	vpnSeen, directSeen := false, false
 	for {
-		if e.d.Core.Events(0).NeedLogin {
+		if !r.proxy && e.d.Core.Events(0).NeedLogin {
 			e.loginLost()
 			return "", reason(protocol.ReasonLoginExpired)
 		}

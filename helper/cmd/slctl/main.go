@@ -37,6 +37,9 @@ const usage = `usage: slctl [-pipe NAME] [-timeout 150s] [-show-addresses] [-url
   alldirect on|off               routing.allDirect, wait for the flag
   lanes FILE                     lanes.set with the params in FILE (JSON)
   exitnode IP                    tailscale.setExitNode
+  proxy add [-name NAME] TEXT|@FILE   proxy.add: links, a .conf or a subscription address; a .conf FILE is named after it
+  proxy refresh|remove|select ID      proxy.refresh, proxy.remove, proxy.select
+  proxy list                     the connector, the servers and the subscriptions
   clear-system-exit-node         systemTailscale.clearExitNode
   login [-timeout 300s]          tailscale.login, print the login link once, wait until logged in
   logout [-timeout 60s]          tailscale.logout, wait for backend needs_login
@@ -77,7 +80,7 @@ func exitCodeFor(err error) int {
 
 // pipeCommands are the commands that talk to the helper.
 var pipeCommands = []string{"state", "enable", "disable", "alldirect", "lanes", "exitnode", "clear-system-exit-node",
-	"login", "logout", "activity", "export", "shutdown", "call", "wait", "watch", "expect-lanes"}
+	"login", "logout", "activity", "export", "shutdown", "call", "wait", "watch", "expect-lanes", "proxy"}
 
 // A helper that was just started opens its pipe a moment later (its log, the SHA-256 of the core,
 // the engine). go-winio retries only a busy pipe, so slctl tries a missing one again itself.
@@ -219,7 +222,8 @@ func rulesText(rules []protocol.RuleRejection) string {
 }
 
 // summary is the state in one line, the connector at its end (spec 7: the backend, the path to the exit
-// node, the number of exit nodes). The login link is never part of it: slctl login prints it once.
+// node, the number of exit nodes; stage 3 part 1: the connector and the number of servers). The login link
+// is never part of it: slctl login prints it once.
 func summary(s protocol.State) string {
 	reason := "-"
 	if s.Reason != nil {
@@ -228,9 +232,10 @@ func summary(s protocol.State) string {
 			reason += fmt.Sprintf(" %s=%q", k, v)
 		}
 	}
-	return fmt.Sprintf("phase=%s reason=%s allDirect=%v defaultLane=%s apps=%d vpn=%s direct=%s systemExitNode=%v restoreOnDisable=%v backend=%s path=%s exitNodes=%d",
+	return fmt.Sprintf("phase=%s reason=%s allDirect=%v defaultLane=%s apps=%d vpn=%s direct=%s systemExitNode=%v restoreOnDisable=%v backend=%s path=%s exitNodes=%d connector=%s servers=%d",
 		s.Phase, reason, s.AllDirect, s.DefaultLane, len(s.Apps), str(s.Addresses.VPN), str(s.Addresses.Direct),
-		s.SystemTailscale.ExitNodeOn, s.SystemTailscale.RestoreOnDisable, s.Tailscale.Backend, str(s.Tailscale.Path), len(s.Tailscale.ExitNodes))
+		s.SystemTailscale.ExitNodeOn, s.SystemTailscale.RestoreOnDisable, s.Tailscale.Backend, str(s.Tailscale.Path), len(s.Tailscale.ExitNodes),
+		s.Connector, len(s.Proxy.Servers))
 }
 
 // activityLine is an activity event in one line (spec 8.4): the rates of both lanes as down/up in bytes
@@ -529,9 +534,99 @@ func command(c *client, cmd string, args []string, url string) int {
 		}
 	case "expect-lanes":
 		return expectLanes(c, args, url)
+	case "proxy":
+		return proxyCommand(c, args)
 	}
 	fmt.Fprintln(c.out, usage)
 	return exitUsage
+}
+
+// proxyCommand is slctl proxy (stage 3 part 1, for development): proxy.add with the text, or with @FILE
+// read here (a FILE ending in .conf gives its base name as the name unless -name names one, as the window
+// does), proxy.refresh, proxy.remove and proxy.select of an id, and list from state.get. The text is sent,
+// never printed: the answer of add and refresh is printed as the ids and the rejected lines with their codes.
+func proxyCommand(c *client, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(c.out, usage)
+		return exitUsage
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "add":
+		fs := flag.NewFlagSet("proxy add", flag.ContinueOnError)
+		fs.SetOutput(c.out)
+		name := fs.String("name", "", "the base name of the .conf the text comes from")
+		if fs.Parse(rest) != nil || fs.NArg() != 1 {
+			fmt.Fprintln(c.out, usage)
+			return exitUsage
+		}
+		text := fs.Arg(0)
+		if file, ok := strings.CutPrefix(text, "@"); ok {
+			b, err := os.ReadFile(file)
+			if err != nil {
+				c.print("SLCTL: %v", err)
+				return exitUsage
+			}
+			text = string(b)
+			if *name == "" && strings.EqualFold(filepath.Ext(file), ".conf") {
+				*name = filepath.Base(file)
+			}
+		}
+		return proxyResult(c, protocol.MethodProxyAdd, protocol.ProxyAddParams{Text: text, Name: *name})
+	case "refresh", "remove", "select":
+		if len(rest) != 1 {
+			fmt.Fprintln(c.out, usage)
+			return exitUsage
+		}
+		return proxyResult(c, "proxy."+sub, protocol.ProxyIDParams{ID: rest[0]})
+	case "list":
+		if len(rest) != 0 {
+			fmt.Fprintln(c.out, usage)
+			return exitUsage
+		}
+		s, err := c.fetchState()
+		if err != nil {
+			return c.fail(err)
+		}
+		p := s.Proxy
+		c.print("PROXY connector=%s selected=%s servers=%d subscriptions=%d", s.Connector, str(p.Selected), len(p.Servers), len(p.Subscriptions))
+		for _, v := range p.Servers {
+			mark := " "
+			if p.Selected != nil && *p.Selected == v.ID {
+				mark = "*"
+			}
+			c.print("SERVER %s %s %s %s %s", mark, v.ID, v.Protocol, v.Source, v.Name)
+		}
+		for _, v := range p.Subscriptions {
+			c.print("SUBSCRIPTION %s %s count=%d updated=%s error=%s", v.ID, v.Name, v.Count, v.UpdatedAt, str(v.Error))
+		}
+		return exitOK
+	}
+	fmt.Fprintln(c.out, usage)
+	return exitUsage
+}
+
+// proxyResult calls a proxy method; the answer of proxy.add and proxy.refresh is printed line by line.
+func proxyResult(c *client, method string, params any) int {
+	raw, perr, err := c.call(method, params)
+	switch {
+	case err != nil:
+		return c.fail(err)
+	case perr != nil:
+		return exitFailed // call printed its ERROR line
+	case method != protocol.MethodProxyAdd && method != protocol.MethodProxyRefresh:
+		return exitOK
+	}
+	var res protocol.ProxyAddResult
+	if json.Unmarshal(raw, &res) != nil {
+		c.print("SLCTL: the answer is not a proxy.add result")
+		return exitFailed
+	}
+	for _, r := range res.Rejected {
+		c.print("REJECTED line=%d code=%s", r.Line, r.Code)
+	}
+	c.print("SLCTL: added=%d rejected=%d more=%d", len(res.Added), len(res.Rejected), res.RejectedMore)
+	return exitOK
 }
 
 // nodeTimeouts: login waits for the user in the browser; logout for the setup core and the core's call.

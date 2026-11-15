@@ -119,6 +119,13 @@ type fakeHelper struct {
 	activity *protocol.Activity                 // the live activity (spec 8.4); nil: no core with the adapter runs
 	details  map[string]protocol.ActivityDetail // the detail of each group key
 	archive  string                             // the path diagnostics.export answers with; "": it fails
+	params   map[string]string                  // the params of the last call of each method
+}
+
+func (f *fakeHelper) paramsOf(method string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.params[method]
 }
 
 // Activity is the engine's summary for the pipe's activity events: the detail of detailFor when it has one.
@@ -148,7 +155,19 @@ func (f *fakeHelper) Handle(ctx context.Context, method string, params json.RawM
 		<-f.release
 		return nil, protocol.Errorf(protocol.CodeInternal, "too late")
 	}
+	f.mu.Lock()
+	if f.params == nil {
+		f.params = map[string]string{}
+	}
+	f.params[method] = string(params)
+	f.mu.Unlock()
 	switch method {
+	case protocol.MethodProxyAdd:
+		return protocol.ProxyAddResult{Added: []string{"00112233445566aa"}, Rejected: []protocol.ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3}, nil
+	case protocol.MethodProxyRefresh:
+		return nil, protocol.Errorf("fetch_timeout", "subscription not refreshed: fetch_timeout")
+	case protocol.MethodProxyRemove, protocol.MethodProxySelect:
+		return struct{}{}, nil
 	case protocol.MethodStateGet:
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -360,12 +379,13 @@ func TestStateIsMasked(t *testing.T) {
 }
 
 // The summary line of state, enable, wait and disable ends with the connector, which tasks 15-17 read:
-// the backend, the path to the exit node or null, the number of exit nodes. The login link never goes
-// there: slctl login prints it once, to the user's console.
+// the backend, the path to the exit node or null, the number of exit nodes; then the connector of stage 3
+// and the number of its servers. The login link never goes there: slctl login prints it once, to the
+// user's console.
 func TestSummaryShowsTheConnector(t *testing.T) {
 	link, path := "https://login.example/a/1f2e3d", protocol.PathRelay
 	name := testPipeName()
-	srv, err := serveState(name, protocol.State{Phase: protocol.PhaseOn, Apps: []protocol.AppRule{},
+	srv, err := serveState(name, protocol.State{Phase: protocol.PhaseOn, Apps: []protocol.AppRule{}, Connector: protocol.ConnectorTailscale,
 		Tailscale: protocol.Tailscale{Backend: protocol.BackendRunning, AuthURL: &link, Path: &path,
 			ExitNodes: []protocol.ExitNode{{ID: "100.64.0.1", Name: "exit-a", Online: true}, {ID: "100.64.0.2", Name: "exit-b"}}}})
 	if err != nil {
@@ -377,10 +397,11 @@ func TestSummaryShowsTheConnector(t *testing.T) {
 		t.Fatalf("%d\n%s", code, out.String())
 	}
 	_, line, _ := strings.Cut(out.String(), "SLCTL: ")
-	if !strings.HasSuffix(line, " restoreOnDisable=false backend=running path=relay exitNodes=2\n") || strings.Contains(line, link) {
+	if !strings.HasSuffix(line, " restoreOnDisable=false backend=running path=relay exitNodes=2 connector=tailscale servers=0\n") || strings.Contains(line, link) {
 		t.Fatalf("output:\n%s", out.String())
 	}
-	if got := summary(protocol.State{Tailscale: protocol.Tailscale{Backend: protocol.BackendExpired}}); !strings.HasSuffix(got, " backend=expired path=null exitNodes=0") {
+	if got := summary(protocol.State{Connector: protocol.ConnectorProxy, Tailscale: protocol.Tailscale{Backend: protocol.BackendExpired},
+		Proxy: protocol.Proxy{Servers: []protocol.ProxyServer{{ID: "0123456789abcdef"}}}}); !strings.HasSuffix(got, " backend=expired path=null exitNodes=0 connector=proxy servers=1") {
 		t.Fatalf("summary %q", got)
 	}
 }
@@ -759,6 +780,89 @@ func TestSeedAndResetDevRefuseEverySpelling(t *testing.T) {
 		}
 		if _, err := os.Stat(product); err == nil {
 			t.Fatalf("%q: something was written into the product folder", dir)
+		}
+	}
+}
+
+// write puts text into path and returns path.
+func write(t *testing.T, path, text string) string {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// slctl proxy (stage 3 part 1, for development): proxy.add with the text or @FILE (a .conf gives its base
+// name as the name, -name another), refresh, remove, select and list. The text of a server never comes
+// back in the output; the answer shows the ids and the rejected lines with their codes.
+func TestProxyCommands(t *testing.T) {
+	sel, failed := "0123456789abcdef", "fetch_timeout"
+	f := &fakeHelper{st: protocol.State{Phase: protocol.PhaseOff, Apps: []protocol.AppRule{}, Connector: protocol.ConnectorProxy,
+		Proxy: protocol.Proxy{
+			Servers: []protocol.ProxyServer{{ID: sel, Name: "Reality", Protocol: "vless", Source: "sub-00112233445566ff"},
+				{ID: "fedcba9876543210", Name: "home", Protocol: "wireguard", Source: "file"}},
+			Selected: &sel,
+			Subscriptions: []protocol.Subscription{{ID: "sub-00112233445566ff", Name: "sub.example.com", UpdatedAt: "2026-11-16T12:00:00Z",
+				Count: 1, Error: &failed}}}}}
+	name := testPipeName()
+	srv, err := serveHelper(name, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Close)
+	slctl := func(args ...string) (int, string) {
+		var out strings.Builder
+		code := run(append([]string{"-pipe", name}, args...), &out)
+		return code, out.String()
+	}
+	const link = "trojan://hunter2secretpass@example.com:443#T"
+	code, out := slctl("proxy", "add", link)
+	if code != exitOK || !strings.Contains(out, "SLCTL: added=1 rejected=1 more=3\n") || !strings.Contains(out, "REJECTED line=2 code=bad_link\n") ||
+		strings.Contains(out, "hunter2secretpass") {
+		t.Fatalf("add: %d\n%s", code, out)
+	}
+	if got := f.paramsOf(protocol.MethodProxyAdd); got != `{"text":"`+link+`"}` {
+		t.Fatalf("add params %s", got)
+	}
+	dir := t.TempDir()
+	conf := write(t, filepath.Join(dir, "home.conf"), "[Interface]\nPrivateKey = x\n")
+	if code, out := slctl("proxy", "add", "@"+conf); code != exitOK {
+		t.Fatalf("add @FILE: %d\n%s", code, out)
+	}
+	if got := f.paramsOf(protocol.MethodProxyAdd); got != `{"text":"[Interface]\nPrivateKey = x\n","name":"home.conf"}` {
+		t.Fatalf("add @FILE params %s", got)
+	}
+	links := write(t, filepath.Join(dir, "links.txt"), link+"\n")
+	if code, _ := slctl("proxy", "add", "-name", "work.conf", "@"+links); code != exitOK || f.paramsOf(protocol.MethodProxyAdd) != `{"text":"`+link+`\n","name":"work.conf"}` {
+		t.Fatalf("add -name: %d %s", code, f.paramsOf(protocol.MethodProxyAdd))
+	}
+	if code, out := slctl("proxy", "refresh", "sub-00112233445566ff"); code != exitFailed || !strings.Contains(out, "ERROR fetch_timeout") {
+		t.Fatalf("refresh: %d\n%s", code, out)
+	}
+	for _, cmd := range []string{"remove", "select"} {
+		if code, out := slctl("proxy", cmd, sel); code != exitOK || f.paramsOf("proxy."+cmd) != `{"id":"`+sel+`"}` {
+			t.Fatalf("%s: %d\n%s", cmd, code, out)
+		}
+	}
+	code, out = slctl("proxy", "list")
+	for _, want := range []string{
+		"PROXY connector=proxy selected=" + sel + " servers=2 subscriptions=1\n",
+		"SERVER * " + sel + " vless sub-00112233445566ff Reality\n",
+		"SERVER   fedcba9876543210 wireguard file home\n",
+		"SUBSCRIPTION sub-00112233445566ff sub.example.com count=1 updated=2026-11-16T12:00:00Z error=fetch_timeout\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list lacks %q", want)
+		}
+	}
+	if code != exitOK || t.Failed() {
+		t.Fatalf("list: %d\n%s", code, out)
+	}
+	for _, args := range [][]string{{"proxy"}, {"proxy", "bogus"}, {"proxy", "select"}, {"proxy", "add"}, {"proxy", "list", "x"},
+		{"proxy", "add", "@" + filepath.Join(dir, "missing.conf")}} {
+		if code, out := slctl(args...); code != exitUsage {
+			t.Errorf("%v: %d\n%s", args, code, out)
 		}
 	}
 }

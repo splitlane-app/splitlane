@@ -101,6 +101,44 @@ func (e *Engine) syncProxy() {
 	e.st.Proxy = p
 }
 
+// laneLocked is the connector of the VPN lane for a core built now from the saved state (stage 3 part 1,
+// section 5): the embedded Tailscale node with the selected exit node, or the selected server parsed again
+// from its text in servers.json (the parser is the one source of truth). For the proxy connector a server
+// that is not selected, not in servers.json, does not parse, or a servers.json that cannot be read is
+// no_server; the log says which, never with the text. e.mu must be held.
+func (e *Engine) laneLocked() (Lane, *protocol.Reason) {
+	if connectorOf(e.saved) != protocol.ConnectorProxy {
+		return Lane{Tailscale: &TailscaleLane{Hostname: e.hostname(), ExitNode: e.saved.SelectedExitNode}}, nil
+	}
+	if err := e.serversReadyLocked(); err != nil {
+		e.d.Log("no server for the VPN lane: servers.json cannot be read")
+		return Lane{}, reason(protocol.ReasonNoServer)
+	}
+	st := e.serverLocked(e.saved.SelectedServer)
+	if st == nil {
+		e.d.Log("no server for the VPN lane: none is selected")
+		return Lane{}, reason(protocol.ReasonNoServer)
+	}
+	s, err := parseStored(*st)
+	if err != nil {
+		e.d.Log("no server for the VPN lane: the selected server %s does not parse: %s", st.ID, connector.Mask(err.Error()))
+		return Lane{}, reason(protocol.ReasonNoServer)
+	}
+	return Lane{Proxy: &s}, nil
+}
+
+// parseStored parses the saved text of a server again: one link, or a .conf named as when it was added.
+func parseStored(st store.StoredServer) (connector.Server, error) {
+	servers, rejected, address := connector.ParseText(st.Text, st.Name)
+	switch {
+	case len(rejected) > 0:
+		return connector.Server{}, &rejected[0]
+	case address != "" || len(servers) != 1:
+		return connector.Server{}, errors.New("the text is not one server")
+	}
+	return servers[0], nil
+}
+
 // serversReadyLocked reads servers.json again when it could not be read before (load): until it reads, the
 // proxy commands are apply_failed and nothing is written over it. e.mu must be held.
 func (e *Engine) serversReadyLocked() *protocol.Error {

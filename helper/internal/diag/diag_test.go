@@ -131,6 +131,38 @@ func TestBuildRedactsLoginLinks(t *testing.T) {
 	}
 }
 
+// Stage 3 part 1, section 3: the logs of the core (the main core's and the setup core's, with their .prev)
+// may quote a server or a subscription address in an error; they go into the archive masked
+// (connector.Mask). The helper's own log is masked where it is written, and goes in as it is.
+func TestBuildMasksTheCoreLogs(t *testing.T) {
+	dir := t.TempDir()
+	const uuid, token = "3f1b2c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "s3cr3tT0ken1234567890abcdef"
+	line := "ERROR outbound/vless[vpn]: dial vless://" + uuid + "@192.0.2.10:443?security=reality#x: " +
+		"fetch https://sub.example.com/api?token=" + token + " failed\n"
+	logs := []string{
+		write(t, filepath.Join(dir, "logs", "core.log"), line),
+		write(t, filepath.Join(dir, "logs", "core.log.prev"), line),
+		write(t, filepath.Join(dir, "logs", "core-setup.log"), line),
+		write(t, filepath.Join(dir, "logs", "core-setup.log.prev"), line),
+		write(t, filepath.Join(dir, "logs", "helper.log"), `state: {"path":"/ws","note":"kept"}`+"\n"),
+	}
+	zipPath := filepath.Join(dir, "export", "m.zip")
+	if err := Build(zipPath, Input{Logs: logs, State: []byte("{}\n")}); err != nil {
+		t.Fatal(err)
+	}
+	got := entries(t, zipPath)
+	for _, name := range []string{"core.log", "core.log.prev", "core-setup.log", "core-setup.log.prev"} {
+		text := got["logs/"+name]
+		if strings.Contains(text, uuid) || strings.Contains(text, token) || !strings.Contains(text, "192.0.2.10:443") ||
+			!strings.Contains(text, "sub.example.com") {
+			t.Errorf("%s:\n%s", name, text)
+		}
+	}
+	if got["logs/helper.log"] != `state: {"path":"/ws","note":"kept"}`+"\n" {
+		t.Errorf("helper.log:\n%s", got["logs/helper.log"])
+	}
+}
+
 // A log that is not there (a first run has no .prev) is left out of the archive and named in meta.txt.
 // meta.txt is one "key: value" line per key, sorted by key; state.json holds the bytes given.
 func TestBuildSkipsMissingLogs(t *testing.T) {

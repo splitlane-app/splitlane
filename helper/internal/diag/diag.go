@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"splitlane/helper/internal/atomicfile"
+	"splitlane/helper/internal/connector"
 	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/protocol"
 )
@@ -67,7 +68,11 @@ func Build(zipPath string, in Input) error {
 			missing = append(missing, name)
 			continue
 		}
-		if err := add(zw, "logs/"+name, redact(data), now); err != nil {
+		data = redact(data)
+		if coreLog(name) {
+			data = []byte(connector.Mask(string(data)))
+		}
+		if err := add(zw, "logs/"+name, data, now); err != nil {
 			return err
 		}
 	}
@@ -91,6 +96,16 @@ func Build(zipPath string, in Input) error {
 		return err
 	}
 	return atomicfile.Write(zipPath, buf.Bytes())
+}
+
+// coreLog tells the logs of the core (the main core's and the setup core's, and the ones of the run before)
+// by their base name. The core may quote a server's link or a subscription address in an error, so they go
+// into the archive through connector.Mask (stage 3 part 1, section 3). The helper's own log is masked where
+// it is written; Mask over all of it would also hide what is no secret there (the keys of JSON).
+func coreLog(name string) bool {
+	p := coreconfig.PathsFor("")
+	name = strings.TrimSuffix(name, ".prev")
+	return strings.EqualFold(name, filepath.Base(p.CoreLog)) || strings.EqualFold(name, filepath.Base(p.SetupLog))
 }
 
 func add(zw *zip.Writer, name string, data []byte, at time.Time) error {

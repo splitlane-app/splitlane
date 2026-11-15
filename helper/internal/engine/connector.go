@@ -85,12 +85,14 @@ func (e *Engine) cmdLogout(params json.RawMessage) *protocol.Error {
 	return nil
 }
 
-// windowCame: a window connected while none was (SetClients). With "logged in" saved the setup mode
-// starts, to show the state of the node and its exit nodes (spec 7); the system client is read at once
-// (5.6), not at the next of the 3 s rounds: the window's first state would say "no exit node" in off.
+// windowCame: a window connected while none was (SetClients). With "logged in" saved and the Tailscale
+// connector the setup mode starts, to show the state of the node and its exit nodes (spec 7); with the
+// proxy connector it does not (stage 3 part 1, section 5: tailscale.login still starts it on demand). The
+// system client is read at once (5.6), not at the next of the 3 s rounds: the window's first state would
+// say "no exit node" in off.
 func (e *Engine) windowCame() {
 	e.mu.Lock()
-	if e.clients.Load() > 0 && e.saved.LoggedIn {
+	if e.clients.Load() > 0 && e.saved.LoggedIn && connectorOf(e.saved) == protocol.ConnectorTailscale {
 		e.startSetupLocked()
 	}
 	e.mu.Unlock()
@@ -484,11 +486,12 @@ func (e *Engine) nodeCall(ctx context.Context, r *coreRun, kind string, call fun
 // login_expired, backend expired, "logged in" cleared in state.json. The core keeps running: the
 // programs of the VPN lane stay without a link and never go direct (5.5); names go through the
 // provider's DNS as in every degraded (vpnDown). An operation under way is left alone: the next look
-// finds the same, the log is read again from the same place.
+// finds the same, the log is read again from the same place. A core of the proxy connector has no node:
+// nothing is looked at (stage 3 part 1, section 5).
 func (e *Engine) checkNode(ctx context.Context) {
 	e.mu.Lock()
 	r := e.run
-	ok := r != nil && live(e.st.Phase) && e.op == nil && !e.exiting && !e.ending
+	ok := r != nil && !r.proxy && live(e.st.Phase) && e.op == nil && !e.exiting && !e.ending
 	var mark int64
 	if ok {
 		mark = r.logMark
@@ -529,11 +532,11 @@ func (e *Engine) checkNode(ctx context.Context) {
 
 // refreshNode is the look at the node of the main core every 60 s while it runs live (spec 7, 5.2): the
 // path to the selected exit node (readPath), then the exit nodes with their online flags, saved in
-// state.json and published when they changed.
+// state.json and published when they changed. Not for a core of the proxy connector: it has no node.
 func (e *Engine) refreshNode(ctx context.Context) {
 	e.mu.Lock()
 	r := e.run
-	ok := r != nil && live(e.st.Phase)
+	ok := r != nil && !r.proxy && live(e.st.Phase)
 	e.mu.Unlock()
 	if !ok {
 		return
@@ -556,11 +559,12 @@ func (e *Engine) refreshNode(ctx context.Context) {
 
 // readPath reads the path to the selected exit node now through the API service of the main core and
 // keeps it with the time it was read (tailscale.path, 5.2); a change is published. "" is an unknown
-// path (null): no pong, a failed call, or no main core running live.
+// path (null): no pong, a failed call, no main core running live, or one of the proxy connector, which
+// has no exit node of a tailnet (stage 3 part 1, section 5): no path then, and no restart for one.
 func (e *Engine) readPath(ctx context.Context) string {
 	e.mu.Lock()
 	r, exitNode := e.run, e.saved.SelectedExitNode
-	ok := r != nil && live(e.st.Phase)
+	ok := r != nil && !r.proxy && live(e.st.Phase)
 	e.mu.Unlock()
 	if !ok {
 		return ""
