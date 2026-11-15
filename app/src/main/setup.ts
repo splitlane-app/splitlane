@@ -49,7 +49,7 @@ export function parseSid(whoamiCsv: string): string {
   return sid
 }
 
-function checkPath(p: string): void {
+export function checkPath(p: string): void {
   if (/["']/.test(p)) throw new Error(`path must not contain quotes: ${p}`)
   if (!/^[A-Za-z]:\\/.test(p)) throw new Error(`path must be absolute: ${p}`)
   if (p.includes('%')) throw new Error(`path must not contain %: ${p}`)

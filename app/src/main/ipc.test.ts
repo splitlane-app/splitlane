@@ -302,7 +302,7 @@ function ipcHarness() {
     userCommand: vi.fn(),
     installHelper: vi.fn(async () => {}),
     appInfo: vi.fn(async () => ({ version: '0.2.0', installed: true })),
-    setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, ...p })),
+    setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, ...p })),
     installedPrograms: vi.fn(async () => []),
     pickProgram: vi.fn(async () => null),
     resolveDropped: vi.fn(async (paths: string[]) =>
@@ -382,7 +382,9 @@ test('registerIpc checks the sender and every argument from the page', async () 
   expect(await h.invoke(IPC.setSettings, { enableOnStart: true })).toEqual({
     openAtLogin: false,
     enableOnStart: true,
-    connectedOnce: false
+    connectedOnce: false,
+    checkUpdates: true,
+    pendingUpdate: null
   })
   await expect(h.invoke(IPC.setSettings, { enableOnStart: 1 })).rejects.toThrow()
   expect(h.d.setSettings).toHaveBeenCalledTimes(1)
