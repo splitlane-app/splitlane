@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"splitlane/helper/internal/connector"
 	"splitlane/helper/internal/protocol"
 	"splitlane/helper/internal/rules"
 	"splitlane/helper/internal/store"
@@ -56,13 +57,26 @@ type CoreOptions struct {
 	Mode         string // the core's mode at start, from CoreDriver.Mode (spec 6.3)
 	HelperPath   string // full path of splitlane-helper.exe (rule 6 of 6.2)
 	TailscaleDir string // install folder of the system Tailscale client (rule 5 of 6.2)
-	Hostname     string // <PC>-splitlane
-	ExitNode     string // IPv4 address of the exit node in the tailnet (spec 7)
+	Lane         Lane   // the connector of the VPN lane
 	Ports        Ports
 	ClashSecret  string
 	APISecret    string
 	DevPin       bool   // development only (Plan 1, safety rule 4)
 	LogLevel     string // the core's log level: "" is info (spec 6.1), debug only from Settings.CoreLogLevel
+}
+
+// Lane is the connector of the VPN lane of one run (spec of stage 3 part 1, section 5): exactly one
+// field is set, the driver refuses anything else. The driver renders it for its core; the lane is
+// always the core's outbound or endpoint of the lane vpn.
+type Lane struct {
+	Tailscale *TailscaleLane    // the embedded Tailscale node with an exit node
+	Proxy     *connector.Server // one server, parsed again from its saved text for this run
+}
+
+// TailscaleLane is the embedded Tailscale node of a run.
+type TailscaleLane struct {
+	Hostname string // <PC>-splitlane
+	ExitNode string // IPv4 address of the exit node in the tailnet (spec 7)
 }
 
 // CoreEvents is what the core's log says after a byte offset: the connector state (spec 5.3

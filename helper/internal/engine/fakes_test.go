@@ -305,6 +305,14 @@ func (c *fakeCore) options() CoreOptions {
 	return c.opts
 }
 
+// exitNode is the exit node of the last config, "" when its lane is not Tailscale.
+func (c *fakeCore) exitNode() string {
+	if t := c.options().Lane.Tailscale; t != nil {
+		return t.ExitNode
+	}
+	return ""
+}
+
 func (c *fakeCore) LaneFiles(apps []protocol.AppRule, env rules.Env) ([]byte, []byte, error) {
 	return rules.Files(apps, env)
 }

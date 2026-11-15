@@ -19,8 +19,7 @@ func testOptions(dataDir string) Options {
 		DataDir:      dataDir,
 		HelperPath:   `C:\Program Files\SplitLane\helper\splitlane-helper.exe`,
 		TailscaleDir: `C:\Program Files\Tailscale`,
-		Hostname:     "PC-splitlane",
-		ExitNode:     "100.64.0.1",
+		Lane:         Lane{Tailscale: &TailscaleLane{Hostname: "PC-splitlane", ExitNode: "100.64.0.1"}},
 		Ports:        Ports{ProbeVPN: 30001, ProbeDirect: 30002, Clash: 30003, API: 30004},
 		ClashSecret:  "0123456789abcdef0123456789abcdef",
 		APISecret:    "fedcba9876543210fedcba9876543210",
@@ -214,9 +213,9 @@ func TestLogLevel(t *testing.T) {
 func TestBuildRejectsBadOptions(t *testing.T) {
 	bad := []func(*Options){
 		func(o *Options) { o.Mode = "global" },
-		func(o *Options) { o.ExitNode = "exit-node-name" },
+		func(o *Options) { o.Lane.Tailscale.ExitNode = "exit-node-name" },
 		func(o *Options) { o.Ports.API = o.Ports.Clash },
-		func(o *Options) { o.Hostname = "" },
+		func(o *Options) { o.Lane.Tailscale.Hostname = "" },
 		func(o *Options) { o.ClashSecret = "short" },
 		func(o *Options) { o.HelperPath = "splitlane-helper.exe" },
 	}
@@ -229,8 +228,13 @@ func TestBuildRejectsBadOptions(t *testing.T) {
 	}
 }
 
-// TestCoreAcceptsConfigs runs `sing-box check` when SPLITLANE_CORE names sing-box.exe.
-// The check reads the config and the rule files only; it starts nothing.
+// goldenDataDir is the data folder of the goldens, as the configs write it.
+const goldenDataDir = "C:/ProgramData/SplitLane"
+
+// TestCoreAcceptsConfigs runs `sing-box check` when SPLITLANE_CORE names sing-box.exe: on the
+// Tailscale config of every mode, with and without the development pin, and on every golden of
+// testdata (Tailscale, setup and each proxy server) with its data folder moved to a temporary one
+// that holds the rule files. The check reads the config and the rule files only; it starts nothing.
 func TestCoreAcceptsConfigs(t *testing.T) {
 	core := os.Getenv("SPLITLANE_CORE")
 	if core == "" {
@@ -275,4 +279,29 @@ func TestCoreAcceptsConfigs(t *testing.T) {
 			}
 		}
 	}
+	goldens, err := filepath.Glob(filepath.Join("testdata", "*.golden.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(goldens) < 2+minProxyGoldens {
+		t.Fatalf("only %d goldens: %v", len(goldens), goldens)
+	}
+	for _, g := range goldens {
+		b, err := os.ReadFile(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(b, []byte(goldenDataDir)) {
+			t.Fatalf("%s does not name the data folder %s", g, goldenDataDir)
+		}
+		b = bytes.ReplaceAll(b, []byte(goldenDataDir), []byte(filepath.ToSlash(dir)))
+		if err := os.WriteFile(paths.Config, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(core, "check", "-c", paths.Config, "-D", dir).CombinedOutput()
+		if err != nil {
+			t.Errorf("%s: sing-box check: %v\n%s", g, err, out)
+		}
+	}
+	t.Logf("sing-box check accepted %d goldens and the Tailscale config of %d modes", len(goldens), len(Modes))
 }

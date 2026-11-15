@@ -222,9 +222,11 @@ func (e *Engine) startCore(ctx context.Context) (*coreRun, *protocol.Reason, boo
 		backend: protocol.BackendRunning,
 	}
 	clashSecret, apiSecret := e.d.Host.Secret(), e.d.Host.Secret()
+	// Only the Tailscale lane for now; the proxy connector comes with protocol version 2.
+	lane := Lane{Tailscale: &TailscaleLane{Hostname: e.hostname(), ExitNode: s.SelectedExitNode}}
 	config, err := e.d.Core.BuildConfig(CoreOptions{
-		Mode: r.mode, HelperPath: e.d.Settings.HelperPath, TailscaleDir: e.d.Sys.Dir(), Hostname: e.hostname(),
-		ExitNode: s.SelectedExitNode, Ports: r.ports, ClashSecret: clashSecret, APISecret: apiSecret,
+		Mode: r.mode, HelperPath: e.d.Settings.HelperPath, TailscaleDir: e.d.Sys.Dir(), Lane: lane,
+		Ports: r.ports, ClashSecret: clashSecret, APISecret: apiSecret,
 		DevPin: e.d.Settings.DevPin, LogLevel: e.d.Settings.CoreLogLevel,
 	})
 	if err != nil {

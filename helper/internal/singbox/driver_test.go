@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"splitlane/helper/internal/connector"
 	"splitlane/helper/internal/coreconfig"
 	"splitlane/helper/internal/engine"
 	"splitlane/helper/internal/rules"
@@ -326,18 +327,39 @@ func TestDriverSpeaksSingBox(t *testing.T) {
 	if ev := d.Events(mark); ev.Started || !ev.NeedLogin || !ev.ReloadFailed {
 		t.Fatalf("after the mark: %+v", ev)
 	}
-	config, err := d.BuildConfig(engine.CoreOptions{Mode: "vpn-localdns", HelperPath: `C:\SplitLane\splitlane-helper.exe`,
-		TailscaleDir: `C:\Program Files\Tailscale`, Hostname: "pc-splitlane", ExitNode: "100.64.0.1",
-		Ports:       engine.Ports{ProbeVPN: 40001, ProbeDirect: 40002, Clash: 40003, API: 40004},
-		ClashSecret: "0123456789abcdef", APISecret: "fedcba9876543210", LogLevel: "debug"})
+	o := engine.CoreOptions{Mode: "vpn-localdns", HelperPath: `C:\SplitLane\splitlane-helper.exe`,
+		TailscaleDir: `C:\Program Files\Tailscale`,
+		Lane:         engine.Lane{Tailscale: &engine.TailscaleLane{Hostname: "pc-splitlane", ExitNode: "100.64.0.1"}},
+		Ports:        engine.Ports{ProbeVPN: 40001, ProbeDirect: 40002, Clash: 40003, API: 40004},
+		ClashSecret:  "0123456789abcdef", APISecret: "fedcba9876543210", LogLevel: "debug"}
+	config, err := d.BuildConfig(o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"default_mode": "vpn-localdns"`, `"exit_node": "100.64.0.1"`, `"listen_port": 40002`, `"level": "debug"`,
+	for _, want := range []string{`"default_mode": "vpn-localdns"`, `"exit_node": "100.64.0.1"`, `"hostname": "pc-splitlane"`,
+		`"listen_port": 40002`, `"level": "debug"`,
 		`"output": "` + filepath.ToSlash(p.CoreLog) + `"`, `"path": "` + filepath.ToSlash(p.RulesDirect) + `"`} {
 		if !strings.Contains(string(config), want) {
 			t.Errorf("config lacks %s", want)
 		}
+	}
+	// A server lane: its outbound tagged vpn, no Tailscale endpoint and no API service.
+	server, err := connector.ParseLink("ss://2022-blake3-aes-128-gcm:QLsRSlv3rUWfM2zUNsBn5A%3D%3D@192.0.2.5:8443#ss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Lane = engine.Lane{Proxy: &server}
+	config, err = d.BuildConfig(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := string(config); !strings.Contains(s, `"type": "shadowsocks"`) || !strings.Contains(s, `"server": "192.0.2.5"`) ||
+		strings.Contains(s, `"type": "tailscale"`) || strings.Contains(s, `"services"`) {
+		t.Errorf("proxy config:\n%s", s)
+	}
+	o.Lane = engine.Lane{}
+	if _, err := d.BuildConfig(o); err == nil {
+		t.Error("a lane without a connector must be refused")
 	}
 	direct, vpn, err := d.LaneFiles(nil, rules.Env{})
 	if err != nil || !strings.Contains(string(direct), rules.Stub) || !strings.Contains(string(vpn), rules.Stub) {

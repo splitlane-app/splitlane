@@ -1,0 +1,223 @@
+{
+  "dns": {
+    "final": "dns-vpn",
+    "reverse_mapping": true,
+    "rules": [
+      {
+        "action": "route",
+        "clash_mode": "vpn-localdns",
+        "server": "dns-local"
+      },
+      {
+        "action": "route",
+        "clash_mode": "direct-localdns",
+        "server": "dns-local"
+      },
+      {
+        "action": "route",
+        "clash_mode": "alldirect",
+        "server": "dns-local"
+      }
+    ],
+    "servers": [
+      {
+        "tag": "dns-local",
+        "type": "local"
+      },
+      {
+        "detour": "vpn",
+        "server": "1.1.1.1",
+        "tag": "dns-vpn",
+        "type": "https"
+      }
+    ],
+    "strategy": "ipv4_only"
+  },
+  "endpoints": [
+    {
+      "address": [
+        "10.8.0.2/32",
+        "fd00:8::2/128"
+      ],
+      "mtu": 1420,
+      "peers": [
+        {
+          "address": "vpn.example.com",
+          "allowed_ips": [
+            "0.0.0.0/0",
+            "::/0"
+          ],
+          "persistent_keepalive_interval": 25,
+          "port": 51820,
+          "pre_shared_key": "G7sxQw6Upoi06QWKlQg49YeU7FjgUsa0xJx95nCpBDk=",
+          "public_key": "ZcQzkt7Yzwta15biT7QDOx+0JlXlF1K5Mnq0qUyDgLY="
+        }
+      ],
+      "private_key": "lhw1Rezx8+44v1b7GrtW7HxgVikNwpLsRNzZk0ZbBXA=",
+      "tag": "vpn",
+      "type": "wireguard"
+    }
+  ],
+  "experimental": {
+    "clash_api": {
+      "access_control_allow_origin": [
+        "http://127.0.0.1"
+      ],
+      "access_control_allow_private_network": false,
+      "default_mode": "vpn",
+      "external_controller": "127.0.0.1:30003",
+      "secret": "0123456789abcdef0123456789abcdef"
+    }
+  },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 30001,
+      "tag": "probe-vpn",
+      "type": "mixed"
+    },
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 30002,
+      "tag": "probe-direct",
+      "type": "mixed"
+    },
+    {
+      "address": [
+        "172.19.0.1/30",
+        "fdfe:dcba:9876::1/126"
+      ],
+      "auto_route": true,
+      "interface_name": "SplitLane",
+      "route_exclude_address": [
+        "100.64.0.0/10",
+        "fd7a:115c:a1e0::/48"
+      ],
+      "stack": "gvisor",
+      "strict_route": true,
+      "tag": "tun-in",
+      "type": "tun"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "output": "C:/ProgramData/SplitLane/logs/core.log",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "domain_resolver": "dns-local",
+      "tag": "direct",
+      "type": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "dns-local",
+    "final": "vpn",
+    "find_process": true,
+    "rule_set": [
+      {
+        "format": "source",
+        "path": "C:/ProgramData/SplitLane/rules/lane-direct.json",
+        "tag": "lane-direct",
+        "type": "local"
+      },
+      {
+        "format": "source",
+        "path": "C:/ProgramData/SplitLane/rules/lane-vpn.json",
+        "tag": "lane-vpn",
+        "type": "local"
+      }
+    ],
+    "rules": [
+      {
+        "action": "reject",
+        "ip_version": 6
+      },
+      {
+        "action": "route",
+        "inbound": [
+          "probe-vpn"
+        ],
+        "outbound": "vpn"
+      },
+      {
+        "action": "route",
+        "inbound": [
+          "probe-direct"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "action": "hijack-dns",
+        "port": 53
+      },
+      {
+        "action": "reject",
+        "ip_cidr": [
+          "172.19.0.0/30"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_path_regex": [
+          "(?i)^C:\\\\Program Files\\\\Tailscale\\\\tailscaled\\.exe$",
+          "(?i)^C:\\\\Program Files\\\\Tailscale\\\\tailscale-ipn\\.exe$"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "vpn",
+        "process_path_regex": [
+          "(?i)^C:\\\\Program Files\\\\SplitLane\\\\helper\\\\splitlane-helper\\.exe$"
+        ]
+      },
+      {
+        "action": "route",
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "action": "route",
+        "clash_mode": "alldirect",
+        "outbound": "direct"
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "rule_set": [
+          "lane-direct"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "vpn",
+        "rule_set": [
+          "lane-vpn"
+        ]
+      },
+      {
+        "action": "route",
+        "clash_mode": "direct",
+        "outbound": "direct"
+      },
+      {
+        "action": "route",
+        "clash_mode": "direct-localdns",
+        "outbound": "direct"
+      },
+      {
+        "action": "route",
+        "clash_mode": "vpn",
+        "outbound": "vpn"
+      },
+      {
+        "action": "route",
+        "clash_mode": "vpn-localdns",
+        "outbound": "vpn"
+      }
+    ]
+  }
+}

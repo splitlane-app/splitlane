@@ -389,7 +389,7 @@ func TestSetExitNode(t *testing.T) {
 	h.waitFor("second core on", func() bool {
 		return h.rec.count("core:start") == 2 && h.e.State().Phase == protocol.PhaseOn && h.idle()
 	})
-	if h.core.options().ExitNode != "100.64.0.5" {
+	if h.core.exitNode() != "100.64.0.5" {
 		t.Fatal("the new core must use the new exit node")
 	}
 	if h.rec.index("sys:set 100.64.0.1 true") < 0 {

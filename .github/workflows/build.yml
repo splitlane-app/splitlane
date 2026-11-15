@@ -73,8 +73,11 @@ jobs:
         working-directory: helper
         run: go vet ./...
 
+      # SPLITLANE_CORE: the configs of every golden pass `sing-box check` of the real core (check only).
       - name: go test
         working-directory: helper
+        env:
+          SPLITLANE_CORE: ${{ github.workspace }}\.cache\core\sing-box-1.14.4-windows-amd64\sing-box.exe
         run: go test ./...
 
       - name: Build the installer

@@ -77,9 +77,20 @@ func (d *Driver) environ() ([]string, error) {
 func (d *Driver) BuildConfig(o engine.CoreOptions) ([]byte, error) {
 	return coreconfig.Build(coreconfig.Options{
 		Mode: o.Mode, DataDir: d.DataDir, HelperPath: o.HelperPath, TailscaleDir: o.TailscaleDir,
-		Hostname: o.Hostname, ExitNode: o.ExitNode, Ports: coreconfig.Ports(o.Ports),
+		Lane: lane(o.Lane), Ports: coreconfig.Ports(o.Ports),
 		ClashSecret: o.ClashSecret, APISecret: o.APISecret, DevPin: o.DevPin, LogLevel: o.LogLevel,
 	})
+}
+
+// lane is the engine's lane for coreconfig, field by field; coreconfig refuses a lane with no
+// connector or two.
+func lane(l engine.Lane) coreconfig.Lane {
+	out := coreconfig.Lane{Proxy: l.Proxy}
+	if l.Tailscale != nil {
+		t := coreconfig.TailscaleLane(*l.Tailscale)
+		out.Tailscale = &t
+	}
+	return out
 }
 
 // LaneFiles are the rule-set files (format 3) of both lanes (6.5, 8.2).

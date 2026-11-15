@@ -5,7 +5,6 @@ package coreconfig
 import (
 	"encoding/json"
 	"fmt"
-	"net/netip"
 	"path/filepath"
 
 	"splitlane/helper/internal/rules"
@@ -86,8 +85,7 @@ type Options struct {
 	DataDir      string // %ProgramData%\SplitLane or the development data folder
 	HelperPath   string // full path of splitlane-helper.exe (rule 6)
 	TailscaleDir string // install folder of the system Tailscale client (rule 5)
-	Hostname     string // <PC>-splitlane
-	ExitNode     string // IPv4 address of the exit node in the tailnet (spec 7)
+	Lane         Lane   // the connector of the VPN lane: the embedded Tailscale node or one server
 	Ports        Ports
 	ClashSecret  string
 	APISecret    string
@@ -151,7 +149,8 @@ func route(outbound string, match obj) obj {
 	return match
 }
 
-// rejectNodeInbound is rule 0 of spec 6.2, first in both configs. The embedded node hands the
+// rejectNodeInbound is rule 0 of spec 6.2, first in both configs of the Tailscale lane (for a
+// WireGuard endpoint see wireGuardNodeRule; a proxy outbound has no such flows). The embedded node hands the
 // router every flow that a tailnet peer opens to the node's own address, with the inbound TagVPN
 // and the destination rewritten to 127.0.0.1 (sing-box 1.14.4, protocol/tailscale/endpoint.go,
 // NewConnectionEx and NewPacketConnectionEx); routed, it would reach the PC's localhost-only
@@ -162,7 +161,9 @@ func rejectNodeInbound() obj {
 	return obj{"inbound": []string{TagVPN}, "action": "reject"}
 }
 
-// Build returns the config as indented JSON (UTF-8 without BOM, keys sorted).
+// Build returns the config as indented JSON (UTF-8 without BOM, keys sorted). The lane decides the
+// outbound or endpoint tagged vpn, rule 0 and the API service (vpnLane); the rest is the same for
+// every connector (spec of stage 3 part 1, section 5).
 func Build(o Options) ([]byte, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
@@ -172,12 +173,19 @@ func Build(o Options) ([]byte, error) {
 		return nil, err
 	}
 	p := PathsFor(o.DataDir)
+	laneOutbounds, laneEndpoints, nodeRule, api, err := vpnLane(o.Lane, p)
+	if err != nil {
+		return nil, err
+	}
 	tsDir := o.TailscaleDir
 	if tsDir == "" {
 		tsDir = `C:\Program Files\Tailscale`
 	}
-	routeRules := []any{
-		rejectNodeInbound(),
+	var routeRules []any
+	if nodeRule {
+		routeRules = append(routeRules, rejectNodeInbound())
+	}
+	routeRules = append(routeRules,
 		obj{"ip_version": 6, "action": "reject"},
 		route(TagVPN, obj{"inbound": []string{TagProbeVPN}}),
 		route(TagDirect, obj{"inbound": []string{TagProbeDirect}}),
@@ -189,7 +197,7 @@ func Build(o Options) ([]byte, error) {
 		}}),
 		route(TagVPN, obj{"process_path_regex": []string{rules.BuiltinExpression(o.HelperPath)}}),
 		route(TagDirect, obj{"ip_is_private": true}),
-	}
+	)
 	if o.DevPin {
 		routeRules = append(routeRules,
 			route(TagVPN, obj{"process_name": DevPinProcesses}),
@@ -206,6 +214,10 @@ func Build(o Options) ([]byte, error) {
 	)
 	localDNS := func(mode string) obj {
 		return obj{"clash_mode": mode, "action": "route", "server": "dns-local"}
+	}
+	outbounds := []any{obj{"type": "direct", "tag": TagDirect, "domain_resolver": "dns-local"}}
+	for _, l := range laneOutbounds {
+		outbounds = append(outbounds, l)
 	}
 	config := obj{
 		// a log written to a file carries no color codes (spec 6.1)
@@ -234,14 +246,7 @@ func Build(o Options) ([]byte, error) {
 				"stack":                 "gvisor",
 			},
 		},
-		"endpoints": []any{obj{
-			"type":            "tailscale",
-			"tag":             TagVPN,
-			"state_directory": filepath.ToSlash(p.StateDir),
-			"hostname":        o.Hostname,
-			"exit_node":       o.ExitNode,
-		}},
-		"outbounds": []any{obj{"type": "direct", "tag": TagDirect, "domain_resolver": "dns-local"}},
+		"outbounds": outbounds,
 		"route": obj{
 			"rules": routeRules,
 			"rule_set": []any{
@@ -253,9 +258,6 @@ func Build(o Options) ([]byte, error) {
 			"find_process":            true,
 			"default_domain_resolver": "dns-local",
 		},
-		"services": []any{obj{
-			"type": "api", "tag": "api", "listen": "127.0.0.1", "listen_port": o.Ports.API, "secret": o.APISecret,
-		}},
 		"experimental": obj{"clash_api": obj{
 			"external_controller":                  fmt.Sprintf("127.0.0.1:%d", o.Ports.Clash),
 			"secret":                               o.ClashSecret,
@@ -263,6 +265,18 @@ func Build(o Options) ([]byte, error) {
 			"access_control_allow_origin":          []string{"http://127.0.0.1"},
 			"access_control_allow_private_network": false,
 		}},
+	}
+	if len(laneEndpoints) > 0 {
+		endpoints := []any{}
+		for _, e := range laneEndpoints {
+			endpoints = append(endpoints, e)
+		}
+		config["endpoints"] = endpoints
+	}
+	if api {
+		config["services"] = []any{obj{
+			"type": "api", "tag": "api", "listen": "127.0.0.1", "listen_port": o.Ports.API, "secret": o.APISecret,
+		}}
 	}
 	b, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -279,8 +293,8 @@ func (o Options) validate() error {
 	if !known {
 		return fmt.Errorf("coreconfig: unknown mode %q", o.Mode)
 	}
-	if addr, err := netip.ParseAddr(o.ExitNode); err != nil || !addr.Is4() {
-		return fmt.Errorf("coreconfig: exit node must be an IPv4 address")
+	if err := o.Lane.check(); err != nil {
+		return err
 	}
 	seen := map[int]bool{}
 	for _, port := range []int{o.Ports.ProbeVPN, o.Ports.ProbeDirect, o.Ports.Clash, o.Ports.API} {
@@ -294,8 +308,6 @@ func (o Options) validate() error {
 		return fmt.Errorf("coreconfig: data folder must be an absolute path")
 	case o.HelperPath == "" || !filepath.IsAbs(o.HelperPath):
 		return fmt.Errorf("coreconfig: helper path must be an absolute path")
-	case o.Hostname == "":
-		return fmt.Errorf("coreconfig: hostname is empty")
 	case len(o.ClashSecret) < 16 || len(o.APISecret) < 16:
 		return fmt.Errorf("coreconfig: secrets must be at least 16 characters")
 	}

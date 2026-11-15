@@ -359,7 +359,7 @@ func TestLateStateReadWhileOnKeepsTheRunsChoices(t *testing.T) {
 	enableNow(h)
 	s := h.e.State()
 	if s.Tailscale.SelectedExitNode == nil || *s.Tailscale.SelectedExitNode != selected ||
-		h.core.options().ExitNode != selected || h.store.saved().SelectedExitNode != selected {
+		h.core.exitNode() != selected || h.store.saved().SelectedExitNode != selected {
 		t.Fatalf("the exit node the core runs with stays, in the state and in state.json: %q, saved %q",
 			strOf(s.Tailscale.SelectedExitNode), h.store.saved().SelectedExitNode)
 	}

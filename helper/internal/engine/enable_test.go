@@ -62,8 +62,9 @@ func TestEnableInOrder(t *testing.T) {
 	if !saved.WasOn || saved.Core == nil || saved.Core.PID != h.core.last().id.PID {
 		t.Fatalf("state.json %+v", saved)
 	}
-	if o := h.core.options(); o.Mode != "vpn" || o.ExitNode != exitNode || o.Ports != portsForTest() || o.DevPin {
-		t.Fatalf("config options %+v", o)
+	if o := h.core.options(); o.Mode != "vpn" || o.Ports != portsForTest() || o.DevPin || o.Lane.Proxy != nil ||
+		o.Lane.Tailscale == nil || *o.Lane.Tailscale != (TailscaleLane{Hostname: "PC-splitlane", ExitNode: exitNode}) {
+		t.Fatalf("config options %+v, lane %+v", o, o.Lane.Tailscale)
 	}
 	if got := strings.Join(h.phases(), ","); got != "starting,on" {
 		t.Fatalf("phases %s", got)
