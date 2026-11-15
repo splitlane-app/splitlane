@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { Command, Snapshot } from '../../shared/ipc'
 import type { HelperState } from '../../shared/protocol'
@@ -131,9 +131,11 @@ test('ConnectScreen lists exit nodes, online first, and chooses one', async () =
     <ConnectScreen />,
     servicesFor(bridge, withTs({ backend: 'running', exitNodes, selectedExitNode: null }))
   )
-  const names = screen.getAllByRole('button', { pressed: false }).map((b) => b.textContent)
-  expect(names).toEqual(['alpha', 'beta', 'zetaне в сети'])
-  fireEvent.click(screen.getByRole('button', { name: /zeta/ }))
+  const group = screen.getByRole('radiogroup', { name: 'Exit node' })
+  const radios = within(group).getAllByRole('radio') as HTMLInputElement[]
+  expect(radios.map((r) => r.closest('label')?.textContent)).toEqual(['alpha', 'beta', 'zetaне в сети'])
+  expect(radios.every((r) => !r.checked)).toBe(true)
+  fireEvent.click(screen.getByRole('radio', { name: /zeta/ }))
   await vi.waitFor(() => expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.5' }]))
 })
 
@@ -413,4 +415,122 @@ test('ConnectScreen has the language selector, which saves the setting', () => {
   renderWith(<ConnectScreen />, servicesFor(bridge, withTs({ backend: 'needs_login' })))
   fireEvent.change(screen.getByRole('combobox', { name: 'Язык' }), { target: { value: 'en' } })
   expect(setSettings).toHaveBeenLastCalledWith({ language: 'en' })
+})
+
+test('the back control is the first thing of «Подключение» and is not repeated at the bottom', () => {
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, withTs({}, { phase: 'off' }, true))
+  services.store.getState().showConnection(true)
+  renderWith(<ConnectionScreen />, services)
+  const back = screen.getAllByRole('button', { name: 'Назад к дорожкам' })
+  expect(back).toHaveLength(1)
+  expect(screen.getAllByRole('button')[0]).toBe(back[0])
+  const title = screen.getByRole('heading', { name: 'Подключение' })
+  expect(back[0]!.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(back[0]!.textContent).toBe('← Назад к дорожкам')
+  fireEvent.click(back[0]!)
+  expect(services.store.getState().ui.screen).toBe('board')
+
+  setLang('en')
+  cleanup()
+  renderWith(<ConnectionScreen />, services)
+  expect(screen.getByRole('button', { name: 'Back to lanes' }).textContent).toBe('← Back to lanes')
+})
+
+test('Esc closes «Подключение» unless a select or a listbox has the key', () => {
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, withTs({}, { phase: 'off' }, true))
+  services.store.getState().showConnection(true)
+  renderWith(<ConnectionScreen />, services)
+  fireEvent.keyDown(screen.getByRole('combobox', { name: 'Язык' }), { key: 'Escape' })
+  expect(services.store.getState().ui.screen).toBe('connection')
+  const box = document.createElement('div')
+  box.setAttribute('role', 'listbox')
+  document.body.append(box)
+  fireEvent.keyDown(box, { key: 'Escape' })
+  box.remove()
+  expect(services.store.getState().ui.screen).toBe('connection')
+  fireEvent.keyDown(screen.getByRole('heading', { name: 'Подключение' }), { key: 'Enter' })
+  expect(services.store.getState().ui.screen).toBe('connection')
+  fireEvent.keyDown(screen.getByRole('heading', { name: 'Подключение' }), { key: 'Escape' })
+  expect(services.store.getState().ui.screen).toBe('board')
+})
+
+test('Esc does nothing once «Подключение» is gone', () => {
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, withTs({}, { phase: 'off' }, true))
+  services.store.getState().showConnection(true)
+  const view = renderWith(<ConnectionScreen />, services)
+  view.unmount()
+  fireEvent.keyDown(document.body, { key: 'Escape' })
+  expect(services.store.getState().ui.screen).toBe('connection')
+})
+
+test('the exit node of «Подключение» is one radio group: the selected one checked, no duplicate row', async () => {
+  const { bridge, commands } = fakeBridge()
+  const exitNodes = [
+    { id: '100.64.0.2', name: 'node-a', online: true },
+    { id: '100.64.0.3', name: 'node-b', online: false }
+  ]
+  renderWith(
+    <ConnectionScreen />,
+    servicesFor(bridge, withTs({ exitNodes, selectedExitNode: '100.64.0.2' }, { phase: 'on' }, true))
+  )
+  expect(screen.queryByText('Выбранный exit node')).toBeNull()
+  const group = screen.getByRole('radiogroup', { name: 'Exit node' })
+  const [a, b] = within(group).getAllByRole('radio') as HTMLInputElement[]
+  expect(a!.checked).toBe(true)
+  expect(b!.checked).toBe(false)
+  expect(screen.getByText('не в сети')).toBeTruthy()
+  // the hint about the restart stays below the group while routing is live
+  const hint = screen.getByText('Смена exit node ненадолго перезапустит деление')
+  expect(group.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  fireEvent.click(b!)
+  await vi.waitFor(() => expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.3' }]))
+})
+
+test('«Подключение» shows the remembered name as the checked radio while the list is empty', () => {
+  const { bridge } = fakeBridge()
+  const base = withTs({ exitNodes: [], selectedExitNode: '100.64.0.2' }, { phase: 'off' }, true)
+  const named = { ...base, settings: { ...base.settings, lastExitNode: { id: '100.64.0.2', name: 'node-a' } } }
+  const services = servicesFor(bridge, named)
+  renderWith(<ConnectionScreen />, services)
+  expect((screen.getByRole('radio', { name: 'node-a' }) as HTMLInputElement).checked).toBe(true)
+  act(() => services.store.getState().setSnapshot(base))
+  expect((screen.getByRole('radio', { name: '100.64.0.2' }) as HTMLInputElement).checked).toBe(true)
+})
+
+test('«Подключение» offers the banner actions next to the update line', async () => {
+  const installUpdate = vi.fn(async () => {})
+  const cancelUpdate = vi.fn(async () => {})
+  const { bridge } = fakeBridge({ installUpdate, cancelUpdate })
+  const services = servicesFor(bridge, withTs({}, { phase: 'off' }, true))
+  renderWith(<ConnectionScreen />, services)
+  const show = (update: Snapshot['update']): void =>
+    act(() => services.store.getState().setSnapshot({ ...withTs({}, { phase: 'off' }, true), update }))
+  const click = async (name: string): Promise<void> => {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name }))
+    })
+  }
+
+  show({ kind: 'available', version: '1.2.0', notesUrl: NOTES, hidden: true })
+  const line = screen.getByText('Доступна версия 1.2.0').closest('[role="status"]') as HTMLElement
+  await act(async () => {
+    fireEvent.click(within(line).getByRole('button', { name: 'Обновить' }))
+  })
+  expect(installUpdate).toHaveBeenCalledTimes(1)
+
+  show({ kind: 'installRefused', version: '1.2.0', notesUrl: NOTES, reason: '', canRetry: true })
+  await click('Повторить')
+  expect(installUpdate).toHaveBeenCalledTimes(2)
+
+  show({ kind: 'downloading', version: '1.2.0', notesUrl: NOTES, percent: 4 })
+  await click('Отменить')
+  expect(cancelUpdate).toHaveBeenCalledTimes(1)
+
+  show({ kind: 'installRefused', version: '1.2.0', notesUrl: NOTES, reason: '', canRetry: false })
+  expect(screen.queryByRole('button', { name: 'Повторить' })).toBeNull()
+  show({ kind: 'upToDate' })
+  expect(screen.queryByRole('button', { name: 'Обновить' })).toBeNull()
 })

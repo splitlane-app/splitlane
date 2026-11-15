@@ -1,3 +1,4 @@
+import type { HelperState } from './protocol'
 import { isLanguageSetting, type LanguageSetting } from './i18n'
 import { parseVersion } from './update'
 
@@ -13,6 +14,16 @@ export interface WindowSettings {
   pendingUpdate: string | null
   /** The language of the window: one of the two, or the one of Windows. */
   language: LanguageSetting
+  /**
+   * The last name seen for the selected exit node. The embedded node lists the nodes only while it runs, so with
+   * routing off the pill would show the address; the page cannot patch this, the main process keeps it.
+   */
+  lastExitNode: LastExitNode | null
+}
+
+export interface LastExitNode {
+  id: string
+  name: string
 }
 
 export const DEFAULT_SETTINGS: WindowSettings = {
@@ -21,7 +32,8 @@ export const DEFAULT_SETTINGS: WindowSettings = {
   connectedOnce: false,
   checkUpdates: true,
   pendingUpdate: null,
-  language: 'system'
+  language: 'system',
+  lastExitNode: null
 }
 
 export function parseSettings(text: string): WindowSettings {
@@ -42,6 +54,26 @@ export function parseSettings(text: string): WindowSettings {
     connectedOnce: pick('connectedOnce'),
     checkUpdates: pick('checkUpdates'),
     pendingUpdate: typeof p === 'string' && parseVersion(p) !== null ? p : null,
-    language: isLanguageSetting(o.language) ? o.language : DEFAULT_SETTINGS.language
+    language: isLanguageSetting(o.language) ? o.language : DEFAULT_SETTINGS.language,
+    lastExitNode: parseLastExitNode(o.lastExitNode)
   }
+}
+
+function parseLastExitNode(x: unknown): LastExitNode | null {
+  if (typeof x !== 'object' || x === null || Array.isArray(x)) return null
+  const { id, name } = x as Record<string, unknown>
+  if (typeof id !== 'string' || id === '' || typeof name !== 'string' || name === '') return null
+  return { id, name }
+}
+
+/**
+ * The value of `lastExitNode` after this state: the selected node with a name in the list when it differs from
+ * `last`; null when there is nothing new to keep (no selection, the list is empty while routing is off, no name).
+ */
+export function rememberExitNode(last: LastExitNode | null, state: HelperState): LastExitNode | null {
+  const { selectedExitNode, exitNodes } = state.tailscale
+  const node = exitNodes.find((n) => n.id === selectedExitNode)
+  if (node === undefined || node.name === '') return null
+  if (last !== null && last.id === node.id && last.name === node.name) return null
+  return { id: node.id, name: node.name }
 }

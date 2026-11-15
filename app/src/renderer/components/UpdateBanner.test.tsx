@@ -57,10 +57,7 @@ test('UpdateBanner buttons call the bridge', async () => {
   await click('Повторить')
   expect(calls.at(-1)).toBe('install')
 
-  show({ kind: 'installed', version: '1.2.0' })
-  await click('Закрыть')
-  expect(calls.at(-1)).toBe('dismiss')
-  expect(calls).toHaveLength(6)
+  expect(calls).toHaveLength(5)
 
   // a result can be closed
   for (const u of [
@@ -72,7 +69,7 @@ test('UpdateBanner buttons call the bridge', async () => {
     await click('Закрыть')
     expect(calls.at(-1), u.kind).toBe('dismiss')
   }
-  expect(calls).toHaveLength(9)
+  expect(calls).toHaveLength(8)
 
   show({ kind: 'available', version: '1.2.0', notesUrl: N, hidden: true })
   expect(screen.queryByRole('button')).toBeNull()
@@ -120,4 +117,54 @@ test('Cancel stays pressable while the install request is still pending', async 
   expect(cancel.disabled).toBe(false)
   await click('Отменить')
   expect(cancelUpdate).toHaveBeenCalledTimes(1)
+})
+
+test('the success notice has a close icon, no Закрыть button, and hides itself after 10 seconds', async () => {
+  vi.useFakeTimers()
+  try {
+    const dismissUpdate = vi.fn(async () => {})
+    const { bridge } = fakeBridge({ dismissUpdate })
+    const services = servicesFor(bridge, withUpdate({ kind: 'installed', version: '1.2.0' }))
+    renderWith(<UpdateBanner />, services)
+    expect(screen.getByText('SplitLane обновлён до 1.2.0')).toBeTruthy()
+    // one button: the icon, named Закрыть
+    const buttons = screen.getAllByRole('button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0]!.getAttribute('aria-label')).toBe('Закрыть')
+    expect(buttons[0]!.textContent).toBe('')
+
+    await act(async () => {
+      vi.advanceTimersByTime(9_999)
+    })
+    expect(dismissUpdate).not.toHaveBeenCalled()
+    await act(async () => {
+      vi.advanceTimersByTime(1)
+    })
+    expect(dismissUpdate).toHaveBeenCalledTimes(1)
+
+    // the icon closes it at once
+    await act(async () => {
+      fireEvent.click(buttons[0]!)
+    })
+    expect(dismissUpdate).toHaveBeenCalledTimes(2)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('the timer of the success notice is dropped when the state changes', async () => {
+  vi.useFakeTimers()
+  try {
+    const dismissUpdate = vi.fn(async () => {})
+    const { bridge } = fakeBridge({ dismissUpdate })
+    const services = servicesFor(bridge, withUpdate({ kind: 'installed', version: '1.2.0' }))
+    renderWith(<UpdateBanner />, services)
+    act(() => services.store.getState().setSnapshot(withUpdate({ kind: 'idle' })))
+    await act(async () => {
+      vi.advanceTimersByTime(20_000)
+    })
+    expect(dismissUpdate).not.toHaveBeenCalled()
+  } finally {
+    vi.useRealTimers()
+  }
 })

@@ -25,6 +25,7 @@ const CAPTION: Record<Phase, Key> = {
 export function Header(): React.JSX.Element {
   const services = useServices()
   const state = useApp((s) => s.snapshot?.state ?? null)
+  const lastExitNode = useApp((s) => s.snapshot?.settings.lastExitNode ?? null)
   const linkReady = useApp((s) => s.snapshot?.link.kind === 'ready')
   const search = useApp((s) => s.search)
   const { setSearch, openAdd, showConnection } = services.store.getState()
@@ -51,7 +52,7 @@ export function Header(): React.JSX.Element {
             caption={t(CAPTION[state.phase])}
             onToggle={toggle}
           />
-          <ConnectionPill state={state} onOpen={() => showConnection(true)} />
+          <ConnectionPill state={state} last={lastExitNode} onOpen={() => showConnection(true)} />
         </>
       )}
       <span className={styles.grow} />

@@ -1,4 +1,6 @@
-import type { HelperState } from '../../shared/protocol'
+import type { ExitNode, HelperState } from '../../shared/protocol'
+import type { LastExitNode } from '../../shared/settings'
+import { selectedExitNodeName } from './banners'
 import type { Snapshot } from '../../shared/ipc'
 
 export type ConnectStep = 'login' | 'waitLogin' | 'approval' | 'exitNode' | 'enable'
@@ -70,4 +72,22 @@ export function screenFor(s: Snapshot, uiScreen: 'board' | 'connection'): Screen
   if (s.state === null) return 'splash'
   if (needsConnect(s, s.state)) return 'connect'
   return uiScreen === 'connection' ? 'connection' : 'board'
+}
+
+/**
+ * The name of the selected exit node: from the list, else the last name the window saw for that very node (the
+ * list is empty while routing is off); null when there is none, the caller then shows the address.
+ */
+export function knownExitNodeName(state: HelperState, last: LastExitNode | null): string | null {
+  const { selectedExitNode } = state.tailscale
+  const listed = selectedExitNodeName(state)
+  if (listed !== null) return listed
+  return selectedExitNode !== null && last !== null && last.id === selectedExitNode ? last.name : null
+}
+
+/** The nodes to choose from: the list, plus the selected node when the list lacks it (named as far as known). */
+export function exitNodeChoices(state: HelperState, last: LastExitNode | null): ExitNode[] {
+  const { exitNodes, selectedExitNode } = state.tailscale
+  if (selectedExitNode === null || exitNodes.some((n) => n.id === selectedExitNode)) return exitNodes
+  return [...exitNodes, { id: selectedExitNode, name: knownExitNodeName(state, last) ?? selectedExitNode, online: true }]
 }

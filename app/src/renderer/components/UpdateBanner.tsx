@@ -1,48 +1,31 @@
-import { useState } from 'react'
+import { useEffect } from 'react'
+import { CloseIcon } from '../icons/builtin'
 import { t } from '../i18n/t'
-import { updateBannerModel, type UpdateAction } from '../model/update'
-import { useApp, useServices } from '../services'
+import { updateBannerModel } from '../model/update'
+import { useApp } from '../services'
 import styles from './UpdateBanner.module.css'
+import { useUpdateActions } from './useUpdateActions'
+
+/** How long the notice of a finished update stays before it closes by itself. */
+const INSTALLED_MS = 10_000
 
 /** The update banner under the state banner of the board; nothing when there is no offer or result to show. */
 export function UpdateBanner(): React.JSX.Element | null {
-  const { bridge } = useServices()
   const update = useApp((s) => s.snapshot?.update ?? null)
-  const [busy, setBusy] = useState(false)
+  const { busy, run } = useUpdateActions()
+  const installed = update?.kind === 'installed'
+
+  // the success notice has nothing to decide: it closes by itself
+  useEffect(() => {
+    if (!installed) return
+    const timer = setTimeout(() => void run('dismiss'), INSTALLED_MS)
+    return () => clearTimeout(timer)
+    // run is new on every render; the timer belongs to the notice, not to the render
+  }, [installed])
+
   if (update === null) return null
   const banner = updateBannerModel(update)
   if (banner === null) return null
-
-  const perform = (action: UpdateAction): Promise<unknown> => {
-    switch (action) {
-      case 'install':
-      case 'retry':
-        return bridge.installUpdate()
-      case 'notes':
-        return bridge.openUpdateNotes()
-      case 'later':
-        return bridge.updateLater()
-      case 'cancel':
-        return bridge.cancelUpdate()
-      case 'dismiss':
-        return bridge.dismissUpdate()
-    }
-  }
-  const run = async (action: UpdateAction): Promise<void> => {
-    // the main process answers at once, but the banner never holds its buttons for a download: «Отменить» must work
-    if (action === 'install' || action === 'retry' || action === 'cancel') {
-      perform(action).catch(() => {})
-      return
-    }
-    setBusy(true)
-    try {
-      await perform(action)
-    } catch {
-      // the next snapshot shows what the main process did
-    } finally {
-      setBusy(false)
-    }
-  }
 
   return (
     <div className={styles.banner} data-tone={banner.tone} role={banner.tone === 'info' ? 'status' : 'alert'}>
@@ -66,6 +49,16 @@ export function UpdateBanner(): React.JSX.Element | null {
             </button>
           ))}
         </div>
+      )}
+      {installed && (
+        <button
+          type="button"
+          className={styles.close}
+          aria-label={t('update.action.dismiss')}
+          onClick={() => void run('dismiss')}
+        >
+          <CloseIcon />
+        </button>
       )}
     </div>
   )

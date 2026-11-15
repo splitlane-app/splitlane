@@ -303,7 +303,7 @@ function ipcHarness() {
     userCommand: vi.fn(),
     installHelper: vi.fn(async () => {}),
     appInfo: vi.fn(async () => ({ version: '0.2.0', installed: true })),
-    setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, language: 'system' as const, ...p })),
+    setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, language: 'system' as const, lastExitNode: null, ...p })),
     installedPrograms: vi.fn(async () => []),
     pickProgram: vi.fn(async () => null),
     resolveDropped: vi.fn(async (paths: string[]) =>
@@ -392,7 +392,8 @@ test('registerIpc checks the sender and every argument from the page', async () 
     connectedOnce: false,
     checkUpdates: true,
     pendingUpdate: null,
-    language: 'system'
+    language: 'system',
+    lastExitNode: null
   })
   await expect(h.invoke(IPC.setSettings, { enableOnStart: 1 })).rejects.toThrow()
   expect(h.d.setSettings).toHaveBeenCalledTimes(1)
@@ -463,6 +464,11 @@ test('validateSettingsPatch accepts checkUpdates and refuses pendingUpdate', () 
   expect(() => validateSettingsPatch({ pendingUpdate: '1.2.0' })).toThrow()
   expect(() => validateSettingsPatch({ pendingUpdate: null })).toThrow()
   expect(() => validateSettingsPatch({ checkUpdates: true, pendingUpdate: '1.2.0' })).toThrow()
+})
+
+test('validateSettingsPatch refuses lastExitNode: the main process keeps it', () => {
+  expect(() => validateSettingsPatch({ lastExitNode: { id: '100.64.0.2', name: 'x' } })).toThrow()
+  expect(() => validateSettingsPatch({ lastExitNode: null })).toThrow()
 })
 
 test('openUpdateNotes opens only the release page of the current state', async () => {

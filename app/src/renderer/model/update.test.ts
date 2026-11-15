@@ -4,7 +4,7 @@ import updaterSource from '../../main/updater.ts?raw'
 import sharedUpdateSource from '../../shared/update.ts?raw'
 import type { UpdateState } from '../../shared/update'
 import { setLang } from '../i18n/t'
-import { translateUpdateReason, updateBannerModel, updateStatusLine } from './update'
+import { translateUpdateReason, updateBannerModel, updateStatusActions, updateStatusLine } from './update'
 
 afterEach(() => setLang('ru'))
 
@@ -59,7 +59,7 @@ const rows: [string, UpdateState, { text: string; actions: string[]; tone: strin
   [
     'installed',
     { kind: 'installed', version: '1.2.0' },
-    { text: 'SplitLane обновлён до 1.2.0', actions: ['dismiss'], tone: 'info' },
+    { text: 'SplitLane обновлён до 1.2.0', actions: [], tone: 'info' },
     'SplitLane обновлён до 1.2.0'
   ],
   [
@@ -201,4 +201,25 @@ test('every literal reason of the updater has a translation', () => {
   expect(reasons.length).toBeGreaterThanOrEqual(25)
   setLang('ru')
   for (const reason of reasons) expect(translateUpdateReason(reason), reason).not.toBe(reason)
+})
+
+test('updateStatusActions gives the line of «Подключение» the actions that make sense', () => {
+  expect(updateStatusActions({ kind: 'available', version: '1.2.0', notesUrl: N, hidden: false })).toEqual(['install'])
+  // a hidden offer still shows on «Подключение», and can be taken from there
+  expect(updateStatusActions({ kind: 'available', version: '1.2.0', notesUrl: N, hidden: true })).toEqual(['install'])
+  expect(updateStatusActions({ kind: 'downloading', version: '1.2.0', notesUrl: N, percent: 1 })).toEqual(['cancel'])
+  expect(updateStatusActions({ kind: 'downloadFailed', version: '1.2.0', notesUrl: N, reason: 'x' })).toEqual(['retry'])
+  expect(
+    updateStatusActions({ kind: 'installRefused', version: '1.2.0', notesUrl: N, reason: '', canRetry: true })
+  ).toEqual(['retry'])
+  expect(
+    updateStatusActions({ kind: 'installRefused', version: '1.2.0', notesUrl: N, reason: '', canRetry: false })
+  ).toEqual([])
+  for (const s of [
+    { kind: 'idle' },
+    { kind: 'upToDate' },
+    { kind: 'installed', version: '1.2.0' }
+  ] satisfies UpdateState[]) {
+    expect(updateStatusActions(s), s.kind).toEqual([])
+  }
 })

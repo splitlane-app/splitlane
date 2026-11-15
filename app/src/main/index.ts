@@ -7,7 +7,7 @@ import { resolveLanguage, type Lang } from '../shared/i18n'
 import { IPC, type InstallState, type Snapshot } from '../shared/ipc'
 import type { Dropped } from '../shared/programs'
 import { PIPE_NAME, type HelperError, type HelperState } from '../shared/protocol'
-import { DEFAULT_SETTINGS, type WindowSettings } from '../shared/settings'
+import { DEFAULT_SETTINGS, rememberExitNode, type WindowSettings } from '../shared/settings'
 import { feedFrom, type UpdateState } from '../shared/update'
 import type { InstallOutcome, LinkStatus } from '../shared/status'
 import { AutoEnable } from './autoEnable'
@@ -320,6 +320,12 @@ link.on('state', (state: HelperState) => {
   }
   autoEnable.onState(state)
   tray?.update(link.status(), state)
+  // the name of the selected exit node is kept for the pill: with routing off the list can be empty
+  const last = rememberExitNode(settings.lastExitNode, state)
+  if (last !== null) {
+    settings = { ...settings, lastExitNode: last }
+    void saveSettings(settings)
+  }
   pushSnapshot()
 })
 

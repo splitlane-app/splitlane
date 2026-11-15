@@ -171,25 +171,44 @@
 .node {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   width: 100%;
-  height: 32px;
+  min-height: 32px;
   padding: 0 10px;
   border: 1px solid var(--line2);
   border-radius: 7px;
   background: var(--card);
   cursor: pointer;
-  text-align: left;
 }
 
 .node:hover {
   border-color: var(--line3);
 }
 
-.node[aria-pressed='true'] {
+.node:has(input:checked) {
   border-color: var(--vpn);
   background: color-mix(in srgb, var(--vpn) 12%, var(--card));
+}
+
+.node:has(input:focus-visible) {
+  outline: 2px solid var(--vpn);
+  outline-offset: 1px;
+}
+
+.nodeRadio {
+  margin: 0;
+  accent-color: var(--vpn);
+}
+
+.nodeName {
+  flex: 1;
+}
+
+.updateLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .offline {

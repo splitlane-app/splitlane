@@ -39,3 +39,18 @@
 .panel[data-wide='true'] {
   width: min(640px, 100%);
 }
+
+.back {
+  height: 26px;
+  padding: 0 8px 0 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.back:hover {
+  background: var(--card);
+  color: var(--text);
+}

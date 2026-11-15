@@ -89,7 +89,7 @@ export function updateBannerModel(s: UpdateState): UpdateBannerModel | null {
         tone: 'warn'
       }
     case 'installed':
-      return { text: t('update.installed', { v: s.version }), actions: ['dismiss'], tone: 'info' }
+      return { text: t('update.installed', { v: s.version }), actions: [], tone: 'info' }
     case 'installRefused':
       return {
         text:
@@ -124,6 +124,27 @@ export function updateStatusLine(s: UpdateState): string | null {
       return t('update.available', { v: s.version })
     default:
       return updateBannerModel(s)?.text ?? null
+  }
+}
+
+/**
+ * The actions of the status line of «Подключение»: the ones of the banner that make sense without it. A hidden offer
+ * still shows on that screen, so «Обновить» is there for it too.
+ */
+export function updateStatusActions(s: UpdateState): UpdateAction[] {
+  switch (s.kind) {
+    case 'available':
+      return ['install']
+    case 'downloading':
+      return ['cancel']
+    case 'cancelled':
+      return ['install']
+    case 'downloadFailed':
+      return ['retry']
+    case 'installRefused':
+      return s.canRetry ? ['retry'] : []
+    default:
+      return []
   }
 }
 

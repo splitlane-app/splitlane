@@ -294,7 +294,7 @@ export const en: Record<Key, string> = {
   'connect.noExitNodes': 'Your Tailscale network has no exit nodes',
   'connect.offline': 'offline',
   'connect.offlineWarn': 'This node is offline, so the VPN lane may not work',
-  'connect.exitNodes': 'Exit nodes',
+  'connect.exitNodes': 'Exit node',
   'connect.systemWarn':
     'The Tailscale app is using an exit node. SplitLane turns it off while it runs and turns it back on when you turn off split routing',
   'connect.enable': 'Turn on split routing',
@@ -303,7 +303,6 @@ export const en: Record<Key, string> = {
   'connect.versions': 'SplitLane {app} · service {helper} · core {core}',
   'connect.versionApp': 'SplitLane {app}',
   'connection.device': 'Device on the Tailscale network',
-  'connection.exitNode': 'Selected exit node',
   'connection.changeNote': 'Changing the exit node briefly restarts split routing',
   'connection.logout': 'Log out of Tailscale',
   'connection.logoutBlocked': 'You can log out when split routing is off',

@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Command } from '../../shared/ipc'
 import type { ExitNode, HelperState } from '../../shared/protocol'
-import type { WindowSettings } from '../../shared/settings'
+import type { LastExitNode, WindowSettings } from '../../shared/settings'
 import { Banner } from '../components/Banner'
+import { useUpdateActions } from '../components/useUpdateActions'
 import { LanguageSelect } from '../components/LanguageSelect'
 import { UpdateBanner } from '../components/UpdateBanner'
 import { ScreenFrame } from '../components/ScreenFrame'
 import { Toggle } from '../components/Toggle'
 import { currentLang, t } from '../i18n/t'
-import { selectedExitNodeName } from '../model/banners'
-import { connectStep, type ConnectStep } from '../model/connect'
-import { updateBusy, updateStatusLine } from '../model/update'
+import { connectStep, exitNodeChoices, type ConnectStep } from '../model/connect'
+import { updateBusy, updateStatusActions, updateStatusLine } from '../model/update'
 import { sendCommand, useApp, useServices } from '../services'
 import styles from './screens.module.css'
 
@@ -20,28 +20,31 @@ function sortedNodes(nodes: ExitNode[]): ExitNode[] {
   return [...nodes].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, lang))
 }
 
-/** The exit nodes of the tailnet as a list; choosing one sends tailscale.setExitNode (the helper validates it). */
-function ExitNodeList({ state }: { state: HelperState }): React.JSX.Element {
+/**
+ * The exit nodes of the tailnet as one radio group; choosing one sends tailscale.setExitNode (the helper validates
+ * it). The selected node is always in it, named as far as the window knows (the list is empty while routing is off).
+ */
+function ExitNodeList({ state, last }: { state: HelperState; last: LastExitNode | null }): React.JSX.Element {
   const services = useServices()
-  const { exitNodes, selectedExitNode } = state.tailscale
-  if (exitNodes.length === 0) return <p className={styles.lead}>{t('connect.noExitNodes')}</p>
+  const { selectedExitNode } = state.tailscale
+  const nodes = exitNodeChoices(state, last)
+  if (nodes.length === 0) return <p className={styles.lead}>{t('connect.noExitNodes')}</p>
   return (
-    <ul className={styles.nodes} aria-label={t('connect.exitNodes')}>
-      {sortedNodes(exitNodes).map((n) => (
-        <li key={n.id}>
-          <button
-            type="button"
-            className={styles.node}
-            aria-pressed={n.id === selectedExitNode}
-            title={n.online ? undefined : t('connect.offlineWarn')}
-            onClick={() => void sendCommand(services, { method: 'tailscale.setExitNode', id: n.id })}
-          >
-            <span>{n.name || n.id}</span>
-            {!n.online && <span className={styles.offline}>{t('connect.offline')}</span>}
-          </button>
-        </li>
+    <div className={styles.nodes} role="radiogroup" aria-label={t('connect.exitNodes')}>
+      {sortedNodes(nodes).map((n) => (
+        <label key={n.id} className={styles.node} title={n.online ? undefined : t('connect.offlineWarn')}>
+          <input
+            type="radio"
+            name="exit-node"
+            className={styles.nodeRadio}
+            checked={n.id === selectedExitNode}
+            onChange={() => void sendCommand(services, { method: 'tailscale.setExitNode', id: n.id })}
+          />
+          <span className={styles.nodeName}>{n.name || n.id}</span>
+          {!n.online && <span className={styles.offline}>{t('connect.offline')}</span>}
+        </label>
       ))}
-    </ul>
+    </div>
   )
 }
 
@@ -57,6 +60,7 @@ export function ConnectScreen(): React.JSX.Element | null {
   const { bridge, store } = services
   const state = useApp((s) => s.snapshot?.state ?? null)
   const connectedOnce = useApp((s) => s.snapshot?.settings.connectedOnce ?? false)
+  const lastExitNode = useApp((s) => s.snapshot?.settings.lastExitNode ?? null)
   const loginRequested = useApp((s) => s.loginRequested)
   const [busy, setBusy] = useState(false)
   const recorded = useRef(false)
@@ -173,7 +177,7 @@ export function ConnectScreen(): React.JSX.Element | null {
       {(step === 'exitNode' || step === 'enable') && (
         <div className={styles.section}>
           <p className={styles.lead}>{t('connect.exitNodeHint')}</p>
-          <ExitNodeList state={state} />
+          <ExitNodeList state={state} last={lastExitNode} />
         </div>
       )}
       {step === 'enable' && (
@@ -212,6 +216,20 @@ export function ConnectionScreen(): React.JSX.Element | null {
   const link = useApp((s) => s.snapshot?.link ?? null)
   const update = useApp((s) => s.snapshot?.update ?? null)
   const [appVersion, setAppVersion] = useState<string | null>(null)
+  const updates = useUpdateActions()
+  const back = (): void => store.getState().showConnection(false)
+
+  // Esc goes back to the lanes, unless a select or a list inside has the key (an open select closes on it)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (e.target instanceof Element && e.target.closest('select, [role="listbox"]') !== null) return
+      store.getState().showConnection(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [store])
+
   useEffect(() => {
     let live = true
     bridge.appInfo().then(
@@ -239,20 +257,17 @@ export function ConnectionScreen(): React.JSX.Element | null {
   }
   const canLogout = !live(state.phase)
   const updateLine = update === null ? null : updateStatusLine(update)
+  const updateActions = update === null ? [] : updateStatusActions(update)
 
   return (
-    <ScreenFrame title={t('connection.title')} wide>
+    <ScreenFrame title={t('connection.title')} wide onBack={back}>
       <Banner />
       <div className={styles.row}>
         <span className={styles.label}>{t('connection.device')}</span>
         <span className={styles.value}>{state.tailscale.deviceName}</span>
       </div>
       <div className={styles.section}>
-        <div className={styles.row}>
-          <span className={styles.label}>{t('connection.exitNode')}</span>
-          <span className={styles.value}>{selectedExitNodeName(state) ?? t('pill.noExitNode')}</span>
-        </div>
-        <ExitNodeList state={state} />
+        <ExitNodeList state={state} last={settings.lastExitNode} />
         {live(state.phase) && <p className={styles.lead}>{t('connection.changeNote')}</p>}
       </div>
       <div className={styles.section} role="group" aria-label={t('connection.settings')}>
@@ -277,9 +292,6 @@ export function ConnectionScreen(): React.JSX.Element | null {
         <LanguageSelect />
       </div>
       <div className={styles.actions}>
-        <button type="button" className={styles.button} onClick={() => store.getState().showConnection(false)}>
-          {t('screen.back')}
-        </button>
         <button
           type="button"
           className={styles.button}
@@ -293,9 +305,20 @@ export function ConnectionScreen(): React.JSX.Element | null {
       {!canLogout && <p className={styles.lead}>{t('connection.logoutBlocked')}</p>}
       {versions !== null && <p className={styles.lead}>{versions}</p>}
       {updateLine !== null && (
-        <p className={styles.lead} role="status">
-          {updateLine}
-        </p>
+        <div className={styles.updateLine} role="status">
+          <span>{updateLine}</span>
+          {updateActions.map((action, i) => (
+            <button
+              key={action}
+              type="button"
+              className={`${styles.button} ${i === 0 ? styles.primary : ''}`}
+              disabled={updates.busy}
+              onClick={() => void updates.run(action)}
+            >
+              {t(`update.action.${action}`)}
+            </button>
+          ))}
+        </div>
       )}
       <div className={styles.actions}>
         <button

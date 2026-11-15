@@ -3,7 +3,7 @@ import type { Snapshot } from '../../shared/ipc'
 import type { HelperState } from '../../shared/protocol'
 import { DEFAULT_SETTINGS } from '../../shared/settings'
 import { snap, state } from '../testing'
-import { connectStep, screenFor } from './connect'
+import { connectStep, exitNodeChoices, knownExitNodeName, screenFor } from './connect'
 
 const ts = (over: Partial<HelperState['tailscale']>, phase: HelperState['phase'] = 'off'): HelperState => {
   const base = state()
@@ -96,4 +96,24 @@ test('screenFor returns to connect after logout and an expired login', () => {
   // while routing is live the board stays (its banner offers «Выключить деление и войти»)
   expect(screenFor(off({ backend: 'expired' }, 'degraded'), 'board')).toBe('board')
   expect(screenFor(off({ backend: 'running' }), 'board')).toBe('board')
+})
+
+const A = { id: '100.64.0.2', name: 'node-a', online: true }
+
+test('knownExitNodeName prefers the list, then the remembered name, never the address', () => {
+  expect(knownExitNodeName(ts({ exitNodes: [A], selectedExitNode: A.id }), null)).toBe('node-a')
+  const off = ts({ exitNodes: [], selectedExitNode: A.id })
+  expect(knownExitNodeName(off, { id: A.id, name: 'remembered' })).toBe('remembered')
+  expect(knownExitNodeName(off, { id: '100.64.0.9', name: 'other' })).toBeNull()
+  expect(knownExitNodeName(off, null)).toBeNull()
+  expect(knownExitNodeName(ts({ exitNodes: [A], selectedExitNode: null }), { id: A.id, name: 'x' })).toBeNull()
+})
+
+test('exitNodeChoices adds the selected node when the list lacks it', () => {
+  const full = ts({ exitNodes: [A], selectedExitNode: A.id })
+  expect(exitNodeChoices(full, null)).toEqual([A])
+  const off = ts({ exitNodes: [], selectedExitNode: A.id })
+  expect(exitNodeChoices(off, { id: A.id, name: 'remembered' })).toEqual([{ id: A.id, name: 'remembered', online: true }])
+  expect(exitNodeChoices(off, null)).toEqual([{ id: A.id, name: A.id, online: true }])
+  expect(exitNodeChoices(ts({ exitNodes: [], selectedExitNode: null }), null)).toEqual([])
 })

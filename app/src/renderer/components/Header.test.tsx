@@ -79,3 +79,25 @@ test('Header settings button opens the connection screen with the settings', () 
   fireEvent.click(settings)
   expect(services.store.getState().ui.screen).toBe('connection')
 })
+
+test('the pill shows the remembered name of the exit node while the list is empty, the address only without one', () => {
+  const { bridge } = fakeBridge()
+  const off = (lastExitNode: { id: string; name: string } | null) => {
+    const base = snap({ phase: 'off' })
+    const st = base.state!
+    return {
+      ...base,
+      state: { ...st, tailscale: { ...st.tailscale, exitNodes: [], selectedExitNode: '100.64.0.2', path: null } },
+      settings: { ...base.settings, lastExitNode }
+    }
+  }
+  const services = servicesFor(bridge, off({ id: '100.64.0.2', name: 'node-a' }))
+  renderWith(<Header />, services)
+  expect(screen.getByRole('button', { name: 'Tailscale · node-a' })).toBeTruthy()
+
+  // a name remembered for another node is not used
+  act(() => services.store.getState().setSnapshot(off({ id: '100.64.0.9', name: 'other' })))
+  expect(screen.getByRole('button', { name: 'Tailscale · 100.64.0.2' })).toBeTruthy()
+  act(() => services.store.getState().setSnapshot(off(null)))
+  expect(screen.getByRole('button', { name: 'Tailscale · 100.64.0.2' })).toBeTruthy()
+})

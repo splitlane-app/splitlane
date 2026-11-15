@@ -298,7 +298,6 @@ export const ru = {
   'connect.versions': 'SplitLane {app} · служба {helper} · ядро {core}',
   'connect.versionApp': 'SplitLane {app}',
   'connection.device': 'Устройство в сети Tailscale',
-  'connection.exitNode': 'Выбранный exit node',
   'connection.changeNote': 'Смена exit node ненадолго перезапустит деление',
   'connection.logout': 'Выйти из Tailscale',
   'connection.logoutBlocked': 'Выйти можно, когда деление выключено',
