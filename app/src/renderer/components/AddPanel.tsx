@@ -65,7 +65,7 @@ function Row({ row, card, idPrefix = '', onAct }: RowProps): React.JSX.Element {
       data-drag-id={`add:${idPrefix}${row.key}`}
       data-builtin={row.builtin}
     >
-      <div ref={handleRef} className={styles.info} title={row.exe}>
+      <div ref={handleRef} className={styles.info} title={row.exe} aria-roledescription={t('card.role')}>
         <ExeIcon exe={row.exe} />
         <span className={styles.text}>
           <span className={styles.name}>{row.name}</span>

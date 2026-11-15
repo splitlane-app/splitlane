@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { Snapshot } from '../../shared/ipc'
 import type { InstallState } from '../../shared/ipc'
+import { DEFAULT_SETTINGS } from '../../shared/settings'
 import { fakeBridge, renderWith, servicesFor, snap } from '../testing'
 import { SetupScreen } from './SetupScreen'
 
@@ -113,4 +114,12 @@ test('SetupScreen shows cancelled and refused outcomes', async () => {
   )
   expect(screen.getByText('Не удалось выполнить настройку')).toBeTruthy()
   expect(screen.getByText('exit code 5')).toBeTruthy()
+})
+
+test('SetupScreen has the language selector, which saves the setting', () => {
+  const setSettings = vi.fn(async () => DEFAULT_SETTINGS)
+  const { bridge } = fakeBridge({ setSettings })
+  renderWith(<SetupScreen update={false} />, servicesFor(bridge, setup({ kind: 'idle' })))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Язык' }), { target: { value: 'en' } })
+  expect(setSettings).toHaveBeenLastCalledWith({ language: 'en' })
 })

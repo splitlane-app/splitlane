@@ -159,3 +159,9 @@ test('AddPanel gives the picked row and the list row of one program different dr
   const ids = Array.from(document.querySelectorAll<HTMLElement>('[data-add-row]')).map((e) => e.dataset.dragId)
   expect(new Set(ids).size).toBe(2)
 })
+
+test('the drag handle of a row names its role in the language of the window', () => {
+  setup()
+  const handle = document.querySelector('[data-add-row] [aria-roledescription]')
+  expect(handle?.getAttribute('aria-roledescription')).toBe('карточка программы')
+})

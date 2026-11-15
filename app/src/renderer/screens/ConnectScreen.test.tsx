@@ -406,3 +406,11 @@ test('the checkUpdates toggle saves the setting', () => {
   fireEvent.click(sw)
   expect(setSettings).toHaveBeenLastCalledWith({ checkUpdates: false })
 })
+
+test('ConnectScreen has the language selector, which saves the setting', () => {
+  const setSettings = vi.fn(async (patch: Partial<WindowSettings>) => ({ ...DEFAULT_SETTINGS, ...patch }))
+  const { bridge } = fakeBridge({ setSettings })
+  renderWith(<ConnectScreen />, servicesFor(bridge, withTs({ backend: 'needs_login' })))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Язык' }), { target: { value: 'en' } })
+  expect(setSettings).toHaveBeenLastCalledWith({ language: 'en' })
+})

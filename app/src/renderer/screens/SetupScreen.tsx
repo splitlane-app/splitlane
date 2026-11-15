@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { LanguageSelect } from '../components/LanguageSelect'
 import { ScreenFrame } from '../components/ScreenFrame'
 import { UpdateBanner } from '../components/UpdateBanner'
 import { t } from '../i18n/t'
@@ -76,6 +77,7 @@ export function SetupScreen({ update }: { update: boolean }): React.JSX.Element 
           </button>
         </div>
       )}
+      <LanguageSelect />
     </ScreenFrame>
   )
 }

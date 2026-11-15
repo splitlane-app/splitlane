@@ -5,8 +5,6 @@ import type { LinkStatus } from '../shared/status'
 import { mainText } from './mainText'
 import { laneGlyphBitmap, trayIconFor, trayMenuModel, type TrayIcon } from './trayModel'
 
-export { MAIN_TEXT, mainText, type MainText } from './mainText'
-
 const COLORS: Record<TrayIcon, [number, number, number]> = {
   working: [0x8b, 0x7c, 0xff],
   off: [0x8b, 0x93, 0xa7],

@@ -201,7 +201,7 @@ export const en: Record<Key, string> = {
   'reason.not_logged_in': 'not logged in to Tailscale',
   'reason.no_exit_node': 'no exit node selected',
   'reason.system_dns_override':
-    "Tailscale overrides DNS for all names (“Override local DNS” in its admin console), which split routing doesn't support",
+    "Tailscale overrides DNS for all names (global nameservers override local DNS in its admin console), which split routing doesn't support",
   'reason.config_invalid': 'the network core settings failed validation (a SplitLane bug; save the log)',
   'reason.core_start_timeout': "the network core didn't start within 30 seconds",
   'reason.tunnel_not_proven': "the tunnel through the exit node couldn't be verified",

@@ -565,9 +565,12 @@ function createWindow(): void {
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (!app.isPackaged && devUrl) {
-    void w.loadURL(devUrl)
+    const url = new URL(devUrl)
+    url.searchParams.set('lang', resolveLang())
+    void w.loadURL(url.toString())
   } else {
-    void w.loadFile(join(__dirname, '../renderer/index.html'))
+    // the page reads `lang` before its first render: the splash is already in the language in force
+    void w.loadFile(join(__dirname, '../renderer/index.html'), { query: { lang: resolveLang() } })
   }
 }
 
