@@ -30,7 +30,7 @@ export const en: Record<Key, string> = {
   'lane.directSees': 'Websites see your real address',
   'lane.showAddress': 'Show the full address',
   'lane.others': 'other programs',
-  'lane.othersOff': 'Programs that are not pinned appear here once split routing is on',
+  'lane.othersOff': 'Unpinned programs appear here when split routing is on',
   'lane.dropHint': 'Drag a program or a shortcut here',
   'move.vpn': 'Send via VPN',
   'move.direct': 'Send direct',
@@ -77,10 +77,10 @@ export const en: Record<Key, string> = {
   'program.wholeFolder': 'The whole program folder',
   'program.wholeFolderOn': 'Every file in this folder counts as this program',
   'program.wholeFolderOff': 'Only this file counts',
-  'program.wholeFolderFixed': 'A Microsoft Store app has a rule of its own, so this switch is unavailable',
+  'program.wholeFolderFixed': "Microsoft Store apps have their own rule, so this setting isn't available",
   'program.path': 'Path',
-  'program.exes': 'Files seen',
-  'program.noExes': 'None seen yet',
+  'program.exes': 'Detected files',
+  'program.noExes': 'None detected yet',
   'program.connections': 'Current connections',
   'program.noConnections': 'No connections',
   'program.connectionsOff': 'Connections are shown while split routing is on',
@@ -118,7 +118,7 @@ export const en: Record<Key, string> = {
     "The {name} server is unreachable. Programs in the VPN lane have no connection for now, and website names are temporarily resolved by your ISP's DNS",
   'banner.serverFallback': 'VPN',
   'banner.loginAgain': 'You need to log in to Tailscale again. Split routing will be off while you log in',
-  'banner.blocked': 'An exit node is on in the Tailscale app. It interferes with split routing',
+  'banner.blocked': 'The Tailscale app is using an exit node. This conflicts with split routing',
   'banner.stopping': 'Turning off…',
   'banner.restorePending': "Can't turn the exit node back on in the Tailscale app",
   'banner.restoreHint': 'Run this in Command Prompt:',
@@ -148,9 +148,9 @@ export const en: Record<Key, string> = {
   'update.launching': 'Installing version {v}: Windows will ask you to confirm',
   'update.cancelled': 'Update canceled',
   'update.downloadFailed': "Couldn't download version {v}: {reason}",
-  'update.installed': 'SplitLane has been updated to {v}',
-  'update.installRefused': "Update to {v} wasn't installed: {reason}",
-  'update.installRefusedNoReason': "Update to {v} wasn't installed",
+  'update.installed': 'SplitLane was updated to version {v}',
+  'update.installRefused': "Version {v} wasn't installed: {reason}",
+  'update.installRefusedNoReason': "Version {v} wasn't installed",
   'update.checking': 'Checking for updates…',
   'update.upToDate': "You're up to date",
   'update.checkFailed': "Couldn't check for updates: {reason}",
@@ -163,7 +163,7 @@ export const en: Record<Key, string> = {
   'update.check': 'Check for updates',
 
   // the reasons of the updater: the main process gives them in English, model/update.ts maps the known ones here
-  'update.reason.notInstalled': 'updates are available only for an installed copy of SplitLane',
+  'update.reason.notInstalled': "this copy of SplitLane isn't installed",
   'update.reason.notStarted': "the installer didn't start the update",
   'update.reason.cancelled': 'canceled',
   'update.reason.aborted': 'the request was interrupted',
@@ -189,8 +189,8 @@ export const en: Record<Key, string> = {
   'update.reason.releaseDraft': 'the release is a draft or a prerelease',
   'update.reason.releaseTag': "the release tag isn't valid",
   'update.reason.currentVersion': "the current version number isn't valid",
-  'update.reason.releaseFiles': 'the release must have exactly one file {name}',
-  'update.reason.releaseAddress': "the release file address isn't the expected one",
+  'update.reason.releaseFiles': 'the release must have exactly one file named {name}',
+  'update.reason.releaseAddress': 'the release file has an unexpected address',
   'update.reason.installerSize': 'the installer size is out of range',
 
   // reasons (state.reason.code): they follow "Couldn't turn on split routing: "
@@ -201,10 +201,10 @@ export const en: Record<Key, string> = {
   'reason.not_logged_in': 'not logged in to Tailscale',
   'reason.no_exit_node': 'no exit node selected',
   'reason.system_dns_override':
-    "Tailscale overrides DNS for all names (“Override DNS servers” in its admin console), and split routing can't turn on with that",
+    "Tailscale overrides DNS for all names (“Override local DNS” in its admin console), which split routing doesn't support",
   'reason.config_invalid': 'the network core settings failed validation (a SplitLane bug; save the log)',
   'reason.core_start_timeout': "the network core didn't start within 30 seconds",
-  'reason.tunnel_not_proven': "couldn't confirm that the tunnel through the exit node works",
+  'reason.tunnel_not_proven': "the tunnel through the exit node couldn't be verified",
   'reason.same_address': "the exit node reaches the internet from the same address as this PC, so it can't be used",
   'reason.switch_check_failed': 'the check after switching failed',
   'reason.leak_detected': 'VPN lane traffic bypassed the VPN, so split routing was turned off for safety',
@@ -217,7 +217,7 @@ export const en: Record<Key, string> = {
 
   // command errors (CommandResult.error.code)
   'error.bad_request': "The request wasn't accepted (an app error)",
-  'error.unknown_method': "The service doesn't know this command. Update the app",
+  'error.unknown_method': "The service doesn't recognize this command. Update SplitLane",
   'error.protocol_mismatch': "The versions of the window and the service don't match",
   'error.wrong_phase': "This action isn't available right now",
   'error.busy': 'The service is busy. Try again in a few seconds',
@@ -251,7 +251,7 @@ export const en: Record<Key, string> = {
 
   // an error while drawing the window (the error boundary of the page)
   'crash.title': 'Window error',
-  'crash.lead': 'Something went wrong in the window. Split routing and the service keep working as before',
+  'crash.lead': 'Something went wrong in the window. Split routing and the service are still running',
   'crash.reload': 'Reload the window',
 
   // setup and update of the helper (spec 4.3, 5.1)
@@ -267,11 +267,11 @@ export const en: Record<Key, string> = {
   'setup.cancelled': 'Setup canceled',
   'setup.failed': "Couldn't complete the setup",
   'setup.notInstalled':
-    "This copy of SplitLane isn't installed. Install SplitLane with its installer: it sets up the background service too.",
+    "This copy of SplitLane isn't installed. Run the SplitLane installer, which also sets up the background service.",
 
   // connect the VPN and the connection screen (spec 9.5, 9.6)
   'connect.title': 'Connect a VPN',
-  'connect.lead': 'Choose how SplitLane gets its VPN',
+  'connect.lead': 'Choose how SplitLane connects to a VPN',
   'connect.methods': 'Connection methods',
   'connect.tailscale': 'Tailscale',
   'connect.tailscaleNote': 'available',
@@ -284,18 +284,19 @@ export const en: Record<Key, string> = {
   'connect.step.enable': 'Turn on split routing',
   'connect.loginHint': 'The login page opens in your browser',
   'connect.loginButton': 'Log in to Tailscale',
-  'connect.waitLogin': 'The login page is open in your browser. Log in there, and the window continues on its own',
+  'connect.waitLogin':
+    'The login page is open in your browser. Log in there, and this window will continue automatically',
   'connect.openAgain': 'Open the link again',
   'connect.openFailed': "Couldn't open the login link",
   'connect.approval':
-    "The link has been used. The device is waiting for approval from the admin of your Tailscale network. The window continues on its own once it's approved",
+    "The link has been used. This device is waiting for approval from your Tailscale network admin. This window will continue automatically once it's approved",
   'connect.exitNodeHint': 'Choose the server the VPN lane goes through',
   'connect.noExitNodes': 'Your Tailscale network has no exit nodes',
   'connect.offline': 'offline',
   'connect.offlineWarn': 'This node is offline, so the VPN lane may not work',
   'connect.exitNodes': 'Exit nodes',
   'connect.systemWarn':
-    'An exit node is on in the Tailscale app. It stays off while SplitLane is running and is turned back on when you turn off split routing',
+    'The Tailscale app is using an exit node. SplitLane turns it off while it runs and turns it back on when you turn off split routing',
   'connect.enable': 'Turn on split routing',
   'connect.enabling': 'Turning on…',
   'connection.title': 'Connection',

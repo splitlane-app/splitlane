@@ -37,7 +37,11 @@ const REASONS: ReadonlyMap<string, Key> = new Map<string, Key>([
   ['installer size is out of range', 'update.reason.installerSize']
 ])
 
-/** The reasons with a value in them: the pattern, the text, the name of its one parameter. */
+/**
+ * The reasons with a value in them: the pattern, the text, the name of its one parameter. The main process builds
+ * these with template literals, which the scan test of update.test.ts does not read: a new template-literal reason
+ * must be added here by hand.
+ */
 const PATTERNS: readonly (readonly [RegExp, Key, string])[] = [
   [/^HTTP (\d{3})$/, 'update.reason.http', 'status'],
   [/^powershell exit (-?\d+)$/, 'update.reason.powershellExit', 'code'],

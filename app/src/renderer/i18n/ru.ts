@@ -197,7 +197,7 @@ export const ru = {
   'reason.not_logged_in': 'вход в Tailscale не выполнен',
   'reason.no_exit_node': 'exit node не выбран',
   'reason.system_dns_override':
-    'Tailscale подменяет DNS для всех имён («Override DNS servers» в его консоли), с этим деление не включается',
+    'Tailscale подменяет DNS для всех имён («Override local DNS» в его консоли), с этим деление не включается',
   'reason.config_invalid': 'настройки ядра не прошли проверку (ошибка SplitLane, сохраните журнал)',
   'reason.core_start_timeout': 'сетевое ядро не запустилось за 30 секунд',
   'reason.tunnel_not_proven': 'не удалось убедиться, что туннель через exit node работает',

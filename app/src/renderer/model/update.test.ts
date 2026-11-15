@@ -112,6 +112,10 @@ test('the update texts follow the language, the reasons too', () => {
     "Couldn't check for updates: HTTP 403 (GitHub request limit reached?)"
   )
   expect(updateStatusLine({ kind: 'upToDate' })).toBe("You're up to date")
+  expect(updateBannerModel({ kind: 'installed', version: '1.2.0' })?.text).toBe('SplitLane was updated to version 1.2.0')
+  expect(updateStatusLine({ kind: 'checkFailed', reason: 'updates are available only for an installed SplitLane' })).toBe(
+    "Couldn't check for updates: this copy of SplitLane isn't installed"
+  )
 })
 
 test('known update reasons are translated', () => {
@@ -134,7 +138,7 @@ test('known update reasons are translated', () => {
     [
       'release must have exactly one file SplitLane-Setup-1.2.0.exe.sha256',
       'в выпуске должен быть ровно один файл SplitLane-Setup-1.2.0.exe.sha256',
-      'the release must have exactly one file SplitLane-Setup-1.2.0.exe.sha256'
+      'the release must have exactly one file named SplitLane-Setup-1.2.0.exe.sha256'
     ]
   ]
   for (const [reason, ru, en] of known) {
@@ -169,7 +173,7 @@ test('unknown update reasons pass through', () => {
   expect(
     updateBannerModel({ kind: 'installRefused', version: '1.2.0', notesUrl: N, reason: 'the task {v}', canRetry: true })
       ?.text
-  ).toBe("Update to 1.2.0 wasn't installed: the task {v}")
+  ).toBe("Version 1.2.0 wasn't installed: the task {v}")
 })
 
 /** The literal reason texts of a source file: the arguments of `new Error(…)`, `super(…)`, `bad(…)`, the limits. */
