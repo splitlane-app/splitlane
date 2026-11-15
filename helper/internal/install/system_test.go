@@ -33,6 +33,17 @@ func readDACL(t *testing.T, path string) (string, bool) {
 	return sd.String(), control&windows.SE_DACL_PROTECTED != 0
 }
 
+// canonical is sddl as Windows writes it back (as readDACL gives it): a SID that has an alias is written
+// as the alias, for example LA for the built-in Administrator, the user of a GitHub Actions runner.
+func canonical(t *testing.T, sddl string) string {
+	t.Helper()
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sd.String()
+}
+
 // The access lists of spec 4.2 with the real API, on a temporary folder and with an SDDL that keeps the
 // current user's full access. A folder that is not there is made with the list; one that is there gets
 // it, protected, with exactly its entries, and a file in it gets them as inherited entries. A junction
@@ -46,13 +57,14 @@ func TestApplyACLOnTempDir(t *testing.T) {
 	me := u.User.Sid.String()
 	owners := []string{me, "S-1-5-32-544"} // the folders of this test belong to the user, or to the administrators when it runs elevated
 	sddl := "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;" + me + ")"
+	want := canonical(t, sddl)
 	root := t.TempDir()
 
 	made := filepath.Join(root, "made")
 	if err := secureDir(made, sddl, owners); err != nil {
 		t.Fatal(err)
 	}
-	if got, protected := readDACL(t, made); got != sddl || !protected {
+	if got, protected := readDACL(t, made); got != want || !protected {
 		t.Fatalf("a new folder: %s protected=%v", got, protected)
 	}
 
@@ -64,16 +76,16 @@ func TestApplyACLOnTempDir(t *testing.T) {
 	if err := os.WriteFile(file, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got, protected := readDACL(t, there); got == sddl || protected {
+	if got, protected := readDACL(t, there); got == want || protected {
 		t.Fatalf("before: %s protected=%v", got, protected)
 	}
 	if err := secureDir(there, sddl, owners); err != nil {
 		t.Fatal(err)
 	}
-	if got, protected := readDACL(t, there); got != sddl || !protected {
+	if got, protected := readDACL(t, there); got != want || !protected {
 		t.Fatalf("a folder that was there: %s protected=%v", got, protected)
 	}
-	if got, protected := readDACL(t, file); got != "D:AI(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;"+me+")" || protected {
+	if got, protected := readDACL(t, file); got != canonical(t, "D:AI(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;"+me+")") || protected {
 		t.Fatalf("the file in it: %s protected=%v", got, protected)
 	}
 
@@ -100,7 +112,7 @@ func TestApplyACLOnTempDir(t *testing.T) {
 	if err := secureDir(other, sddl, []string{"S-1-5-18"}); err == nil || !strings.Contains(err.Error(), "was not made by an administrator") {
 		t.Fatalf("a folder of another owner: %v", err)
 	}
-	if got, _ := readDACL(t, other); got == sddl {
+	if got, _ := readDACL(t, other); got == want {
 		t.Fatal("a folder of another owner got the list")
 	}
 }
