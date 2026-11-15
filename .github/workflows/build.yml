@@ -86,12 +86,19 @@ jobs:
 
       - name: Test the installer
         run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-installer.ps1 -Installer "app\release\SplitLane-Setup-$env:VERSION.exe" | Tee-Object -Variable lines
+          $logs = Join-Path $env:RUNNER_TEMP 'test-installer'
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-installer.ps1 -Installer "app\release\SplitLane-Setup-$env:VERSION.exe" -LogDir $logs | Tee-Object -Variable lines
           $code = $LASTEXITCODE
-          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ('Installer check: `' + $lines[-1] + '`')
+          $last = @($lines | Where-Object { "$_".Trim() }) | Select-Object -Last 1
+          if (-not $last) { $last = "no output, exit code $code" }
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ('Installer check: `' + $last + '`')
           exit $code
 
+      # The private repository has 500 MB of artifact storage and the installer is about 160 MB: the artifact
+      # is kept 2 days and not made for a pull request (its push makes one). A tag's release job takes it from
+      # this run.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name != 'pull_request'
         with:
           name: SplitLane-Setup-${{ steps.version.outputs.version }}
           path: |
@@ -99,7 +106,27 @@ jobs:
             app/release/SplitLane-Setup-${{ steps.version.outputs.version }}.exe.sha256
           if-no-files-found: error
           compression-level: 0
-          retention-days: 14
+          retention-days: 2
+
+      # After a failure: what scripts\test-installer.ps1 -LogDir collected (the output of the helper's diagnostic
+      # runs) and the logs of %ProgramData%\SplitLane\logs (with .prev); nothing when there is none of them.
+      - name: Collect the failure logs
+        if: failure()
+        run: |
+          $logs = Join-Path $env:ProgramData 'SplitLane\logs'
+          if (Test-Path -LiteralPath $logs) {
+            $to = Join-Path $env:RUNNER_TEMP 'test-installer\logs'
+            New-Item -ItemType Directory -Force -Path $to | Out-Null
+            Copy-Item -Path (Join-Path $logs '*.log*') -Destination $to -Force
+          }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: test-installer-logs
+          path: ${{ runner.temp }}/test-installer/
+          if-no-files-found: ignore
+          retention-days: 2
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

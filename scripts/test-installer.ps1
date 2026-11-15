@@ -11,12 +11,15 @@
 # TEST-REFUSED before it changes anything. Never run it on a PC where SplitLane is installed.
 # Needs what scripts\build-installer.ps1 leaves: dist\helper (the six files) and app\node_modules (the order
 # of the fuses is that of @electron/fuses as electron-builder resolves it), and node in PATH.
-# The NSIS uninstaller copies itself to %TEMP% and starts that copy, which removes the files; the exit code
-# of the copy is not seen, so the test waits until the folder, the uninstall entry and the copy are gone.
+# The NSIS uninstaller copies itself to %TEMP%\~nsuA.tmp, starts that copy and ends at once; the copy removes
+# the files. The test waits for the copy and reads its exit code, then for the folder and the uninstall entry
+# to be gone (120 s at most in all).
+# -LogDir (optional): after a failure the output of the helper's diagnostic runs and the TEST-FAIL line are
+# put there, for the CI artifact (the workflow adds %ProgramData%\SplitLane\logs).
 # ASCII only: Windows PowerShell 5.1 reads a script without BOM in the ANSI code page.
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-installer.ps1 -Installer <path>
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-installer.ps1 -Installer <path> [-LogDir <dir>]
 # Result: last line TEST-OK, TEST-FAIL <step>: <what> (exit code 1) or TEST-REFUSED: <reason> (exit code 2).
-param([string]$Installer = '')
+param([string]$Installer = '', [string]$LogDir = '')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $root = Split-Path -Parent $PSScriptRoot
@@ -76,8 +79,25 @@ function Get-UninstallEntries {
     }
 }
 
-# The copy of the NSIS uninstaller that runs from %TEMP%\~nsu*.tmp (Un_A.exe; Au_.exe in NSIS 2).
-function Get-UninstallerCopies { @(Get-Process | Where-Object { $_.ProcessName -match '^(Un_[A-Z]|Au_)$' }) }
+# The running copies of the NSIS uninstaller, %TEMP%\~nsuA.tmp\Un_A.exe (Au_.exe in NSIS 2), each with its
+# handle open, so that its exit code can be read after it ends; one that ended before it was opened is left out.
+function Get-UninstallerCopies {
+    @(foreach ($p in @(Get-Process | Where-Object { $_.ProcessName -match '^(Un_[A-Z]|Au_)$' })) {
+        if ($p.Path -and $p.Path -notlike '*\~nsu*') { continue }
+        try { $null = $p.Handle; $p } catch { }
+    })
+}
+
+# With -LogDir: the lines go into the file $name there, for the CI artifact.
+function Save-Log([string]$name, [string[]]$lines) {
+    if (-not $LogDir) { return }
+    try {
+        New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+        Add-Content -LiteralPath (Join-Path $LogDir $name) -Value $lines
+    } catch {
+        Write-Host "  diag: ${LogDir}: $($_.Exception.Message)"
+    }
+}
 
 # Empty when the machine may run the test, else why not. Nothing is changed before this passes.
 function Get-Refusal {
@@ -165,8 +185,10 @@ function Invoke-Program([string]$exe, [string]$arguments, [int]$seconds) {
 }
 
 # After a failed setup only: what the helper says when its step runs again (the silent installer shows
-# no message box, so its reason is not seen otherwise).
+# no message box, so its reason is not seen otherwise). Both streams are read asynchronously; the helper
+# gets 60 s, then it is ended.
 function Show-HelperOutput([string]$exe, [string]$arguments) {
+    $lines = @()
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $exe
@@ -175,15 +197,23 @@ function Show-HelperOutput([string]$exe, [string]$arguments) {
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $p = [System.Diagnostics.Process]::Start($psi)
-        $out = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
-        $p.WaitForExit()
-        foreach ($line in $out -split "`r?`n") {
-            if ($line) { Write-Host "  diag: splitlane-helper.exe ${arguments}: $line" }
+        $reads = @($p.StandardOutput.ReadToEndAsync(), $p.StandardError.ReadToEndAsync())
+        if ($p.WaitForExit(60000)) {
+            $end = "exit code $($p.ExitCode)"
+        } else {
+            try { $p.Kill() } catch { }
+            $end = 'did not end within 60 s and was ended'
         }
-        Write-Host "  diag: splitlane-helper.exe ${arguments}: exit code $($p.ExitCode)"
+        foreach ($r in $reads) {
+            try { $null = $r.Wait(5000) } catch { }
+            if ($r.Status -eq 'RanToCompletion') { $lines += @($r.Result -split "`r?`n" | Where-Object { $_ }) }
+        }
+        $lines += $end
     } catch {
-        Write-Host "  diag: splitlane-helper.exe ${arguments}: $($_.Exception.Message)"
+        $lines += $_.Exception.Message
     }
+    foreach ($line in $lines) { Write-Host "  diag: splitlane-helper.exe ${arguments}: $line" }
+    Save-Log "helper-$(($arguments -split ' ')[0] -replace '[^A-Za-z0-9-]', '').txt" (@("splitlane-helper.exe $arguments") + $lines)
 }
 
 function Install-Product {
@@ -196,34 +226,63 @@ function Install-Product {
     Say 'the installer /S ended with exit code 0'
 }
 
+# What an uninstall left: the program folder (some of its files), the uninstall entries $entries, the task.
+function Get-LeftState($entries) {
+    $state = @()
+    if (Test-Path -LiteralPath $product) {
+        $files = @(Get-ChildItem -LiteralPath $product -Recurse -Force -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.FullName.Substring($product.Length + 1) } | Select-Object -First 20)
+        $state += "$product is there (in it: $($files -join ', '))"
+    } else {
+        $state += "$product is gone"
+    }
+    if (@($entries | Where-Object { Test-Path -LiteralPath $_ }).Count -gt 0) {
+        $state += 'the uninstall entry is there'
+    } else {
+        $state += 'the uninstall entry is gone'
+    }
+    if (Get-Task) { $state += "the task $taskName is there" } else { $state += "the task $taskName is gone" }
+    return $state -join '; '
+}
+
+# Uninstall SplitLane.exe $arguments. The started instance copies itself to %TEMP%\~nsuA.tmp, starts the copy
+# and ends; the copy does the work and its exit code is the result (2 when the helper's uninstall refused).
+# The copy is waited for and its exit code read; once it has ended, the folder and the uninstall entry must
+# be gone within 5 s (a delete may wait for a handle to close). Not seen (it had ended already, or NSIS
+# names it otherwise): the folder and the entry are waited for. 120 s in all.
 function Uninstall-Product([string]$arguments) {
     $uninstaller = Join-Path $product 'Uninstall SplitLane.exe'
     if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) { throw "no $uninstaller" }
     $entries = @(Get-UninstallEntries)
     if ($entries.Count -eq 0) { throw 'no uninstall entry SplitLane before the uninstall' }
+    $label = "Uninstall SplitLane.exe $arguments"
     $deadline = (Get-Date).AddSeconds(120)
     $code = Invoke-Program $uninstaller $arguments 120
-    if ($code -ne 0) { throw "Uninstall SplitLane.exe $arguments ended with exit code $code" }
-    while ($true) {
-        $left = @()
-        if (Test-Path -LiteralPath $product) { $left += $product }
-        if (@($entries | Where-Object { Test-Path -LiteralPath $_ }).Count -gt 0) { $left += 'the uninstall entry SplitLane' }
-        if ((Get-UninstallerCopies).Count -gt 0) { $left += 'the uninstaller copy in %TEMP%' }
-        if ($left.Count -eq 0) { break }
-        if ((Get-Date) -gt $deadline) {
-            $files = ''
-            if (Test-Path -LiteralPath $product) {
-                $files = '; left in it: ' + ((@(Get-ChildItem -LiteralPath $product -Recurse -Force |
-                    ForEach-Object { $_.FullName.Substring($product.Length + 1) }) | Select-Object -First 20) -join ', ')
-            }
-            $task = 'gone'
-            if (Get-Task) { $task = 'still there' }
-            throw "Uninstall SplitLane.exe ${arguments}: after 120 s still there: $($left -join ', '); the task is $task$files"
-        }
-        Start-Sleep -Milliseconds 500
+    if ($code -ne 0) { throw "$label ended with exit code $code; $(Get-LeftState $entries)" }
+    $copies = @(Get-UninstallerCopies)
+    foreach ($c in $copies) {
+        $name = "$($c.ProcessName).exe (process $($c.Id))"
+        $ms = [int][Math]::Max(0, ($deadline - (Get-Date)).TotalMilliseconds)
+        if (-not $c.WaitForExit($ms)) { throw "${label}: its copy $name did not end within 120 s; $(Get-LeftState $entries)" }
+        if ($c.ExitCode -ne 0) { throw "${label}: its copy $name ended with exit code $($c.ExitCode); $(Get-LeftState $entries)" }
+        Say "${label}: its copy $name ended with exit code 0"
     }
-    if (@(Get-UninstallEntries).Count -gt 0) { throw 'an uninstall entry SplitLane is still there' }
-    Say "Uninstall SplitLane.exe $arguments ended (exit code 0) and its copy removed $product and the uninstall entry"
+    $until = $deadline
+    if ($copies.Count -gt 0) {
+        $grace = (Get-Date).AddSeconds(5)
+        if ($grace -lt $until) { $until = $grace }
+    } else {
+        Write-Host "  note: ${label}: no running copy of the uninstaller was seen; its exit code is not known"
+    }
+    while ((Test-Path -LiteralPath $product) -or @($entries | Where-Object { Test-Path -LiteralPath $_ }).Count -gt 0) {
+        if ((Get-Date) -gt $until) {
+            if ($copies.Count -gt 0) { throw "${label}: the uninstaller has ended, but not everything is gone: $(Get-LeftState $entries)" }
+            throw "${label}: after 120 s not everything is gone (no copy of the uninstaller was seen): $(Get-LeftState $entries)"
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    if (@(Get-UninstallEntries).Count -gt 0) { throw "${label}: an uninstall entry SplitLane is still there" }
+    Say "$label removed $product and the uninstall entry"
 }
 
 function Assert-Task {
@@ -365,7 +424,9 @@ try {
     }
     Say "no task $taskName, no $product, no $data, no $userData"
 } catch {
-    Write-Host "TEST-FAIL $($script:step): $(($_.Exception.Message -replace '\s*\r?\n\s*', ' ').Trim())"
+    $line = "TEST-FAIL $($script:step): $(($_.Exception.Message -replace '\s*\r?\n\s*', ' ').Trim())"
+    Save-Log 'test-installer.txt' $line
+    Write-Host $line
     exit 1
 }
 Write-Host 'TEST-OK'
