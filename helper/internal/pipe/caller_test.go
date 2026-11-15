@@ -30,7 +30,6 @@ func TestAllowedFolderBoundary(t *testing.T) {
 		{`C:\Program Files\SplitLane`, false},
 		{"C:\\Program F\u0130les\\SplitLane\\x.exe", false}, // U+0130: another folder on NTFS
 		{"C:\\Program File\u017f\\SplitLane\\x.exe", false}, // U+017F folds to "s" in Go
-		{"C:\\Program Files\\Split\u212aane\\x.exe", false}, // U+212A folds to "k" in Go
 		{`SplitLane\SplitLane.exe`, false},
 		{``, false},
 	}
@@ -38,6 +37,11 @@ func TestAllowedFolderBoundary(t *testing.T) {
 		if got := Allowed(Caller{PID: 1, Image: c.image}, dir); got != c.want {
 			t.Errorf("Allowed(%q) = %v, want %v", c.image, got, c.want)
 		}
+	}
+	// U+212A (Kelvin) folds to "k" in Go, yet is another letter on NTFS.
+	if !Allowed(Caller{PID: 1, Image: `c:\work\kit\x.exe`}, `C:\Work\Kit`) ||
+		Allowed(Caller{PID: 1, Image: "C:\\Work\\\u212ait\\x.exe"}, `C:\Work\Kit`) {
+		t.Error("the Kelvin sign is not a K")
 	}
 	if Allowed(Caller{PID: 1, Image: `C:\x\a.exe`}, "") {
 		t.Error("an empty product folder allows nothing")
@@ -54,7 +58,7 @@ func TestAllowedElevated(t *testing.T) {
 }
 
 // accepted runs f on the server side of a test pipe connection from this very process, while a client
-// is connected to it.
+// is connected to it; an Accept that fails fails the test.
 func accepted(t *testing.T, f func(conn net.Conn)) {
 	t.Helper()
 	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
@@ -63,19 +67,23 @@ func accepted(t *testing.T, f func(conn net.Conn)) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		defer close(done)
 		conn, err := l.Accept()
 		if err != nil {
+			done <- err
 			return
 		}
 		defer conn.Close()
 		f(conn)
+		done <- nil
 	}()
 	dial(t, name)
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("no client came")
 	}
@@ -118,8 +126,9 @@ func TestClientOfWithoutFd(t *testing.T) {
 
 // The folder of this test exe is the product folder: the process is inside it.
 func TestProductCheckAdmitsAnImageInsideTheFolder(t *testing.T) {
+	dir := filepath.Dir(ownExe(t))
 	var err error
-	accepted(t, func(conn net.Conn) { err = ProductCheck(filepath.Dir(ownExe(t)))(conn) })
+	accepted(t, func(conn net.Conn) { err = ProductCheck(dir)(conn) })
 	if err != nil {
 		t.Fatalf("an image inside the folder is allowed: %v", err)
 	}
@@ -166,19 +175,12 @@ func (l *logLines) has(sub string) bool {
 	return false
 }
 
-// serveWith starts a server with the check on a pipe name of its own; the pipe disappears with the test.
-func serveWith(t *testing.T, check Check) (*fakeHandler, string, *logLines) {
+// serveWith starts a server with the check; its log lines are kept.
+func serveWith(t *testing.T, check Check) (*Server, *fakeHandler, string, *logLines) {
 	t.Helper()
-	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
-	h := &fakeHandler{}
 	ll := &logLines{}
-	s, err := Listen(name, currentSID(t), h, ll.add, check)
-	if err != nil {
-		t.Fatal(err)
-	}
-	go s.Serve()
-	t.Cleanup(s.Close)
-	return h, name, ll
+	s, h, name := serveOn(t, ll.add, check)
+	return s, h, name, ll
 }
 
 const helloLine = `{"id":1,"method":"hello","params":{"protocol":1}}` + "\n"
@@ -196,7 +198,7 @@ func expectEOF(t *testing.T, c *testClient) {
 
 func TestCheckErrorRejects(t *testing.T) {
 	const refusal = "not part of SplitLane: evil.exe (process 7)"
-	h, name, ll := serveWith(t, func(net.Conn) error { return errors.New(refusal) })
+	_, h, name, ll := serveWith(t, func(net.Conn) error { return errors.New(refusal) })
 	expectEOF(t, dial(t, name))
 	deadline := time.Now().Add(2 * time.Second)
 	for !ll.has("pipe: refused a client: "+refusal) && time.Now().Before(deadline) {
@@ -213,7 +215,7 @@ func TestCheckErrorRejects(t *testing.T) {
 func TestRejectedClientDoesNotStopTheServer(t *testing.T) {
 	var mu sync.Mutex
 	n := 0
-	_, name, _ := serveWith(t, func(net.Conn) error {
+	_, _, name, _ := serveWith(t, func(net.Conn) error {
 		mu.Lock()
 		defer mu.Unlock()
 		n++
@@ -231,7 +233,7 @@ func TestRejectedClientDoesNotStopTheServer(t *testing.T) {
 }
 
 func TestNilCheckAcceptsAll(t *testing.T) {
-	_, name, _ := serveWith(t, nil)
+	_, _, name, _ := serveWith(t, nil)
 	c := dial(t, name)
 	if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":1}}`); m["result"] == nil {
 		t.Fatalf("hello: %v", m)
@@ -241,22 +243,21 @@ func TestNilCheckAcceptsAll(t *testing.T) {
 // Close while a client is still in its check: the client is not served afterwards and Close returns.
 func TestCloseDuringTheCheckServesNobody(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
-	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
-	h := &fakeHandler{}
-	s, err := Listen(name, currentSID(t), h, nil, func(net.Conn) error {
+	s, h, name := serveOn(t, nil, func(net.Conn) error {
 		close(entered)
 		<-release
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go s.Serve()
 	c := dial(t, name)
 	<-entered
 	closed := make(chan struct{})
 	go func() { s.Close(); close(closed) }()
-	time.Sleep(50 * time.Millisecond)
+	for deadline := time.Now().Add(5 * time.Second); !s.isClosing() && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	if !s.isClosing() {
+		t.Fatal("Close did not start")
+	}
 	close(release)
 	select {
 	case <-closed:

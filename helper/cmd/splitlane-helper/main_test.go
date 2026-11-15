@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -546,17 +547,22 @@ func TestSessionUserAndUserSidExclude(t *testing.T) {
 // The pipe check is the product's alone: --dev passes none, the product passes the check of its folder,
 // and a product folder that cannot be found is an error (the worker then exits with exitInternal).
 func TestPipeCheckByMode(t *testing.T) {
-	if c, err := pipeCheck(true); c != nil || err != nil {
-		t.Fatalf("--dev: %v %v", c != nil, err)
+	oldCheck, oldDir := productCheck, productDir
+	defer func() { productCheck, productDir = oldCheck, oldDir }()
+	var builtFrom []string
+	productCheck = func(dir string) pipe.Check {
+		builtFrom = append(builtFrom, dir)
+		return func(net.Conn) error { return nil }
 	}
-	fakePlace(t)
-	if c, err := pipeCheck(false); c == nil || err != nil {
-		t.Fatalf("product: %v %v", c != nil, err)
+	productDir = func() (string, error) { return `C:\Product\SplitLane`, nil }
+	if c, err := pipeCheck(true); c != nil || err != nil || len(builtFrom) != 0 {
+		t.Fatalf("--dev: %v %v %v", c != nil, err, builtFrom)
 	}
-	old := productDir
-	defer func() { productDir = old }()
+	if c, err := pipeCheck(false); c == nil || err != nil || len(builtFrom) != 1 || builtFrom[0] != `C:\Product\SplitLane` {
+		t.Fatalf("product: %v %v %v", c != nil, err, builtFrom)
+	}
 	productDir = func() (string, error) { return "", errors.New("no product folder") }
-	if c, err := pipeCheck(false); c != nil || err == nil {
+	if c, err := pipeCheck(false); c != nil || err == nil || len(builtFrom) != 1 {
 		t.Fatalf("a failing product folder is an error: %v %v", c != nil, err)
 	}
 }

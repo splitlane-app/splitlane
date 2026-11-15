@@ -310,6 +310,9 @@ func run(args []string) int {
 	return exitOK
 }
 
+// productCheck builds the check of the product folder; the tests watch what it is built from.
+var productCheck = pipe.ProductCheck
+
 // pipeCheck is the caller check of the pipe (spec 5): the product serves SplitLane programs and
 // elevated callers; --dev serves everyone (nil).
 func pipeCheck(dev bool) (pipe.Check, error) {
@@ -320,7 +323,7 @@ func pipeCheck(dev bool) (pipe.Check, error) {
 	if err != nil {
 		return nil, err
 	}
-	return pipe.ProductCheck(dir), nil
+	return productCheck(dir), nil
 }
 
 // appendWriter writes every line to the end of the file at path: it opens the file for the line and closes

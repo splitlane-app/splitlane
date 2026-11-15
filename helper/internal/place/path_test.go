@@ -18,7 +18,6 @@ func TestPathInside(t *testing.T) {
 		{"C:\\Program F\u0130les\\SplitLane\\a.exe", false}, // U+0130 is not "i" on NTFS
 		{"C:\\Program Files\\Spl\u0130tLane\\a.exe", false},
 		{"C:\\Program File\u017f\\SplitLane\\a.exe", false}, // U+017F folds to "s" in Go
-		{"C:\\Program Files\\Split\u212aane\\a.exe", false}, // U+212A folds to "k" in Go
 		{`D:\Program Files\SplitLane\a.exe`, false},
 		{`SplitLane\a.exe`, false},
 		{``, false},
@@ -30,6 +29,10 @@ func TestPathInside(t *testing.T) {
 		if got := PathInside(c.path, dir+`\`); got != c.want {
 			t.Errorf("PathInside(%q, trailing separator) = %v, want %v", c.path, got, c.want)
 		}
+	}
+	// U+212A (Kelvin) folds to "k" in Go, yet is another letter on NTFS.
+	if !PathInside(`c:\work\kit\a.exe`, `C:\Work\Kit`) || PathInside("C:\\Work\\\u212ait\\a.exe", `C:\Work\Kit`) {
+		t.Error("the Kelvin sign is not a K")
 	}
 	if PathInside(`C:\a.exe`, "") || !PathInside(`C:\a.exe`, `C:\`) {
 		t.Error("an empty folder contains nothing; the drive root contains its files")

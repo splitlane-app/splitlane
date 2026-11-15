@@ -62,18 +62,25 @@ func currentSID(t *testing.T) string {
 	return u.User.Sid.String()
 }
 
-// serve starts a server on a pipe name of its own; the pipe disappears with the test.
-func serve(t *testing.T) (*Server, *fakeHandler, string) {
+// serveOn starts a server with the log and the check on a pipe name of its own; the pipe disappears with
+// the test.
+func serveOn(t *testing.T, log func(string, ...any), check Check) (*Server, *fakeHandler, string) {
 	t.Helper()
 	name := fmt.Sprintf(`\\.\pipe\SplitLane.Test.%d`, rand.Int63())
 	h := &fakeHandler{}
-	s, err := Listen(name, currentSID(t), h, t.Logf, nil)
+	s, err := Listen(name, currentSID(t), h, log, check)
 	if err != nil {
 		t.Fatal(err)
 	}
 	go s.Serve()
 	t.Cleanup(s.Close)
 	return s, h, name
+}
+
+// serve starts a server without a check.
+func serve(t *testing.T) (*Server, *fakeHandler, string) {
+	t.Helper()
+	return serveOn(t, t.Logf, nil)
 }
 
 type testClient struct {
