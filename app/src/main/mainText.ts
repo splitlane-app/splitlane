@@ -10,6 +10,7 @@ export interface MainText {
   quit: string
   programsFilter: string
   zipFilter: string
+  confFilter: string
   notifyErrorTitle: string
   notifyErrorBody: string
   notifyVpnDownTitle: string
@@ -33,6 +34,7 @@ export const MAIN_TEXT: Record<Lang, MainText> = {
     quit: 'Выход',
     programsFilter: 'Программы',
     zipFilter: 'Архив ZIP',
+    confFilter: 'Конфигурация WireGuard',
     notifyErrorTitle: 'SplitLane: деление остановлено',
     notifyErrorBody: 'Откройте SplitLane, чтобы узнать причину',
     notifyVpnDownTitle: 'SplitLane: нет связи с VPN-сервером',
@@ -53,6 +55,7 @@ export const MAIN_TEXT: Record<Lang, MainText> = {
     quit: 'Quit',
     programsFilter: 'Programs',
     zipFilter: 'ZIP archive',
+    confFilter: 'WireGuard config',
     notifyErrorTitle: 'SplitLane: split routing stopped',
     notifyErrorBody: 'Open SplitLane to see why',
     notifyVpnDownTitle: "SplitLane: can't reach the VPN server",

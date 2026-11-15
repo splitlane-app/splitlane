@@ -100,7 +100,7 @@ function ExitNodeList({ state, last }: { state: HelperState; last: LastExitNode 
   )
 }
 
-const STEP_OF: Record<ConnectStep, number> = { login: 0, waitLogin: 0, approval: 0, exitNode: 1, enable: 2 }
+const STEP_OF: Record<ConnectStep, number> = { login: 0, waitLogin: 0, approval: 0, exitNode: 1, server: 1, enable: 2 }
 const STEP_KEYS = ['connect.step.login', 'connect.step.exitNode', 'connect.step.enable'] as const
 
 /**

@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 export const PIPE_NAME = '\\\\.\\pipe\\SplitLane.Helper'
 export const TASK_NAME = 'SplitLane Helper'
 
@@ -23,7 +23,8 @@ export const REASON_CODES = [
   'vpn_unreachable',
   'login_expired',
   'restore_pending',
-  'adapter_left'
+  'adapter_left',
+  'no_server'
 ] as const
 export type ReasonCode = (typeof REASON_CODES)[number]
 export interface Reason {
@@ -47,6 +48,29 @@ export interface ExitNode {
   online: boolean
 }
 
+/** The way out of the VPN lane: the embedded Tailscale node or a server of the proxy list. */
+export type Connector = 'tailscale' | 'proxy'
+
+export const PROXY_PROTOCOLS = ['vless', 'vmess', 'trojan', 'shadowsocks', 'hysteria2', 'tuic', 'wireguard'] as const
+export type ProxyProtocol = (typeof PROXY_PROTOCOLS)[number]
+
+/** A server of the list; its secrets never leave the helper. `source` is `manual`, `file` or a subscription id. */
+export interface ProxyServer {
+  id: string
+  name: string
+  protocol: ProxyProtocol
+  source: string
+}
+
+/** A subscription address the helper keeps; `updatedAt` is RFC 3339, empty before the first good update. */
+export interface Subscription {
+  id: string
+  name: string
+  updatedAt: string
+  count: number
+  error: string | null
+}
+
 export interface HelperState {
   phase: Phase
   reason: Reason | null
@@ -54,6 +78,7 @@ export interface HelperState {
   defaultLane: Lane
   apps: AppRule[]
   addresses: { vpn: string | null; direct: string | null }
+  connector: Connector
   tailscale: {
     backend: Backend
     authUrl: string | null
@@ -62,6 +87,7 @@ export interface HelperState {
     selectedExitNode: string | null
     path: 'direct' | 'relay' | null
   }
+  proxy: { servers: ProxyServer[]; selected: string | null; subscriptions: Subscription[] }
   systemTailscale: { installed: boolean; exitNodeOn: boolean; restoreOnDisable: boolean }
 }
 
@@ -74,7 +100,26 @@ export const ERROR_CODES = [
   'rule_rejected',
   'apply_failed',
   'unknown_exit_node',
-  'internal'
+  'internal',
+  'unknown_server',
+  'too_many',
+  'empty_subscription',
+  // a refresh may fail with any of these: a failed download, or the code of the first rejected line
+  'fetch_blocked_address',
+  'fetch_not_https',
+  'fetch_too_many_redirects',
+  'fetch_too_large',
+  'fetch_timeout',
+  'fetch_http_status',
+  'fetch_failed',
+  'unsupported_protocol',
+  'unsupported_transport',
+  'bad_link',
+  'missing_field',
+  'bad_wireguard',
+  'amneziawg',
+  'plugin',
+  'too_long'
 ] as const
 export type ErrorCode = (typeof ERROR_CODES)[number]
 export type RejectReason = 'too_broad' | 'protected' | 'duplicate'
@@ -88,6 +133,43 @@ export interface HelperError {
   protocol?: number
   rules?: RuleRejection[]
 }
+
+/** Why a line of the text (or the whole text, line 0) was not taken; the window has a text for each. */
+export const PROXY_REJECT_CODES = [
+  'unsupported_protocol',
+  'unsupported_transport',
+  'bad_link',
+  'missing_field',
+  'bad_wireguard',
+  'amneziawg',
+  'plugin',
+  'too_long',
+  'too_many',
+  'empty_subscription',
+  'fetch_blocked_address',
+  'fetch_not_https',
+  'fetch_too_many_redirects',
+  'fetch_too_large',
+  'fetch_timeout',
+  'fetch_http_status',
+  'fetch_failed'
+] as const
+export type ProxyRejectCode = (typeof PROXY_REJECT_CODES)[number]
+
+/** `line` is 1-based, 0 is the whole text. `code` is any string: one this list lacks gets a generic text. */
+export interface ProxyRejection {
+  line: number
+  code: string
+}
+
+/** The answer of proxy.add and proxy.refresh. */
+export interface ProxyAddResult {
+  added: string[]
+  existing: number
+  rejected: ProxyRejection[]
+  rejectedMore: number
+}
+
 export interface HelloResult {
   protocol: number
   helper: string
@@ -120,7 +202,19 @@ export interface Activity {
   detail?: ActivityDetail
 }
 
-export const LIMITS = { maxApps: 500, maxNameBytes: 256, maxPathBytes: 1024 } as const
+export const LIMITS = {
+  maxApps: 500,
+  maxNameBytes: 256,
+  maxPathBytes: 1024,
+  maxProxyTextBytes: 64 * 1024,
+  maxServers: 500,
+  maxSubscriptions: 20,
+  maxRejections: 50
+} as const
+
+/** The helper's patterns (protocol.go serverIDRe, subscriptionIDRe). */
+export const SERVER_ID = /^[0-9a-f]{16}$/
+export const SUBSCRIPTION_ID = /^sub-[0-9a-f]{16}$/
 
 const encoder = new TextEncoder()
 export function utf8Bytes(s: string): number {
@@ -176,6 +270,7 @@ const PHASES = ['off', 'starting', 'on', 'degraded', 'blocked', 'stopping', 'err
 const KINDS = ['folder', 'file', 'package', 'system'] as const
 const BACKENDS = ['stopped', 'needs_login', 'starting', 'running', 'needs_approval', 'expired'] as const
 const PATHS = ['direct', 'relay'] as const
+const CONNECTORS = ['tailscale', 'proxy'] as const
 const ACTIVITY_KINDS = ['app', 'system', 'unattributed'] as const
 
 function parseRule(x: unknown, path: string): AppRule {
@@ -187,6 +282,86 @@ function parseRule(x: unknown, path: string): AppRule {
     exe: str(o.exe, `${path}.exe`),
     matcher: { kind: oneOf(m.kind, KINDS, `${path}.matcher.kind`), value: str(m.value, `${path}.matcher.value`) },
     lane: oneOf(o.lane, LANES, `${path}.lane`)
+  }
+}
+
+function int(x: unknown, path: string): number {
+  const n = num(x, path)
+  if (!Number.isInteger(n) || n < 0) throw new Error(`${path}: expected an integer of 0 or more`)
+  return n
+}
+
+function upTo(x: unknown, maxBytes: number, path: string): string {
+  const v = str(x, path)
+  if (utf8Bytes(v) > maxBytes) throw new Error(`${path}: longer than ${maxBytes} bytes`)
+  return v
+}
+
+function matching(x: unknown, re: RegExp, path: string): string {
+  const v = str(x, path)
+  if (!re.test(v)) throw new Error(`${path}: not a valid id`)
+  return v
+}
+
+function parseProxy(x: unknown): HelperState['proxy'] {
+  const o = obj(x, 'state.proxy')
+  const rawServers = arr(o.servers, 'state.proxy.servers')
+  if (rawServers.length > LIMITS.maxServers) throw new Error(`state.proxy.servers: more than ${LIMITS.maxServers}`)
+  const rawSubs = arr(o.subscriptions, 'state.proxy.subscriptions')
+  if (rawSubs.length > LIMITS.maxSubscriptions) throw new Error(`state.proxy.subscriptions: more than ${LIMITS.maxSubscriptions}`)
+  const subscriptions = rawSubs.map((v, i): Subscription => {
+    const p = `state.proxy.subscriptions[${i}]`
+    const e = obj(v, p)
+    return {
+      id: matching(e.id, SUBSCRIPTION_ID, `${p}.id`),
+      name: upTo(e.name, LIMITS.maxNameBytes, `${p}.name`),
+      updatedAt: upTo(e.updatedAt, 64, `${p}.updatedAt`),
+      count: int(e.count, `${p}.count`),
+      error: e.error === null ? null : upTo(e.error, 64, `${p}.error`)
+    }
+  })
+  const subIds = new Set<string>()
+  for (const [i, s] of subscriptions.entries()) {
+    if (subIds.has(s.id)) throw new Error(`state.proxy.subscriptions[${i}].id repeats`)
+    subIds.add(s.id)
+  }
+  const ids = new Set<string>()
+  const servers = rawServers.map((v, i): ProxyServer => {
+    const p = `state.proxy.servers[${i}]`
+    const e = obj(v, p)
+    const id = matching(e.id, SERVER_ID, `${p}.id`)
+    if (ids.has(id)) throw new Error(`${p}.id repeats`)
+    ids.add(id)
+    const source = str(e.source, `${p}.source`)
+    if (source !== 'manual' && source !== 'file' && !subIds.has(source)) throw new Error(`${p}.source: unknown value`)
+    return {
+      id,
+      name: upTo(e.name, LIMITS.maxNameBytes, `${p}.name`),
+      protocol: oneOf(e.protocol, PROXY_PROTOCOLS, `${p}.protocol`),
+      source
+    }
+  })
+  return {
+    servers,
+    selected: o.selected === null ? null : matching(o.selected, SERVER_ID, 'state.proxy.selected'),
+    subscriptions
+  }
+}
+
+/** The answer of proxy.add and proxy.refresh; a code this window does not know is kept, not refused. */
+export function parseProxyAddResult(x: unknown): ProxyAddResult {
+  const o = obj(x, 'result')
+  const rejected = arr(o.rejected, 'result.rejected')
+  if (rejected.length > LIMITS.maxRejections) throw new Error(`result.rejected: more than ${LIMITS.maxRejections}`)
+  return {
+    added: arr(o.added, 'result.added').map((v, i) => matching(v, SERVER_ID, `result.added[${i}]`)),
+    existing: int(o.existing, 'result.existing'),
+    rejected: rejected.map((v, i) => {
+      const p = `result.rejected[${i}]`
+      const e = obj(v, p)
+      return { line: int(e.line, `${p}.line`), code: upTo(e.code, 64, `${p}.code`) }
+    }),
+    rejectedMore: int(o.rejectedMore, 'result.rejectedMore')
   }
 }
 
@@ -208,6 +383,7 @@ export function parseState(x: unknown): HelperState {
     reason,
     allDirect: bool(o.allDirect, 'state.allDirect'),
     defaultLane: oneOf(o.defaultLane, LANES, 'state.defaultLane'),
+    connector: oneOf(o.connector, CONNECTORS, 'state.connector'),
     apps: arr(o.apps, 'state.apps').map((r, i) => parseRule(r, `state.apps[${i}]`)),
     addresses: { vpn: strOrNull(a.vpn, 'state.addresses.vpn'), direct: strOrNull(a.direct, 'state.addresses.direct') },
     tailscale: {
@@ -225,6 +401,7 @@ export function parseState(x: unknown): HelperState {
       selectedExitNode: strOrNull(t.selectedExitNode, 'state.tailscale.selectedExitNode'),
       path: t.path === null ? null : oneOf(t.path, PATHS, 'state.tailscale.path')
     },
+    proxy: parseProxy(o.proxy),
     systemTailscale: {
       installed: bool(s.installed, 'state.systemTailscale.installed'),
       exitNodeOn: bool(s.exitNodeOn, 'state.systemTailscale.exitNodeOn'),

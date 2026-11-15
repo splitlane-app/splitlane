@@ -17,7 +17,7 @@ describe('dictionary', () => {
       ...ERROR_CODES.map((c) => `error.${c}`),
       ...rejects.map((r) => `reject.${r}`)
     ]
-    expect(codes).toHaveLength(18 + 9 + 3)
+    expect(codes).toHaveLength(19 + 27 + 3)
     for (const dict of [ru, en] as Record<string, string>[]) {
       for (const key of codes) {
         const text = dict[key]

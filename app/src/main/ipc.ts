@@ -1,7 +1,26 @@
-import { IPC, LINK_CLOSED, MAX_DROPPED, type AppInfo, type Command, type CommandResult, type Snapshot } from '../shared/ipc'
+import {
+  IPC,
+  LINK_CLOSED,
+  MAX_DROPPED,
+  type AppInfo,
+  type Command,
+  type CommandResult,
+  type ProxyOutcome,
+  type Snapshot
+} from '../shared/ipc'
 import { isLanguageSetting, type Lang } from '../shared/i18n'
 import type { Dropped, Program } from '../shared/programs'
-import { LIMITS, utf8Bytes, type AppRule, type HelperError, type Lane, type MatcherKind } from '../shared/protocol'
+import {
+  LIMITS,
+  SERVER_ID,
+  SUBSCRIPTION_ID,
+  parseProxyAddResult,
+  utf8Bytes,
+  type AppRule,
+  type HelperError,
+  type Lane,
+  type MatcherKind
+} from '../shared/protocol'
 import type { WindowSettings } from '../shared/settings'
 import { notesUrlFor, parseVersion, type UpdateState } from '../shared/update'
 import { CallTimeoutError, ConnectionClosedError, HelperCallError } from './rpc'
@@ -109,6 +128,18 @@ export function validateCommand(x: unknown): Command {
       if (!IPV4.test(id)) throw new Error('id must be an IPv4 address')
       return { method, id }
     }
+    case 'proxy.remove': {
+      onlyKeys(o, ['method', 'id'], method)
+      const id = str(o.id, 'id')
+      if (!SERVER_ID.test(id) && !SUBSCRIPTION_ID.test(id)) throw new Error('id must be the id of a server or a subscription')
+      return { method, id }
+    }
+    case 'proxy.select': {
+      onlyKeys(o, ['method', 'id'], method)
+      const id = str(o.id, 'id')
+      if (!SERVER_ID.test(id)) throw new Error('id must be the id of a server')
+      return { method, id }
+    }
     default:
       throw new Error(`unknown method ${JSON.stringify(method)}`)
   }
@@ -200,6 +231,8 @@ function request(c: Command): { method: string; params?: object } {
     case 'lanes.set':
       return { method: c.method, params: { apps: c.apps, defaultLane: c.defaultLane } }
     case 'tailscale.setExitNode':
+    case 'proxy.remove':
+    case 'proxy.select':
       return { method: c.method, params: { id: c.id } }
     default:
       return { method: c.method }
@@ -222,6 +255,43 @@ export async function runCommand(link: Pick<LinkCalls, 'call'>, c: Command): Pro
   } catch (e) {
     return { ok: false, error: toHelperError(e) }
   }
+}
+
+// ---- proxy.add and proxy.refresh ----
+
+/** A download inside proxy.add or proxy.refresh takes up to 20 s on the helper's side. */
+export const PROXY_CALL_TIMEOUT_MS = 30_000
+
+export function proxyRejected(code: string): ProxyOutcome {
+  return { kind: 'done', result: { added: [], existing: 0, rejected: [{ line: 0, code }], rejectedMore: 0 } }
+}
+
+async function proxyCall(link: Pick<LinkCalls, 'call'>, method: string, params: object): Promise<ProxyOutcome> {
+  try {
+    return { kind: 'done', result: parseProxyAddResult(await link.call(method, params, PROXY_CALL_TIMEOUT_MS)) }
+  } catch (e) {
+    return { kind: 'failed', error: toHelperError(e) }
+  }
+}
+
+/**
+ * proxy.add: a text of at most 64 KiB in UTF-8, not empty. A text too long is answered here as the whole-text
+ * rejection `too_long`, without a call; `name` is the base name of a `.conf` read from a file. Never throws.
+ */
+export async function runProxyAdd(link: Pick<LinkCalls, 'call'>, text: unknown, name?: string): Promise<ProxyOutcome> {
+  if (typeof text !== 'string' || text.trim() === '') {
+    return { kind: 'failed', error: { code: 'bad_request', message: 'text is empty' } }
+  }
+  if (utf8Bytes(text) > LIMITS.maxProxyTextBytes) return proxyRejected('too_long')
+  return proxyCall(link, 'proxy.add', name === undefined ? { text } : { text, name })
+}
+
+/** proxy.refresh: `id` is the id of a subscription. Never throws. */
+export async function runProxyRefresh(link: Pick<LinkCalls, 'call'>, id: unknown): Promise<ProxyOutcome> {
+  if (typeof id !== 'string' || !SUBSCRIPTION_ID.test(id)) {
+    return { kind: 'failed', error: { code: 'bad_request', message: 'id must be the id of a subscription' } }
+  }
+  return proxyCall(link, 'proxy.refresh', { id })
 }
 
 /** The archive path in the answer of diagnostics.export. */
@@ -268,6 +338,8 @@ export interface IpcDeps {
   /** A routing command came from the user: the auto-enable of this run stops. */
   userCommand(): void
   installHelper(): Promise<void>
+  /** The file dialog for a `.conf`, its reading and proxy.add (confFile.ts). */
+  proxyAddFile(): Promise<ProxyOutcome>
   appInfo(): Promise<AppInfo>
   setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings>
   installedPrograms(): Promise<Program[]>
@@ -316,6 +388,9 @@ export function registerIpc(d: IpcDeps): void {
     }
   })
   on(IPC.installHelper, () => d.installHelper())
+  on(IPC.proxyAdd, (x) => runProxyAdd(d.link, x))
+  on(IPC.proxyAddFile, () => d.proxyAddFile())
+  on(IPC.proxyRefresh, (x) => runProxyRefresh(d.link, x))
   on(IPC.appInfo, () => d.appInfo())
   on(IPC.retryLink, () => {
     d.link.retry()

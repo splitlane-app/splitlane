@@ -1,6 +1,9 @@
 import type { HelperState } from '../../shared/protocol'
 import type { LinkStatus } from '../../shared/status'
 import { t } from '../i18n/t'
+import { laneServerName } from './connect'
+
+export { selectedExitNodeName } from './connect'
 
 export type BannerAction =
   | 'enable'
@@ -23,14 +26,8 @@ export interface Banner {
   actions: BannerAction[]
 }
 
-/** The name of the selected exit node; null when none is selected or the list has no name for it. */
-export function selectedExitNodeName(state: HelperState): string | null {
-  const { exitNodes, selectedExitNode } = state.tailscale
-  return exitNodes.find((n) => n.id === selectedExitNode)?.name || null
-}
-
 function exitNodeName(state: HelperState): string {
-  return selectedExitNodeName(state) ?? t('banner.serverFallback')
+  return laneServerName(state, null) ?? t('banner.serverFallback')
 }
 
 export function bannerFor(link: LinkStatus, state: HelperState | null): Banner | null {

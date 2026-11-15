@@ -14,6 +14,7 @@ function state(phase: Phase, over: Partial<HelperState> = {}, reason: Reason | n
     defaultLane: 'vpn',
     apps: [],
     addresses: { vpn: null, direct: null },
+    connector: 'tailscale',
     tailscale: {
       backend: 'running',
       authUrl: null,
@@ -22,6 +23,7 @@ function state(phase: Phase, over: Partial<HelperState> = {}, reason: Reason | n
       selectedExitNode: 'n1',
       path: null
     },
+    proxy: { servers: [], selected: null, subscriptions: [] },
     systemTailscale: { installed: true, exitNodeOn: false, restoreOnDisable: false },
     ...over
   }

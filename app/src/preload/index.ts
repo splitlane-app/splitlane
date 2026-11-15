@@ -20,6 +20,10 @@ const bridge: SplitLaneBridge = {
   command: (c) => ipcRenderer.invoke(IPC.command, c),
   setActivityDetail: (key) => ipcRenderer.invoke(IPC.setActivityDetail, key),
   installHelper: () => ipcRenderer.invoke(IPC.installHelper),
+  proxyAdd: (text) => ipcRenderer.invoke(IPC.proxyAdd, text),
+  // no path crosses: the main process opens the dialog
+  proxyAddFile: () => ipcRenderer.invoke(IPC.proxyAddFile),
+  proxyRefresh: (id) => ipcRenderer.invoke(IPC.proxyRefresh, id),
   appInfo: () => ipcRenderer.invoke(IPC.appInfo),
   retryLink: () => ipcRenderer.invoke(IPC.retryLink),
   setSettings: (patch) => ipcRenderer.invoke(IPC.setSettings, patch),

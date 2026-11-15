@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
-import { access, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { access, copyFile, mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, win32 } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, Notification, shell } from 'electron'
 import { resolveLanguage, type Lang } from '../shared/i18n'
@@ -13,6 +13,7 @@ import type { InstallOutcome, LinkStatus } from '../shared/status'
 import { AutoEnable } from './autoEnable'
 import { Games, type GamesFs } from './games'
 import { IconCache, type IconFs } from './icons'
+import { addConfFile } from './confFile'
 import { exportPath, mergePrograms, registerIpc, runCommand, toHelperError } from './ipc'
 import { HelperLink, SHUTDOWN_TIMEOUT_MS } from './link'
 import { APP_USER_MODEL_ID, loginItemSettings, startupLoginItem } from './loginItem'
@@ -536,6 +537,29 @@ async function pickProgram(): Promise<Dropped | null> {
   return pickedFile(r.filePaths[0], dropReaders)
 }
 
+/** «Добавить файл .conf»: the dialog, the reading and proxy.add; the path stays here. */
+function proxyAddFile(): ReturnType<typeof addConfFile> {
+  return addConfFile(
+    {
+      pick: async (filterName) => {
+        const options = {
+          properties: ['openFile' as const],
+          filters: [{ name: filterName, extensions: ['conf'] }]
+        }
+        const r = win !== null ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+        return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
+      },
+      openFile: async (p) => {
+        const h = await open(p, 'r')
+        return { read: (buf, length) => h.read(buf, 0, length, null), close: () => h.close() }
+      },
+      filterName: mainText(language).confFilter,
+      baseName: (p) => win32.basename(p)
+    },
+    link
+  )
+}
+
 async function saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError }> {
   let archive: string
   try {
@@ -654,6 +678,7 @@ async function main(): Promise<void> {
     snapshot,
     userCommand: () => autoEnable.stop(),
     installHelper: startInstall,
+    proxyAddFile,
     // in development the setup screen works with dist\helper, so the window counts as installed
     appInfo: async () => ({
       version: app.getVersion(),

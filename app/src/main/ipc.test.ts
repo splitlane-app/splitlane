@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { IPC, type Command, type Snapshot } from '../shared/ipc'
+import { IPC, type Command, type ProxyOutcome, type Snapshot } from '../shared/ipc'
 import type { AppRule } from '../shared/protocol'
 import type { UpdateState } from '../shared/update'
 import {
@@ -302,6 +302,7 @@ function ipcHarness() {
     }),
     userCommand: vi.fn(),
     installHelper: vi.fn(async () => {}),
+    proxyAddFile: vi.fn(async (): Promise<ProxyOutcome> => ({ kind: 'cancelled' })),
     appInfo: vi.fn(async () => ({ version: '0.2.0', installed: true })),
     setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, language: 'system' as const, lastExitNode: null, notifications: true, notifiedVersion: null, ...p })),
     installedPrograms: vi.fn(async () => []),

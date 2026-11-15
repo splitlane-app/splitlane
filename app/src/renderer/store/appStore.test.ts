@@ -31,6 +31,7 @@ function state(over: Partial<HelperState> = {}): HelperState {
     defaultLane: 'vpn',
     apps: [],
     addresses: { vpn: '198.51.100.7', direct: '203.0.113.9' },
+    connector: 'tailscale',
     tailscale: {
       backend: 'running',
       authUrl: null,
@@ -39,6 +40,7 @@ function state(over: Partial<HelperState> = {}): HelperState {
       selectedExitNode: '100.64.0.2',
       path: 'direct'
     },
+    proxy: { servers: [], selected: null, subscriptions: [] },
     systemTailscale: { installed: false, exitNodeOn: false, restoreOnDisable: false },
     ...over
   }

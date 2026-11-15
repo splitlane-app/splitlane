@@ -3,14 +3,14 @@
 import { render, type RenderResult } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import type { Command, CommandResult, Snapshot, SplitLaneBridge } from '../shared/ipc'
-import type { Activity, ActivityApp, AppRule, HelperState, Lane } from '../shared/protocol'
+import type { Activity, ActivityApp, AppRule, HelperState, Lane, ProxyServer, Subscription } from '../shared/protocol'
 import { DEFAULT_SETTINGS } from '../shared/settings'
 import type { LinkStatus } from '../shared/status'
 import { IconCache } from './bridge'
 import { ServicesContext, type Services } from './services'
 import { createAppStore } from './store/appStore'
 
-export const ready: LinkStatus = { kind: 'ready', hello: { protocol: 1, helper: '0.1.0', core: '1.14.4' } }
+export const ready: LinkStatus = { kind: 'ready', hello: { protocol: 2, helper: '0.1.0', core: '1.14.4' } }
 
 export function state(over: Partial<HelperState> = {}): HelperState {
   return {
@@ -18,6 +18,7 @@ export function state(over: Partial<HelperState> = {}): HelperState {
     reason: null,
     allDirect: false,
     defaultLane: 'vpn',
+    connector: 'tailscale',
     apps: [],
     addresses: { vpn: '198.51.100.7', direct: '203.0.113.9' },
     tailscale: {
@@ -28,9 +29,24 @@ export function state(over: Partial<HelperState> = {}): HelperState {
       selectedExitNode: '100.64.0.2',
       path: 'direct'
     },
+    proxy: { servers: [], selected: null, subscriptions: [] },
     systemTailscale: { installed: false, exitNodeOn: false, restoreOnDisable: false },
     ...over
   }
+}
+
+/** A state on the proxy connector; `selected` is the id of one of the servers, or null. */
+export function proxyState(
+  servers: ProxyServer[],
+  selected: string | null,
+  subscriptions: Subscription[] = [],
+  over: Partial<HelperState> = {}
+): HelperState {
+  return state({ connector: 'proxy', proxy: { servers, selected, subscriptions }, ...over })
+}
+
+export function proxyServer(id: string, name: string, over: Partial<ProxyServer> = {}): ProxyServer {
+  return { id, name, protocol: 'vless', source: 'manual', ...over }
 }
 
 export function snap(over: Partial<HelperState> = {}, link: LinkStatus = ready): Snapshot {
@@ -70,6 +86,9 @@ export function fakeBridge(over: Partial<SplitLaneBridge> = {}, answer: CommandR
     },
     setActivityDetail: async () => {},
     installHelper: async () => {},
+    proxyAdd: async () => ({ kind: 'cancelled' }),
+    proxyAddFile: async () => ({ kind: 'cancelled' }),
+    proxyRefresh: async () => ({ kind: 'cancelled' }),
     appInfo: async () => ({ version: '0.2.0', installed: true }),
     retryLink: async () => {},
     setSettings: async (patch) => ({ ...DEFAULT_SETTINGS, ...patch }),

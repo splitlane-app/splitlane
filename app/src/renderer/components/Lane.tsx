@@ -4,7 +4,7 @@ import { useDropZone } from '../dnd/BoardDnd'
 import { otherLane } from '../dnd/dropTarget'
 import { dropFiles, hasFiles } from '../dnd/explorerDrop'
 import { t } from '../i18n/t'
-import { selectedExitNodeName } from '../model/banners'
+import { laneServerName } from '../model/connect'
 import type { LaneVM } from '../model/board'
 import { formatSpeed, maskAddress } from '../model/format'
 import { useApp, useServices } from '../services'
@@ -25,7 +25,7 @@ function LaneSpeed({ down, up }: { down: number; up: number }): React.JSX.Elemen
  * shows the real address masked (the first two numbers), the whole of it while pressed.
  */
 function Sees({ lane, address }: { lane: LaneName; address: string | null }): React.JSX.Element {
-  const server = useApp((s) => (s.snapshot?.state ? selectedExitNodeName(s.snapshot.state) : null))
+  const server = useApp((s) => (s.snapshot?.state ? laneServerName(s.snapshot.state, null) : null))
   const [shown, setShown] = useState(false)
   if (lane === 'vpn') {
     return (

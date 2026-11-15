@@ -1,6 +1,6 @@
 import type { Lang } from './i18n'
 import type { Dropped, Program } from './programs'
-import type { Activity, AppRule, HelperError, HelperState, Lane } from './protocol'
+import type { Activity, AppRule, HelperError, HelperState, Lane, ProxyAddResult } from './protocol'
 import type { WindowSettings } from './settings'
 import type { InstallOutcome, LinkStatus } from './status'
 import type { UpdateState } from './update'
@@ -35,9 +35,18 @@ export type Command =
   | { method: 'tailscale.logout' }
   | { method: 'tailscale.setExitNode'; id: string }
   | { method: 'systemTailscale.clearExitNode' }
+  | { method: 'proxy.remove'; id: string }
+  | { method: 'proxy.select'; id: string }
 
 /** A lost link (closed pipe, no answer in time) is `{ code: 'internal', message: 'link closed' }`. */
 export type CommandResult = { ok: true } | { ok: false; error: HelperError }
+
+/**
+ * The answer of proxy.add and proxy.refresh as the page sees it: what the helper took and refused, the helper's
+ * own error, or `cancelled` (the file dialog was closed). A text that is too long is a `done` with a line-0
+ * `too_long`, so that the screen shows one kind of answer.
+ */
+export type ProxyOutcome = { kind: 'done'; result: ProxyAddResult } | { kind: 'failed'; error: HelperError } | { kind: 'cancelled' }
 
 export const LINK_CLOSED: HelperError = { code: 'internal', message: 'link closed' }
 
@@ -54,6 +63,12 @@ export interface SplitLaneBridge {
   command(c: Command): Promise<CommandResult>
   setActivityDetail(key: string | null): Promise<void>
   installHelper(): Promise<void>
+  /** Share links, a WireGuard config or a subscription address, as typed or pasted. */
+  proxyAdd(text: string): Promise<ProxyOutcome>
+  /** Opens the file dialog for a WireGuard `.conf`; the main process reads it, the path never reaches the page or the helper. */
+  proxyAddFile(): Promise<ProxyOutcome>
+  /** Downloads a subscription again; `id` is the id of a subscription. */
+  proxyRefresh(id: string): Promise<ProxyOutcome>
   /** The window's version, and whether it runs from the installed folder (only then it can repair the helper). */
   appInfo(): Promise<AppInfo>
   retryLink(): Promise<void>
@@ -84,6 +99,9 @@ export const IPC = {
   command: 'splitlane:command',
   setActivityDetail: 'splitlane:set-activity-detail',
   installHelper: 'splitlane:install-helper',
+  proxyAdd: 'splitlane:proxy-add',
+  proxyAddFile: 'splitlane:proxy-add-file',
+  proxyRefresh: 'splitlane:proxy-refresh',
   appInfo: 'splitlane:app-info',
   retryLink: 'splitlane:retry-link',
   setSettings: 'splitlane:set-settings',

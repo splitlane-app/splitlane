@@ -5,7 +5,7 @@ import { HelperLink, type LinkDeps } from './link'
 import { DialError } from './pipe'
 import { ConnectionClosedError, type Conn } from './rpc'
 
-const HELLO = { protocol: 1, helper: '0.1.0-test', core: '1.14.4' }
+const HELLO = { protocol: 2, helper: '0.1.0-test', core: '1.14.4' }
 const STATE = {
   phase: 'off',
   reason: null,
@@ -13,6 +13,7 @@ const STATE = {
   defaultLane: 'vpn',
   apps: [],
   addresses: { vpn: null, direct: null },
+  connector: 'tailscale',
   tailscale: {
     backend: 'stopped',
     authUrl: null,
@@ -21,6 +22,7 @@ const STATE = {
     selectedExitNode: null,
     path: null
   },
+  proxy: { servers: [], selected: null, subscriptions: [] },
   systemTailscale: { installed: false, exitNodeOn: false, restoreOnDisable: false }
 }
 const ACTIVITY = { lanes: { vpn: { down: 2048, up: 512 }, direct: { down: 0, up: 0 } }, apps: [] }
@@ -116,7 +118,7 @@ test('connects: hello, state.get, subscribe, ready', async () => {
   await settle()
 
   expect(c.calls()).toEqual([
-    ['hello', { protocol: 1 }],
+    ['hello', { protocol: 2 }],
     ['state.get', undefined],
     ['activity.subscribe', {}]
   ])
@@ -177,8 +179,8 @@ test('other-user when the pipe denies access', async () => {
 
 test('helper-older and helper-newer on protocol_mismatch', async () => {
   const cases: [number, LinkStatus][] = [
-    [0, { kind: 'helper-older', helperProtocol: 0 }],
-    [2, { kind: 'helper-newer', helperProtocol: 2 }]
+    [1, { kind: 'helper-older', helperProtocol: 1 }],
+    [3, { kind: 'helper-newer', helperProtocol: 3 }]
   ]
   for (const [protocol, expected] of cases) {
     const t = harness()
@@ -191,7 +193,7 @@ test('helper-older and helper-newer on protocol_mismatch', async () => {
     await settle()
 
     expect(t.link.status()).toEqual(expected)
-    expect(c.calls()).toEqual([['hello', { protocol: 1 }]])
+    expect(c.calls()).toEqual([['hello', { protocol: 2 }]])
     expect(c.ended).toBe(true)
     expect(t.deps.runTask).not.toHaveBeenCalled()
     await expect(t.link.call('state.get')).rejects.toBeInstanceOf(ConnectionClosedError)
@@ -327,7 +329,7 @@ test('re-subscribes the activity detail after a reconnect', async () => {
   await settle()
   expect(t.link.status()).toEqual({ kind: 'ready', hello: HELLO })
   expect(c2.calls()).toEqual([
-    ['hello', { protocol: 1 }],
+    ['hello', { protocol: 2 }],
     ['state.get', undefined],
     ['activity.subscribe', { detailFor: 'b6f3c1de-8a41-4e5f-9a7c-2d0e7f1a9b35' }]
   ])
