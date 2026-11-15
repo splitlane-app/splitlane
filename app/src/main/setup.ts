@@ -61,6 +61,29 @@ export function psSingleQuoted(s: string): string {
   return `'${s.replace(/['‘-‛]/g, (c) => c + c)}'`
 }
 
+/** Lines of PowerShell's stderr without the CLIXML serialization (`#< CLIXML` header, `<Objs ...>` progress records). */
+export function stderrLines(stderr: string): string[] {
+  return stderr
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !l.startsWith('<') && !l.startsWith('#<'))
+}
+
+/** PowerShell lines that turn a failed launch into exit 1223 (a cancelled UAC) or exit 1 with the message on stderr. */
+export function launchCatch(uacCancelled: number): string[] {
+  return [
+    '} catch {',
+    '  $e = $_.Exception',
+    '  while ($null -ne $e) {',
+    `    if (($e -is [System.ComponentModel.Win32Exception]) -and ($e.NativeErrorCode -eq ${uacCancelled})) { exit ${uacCancelled} }`,
+    '    $e = $e.InnerException',
+    '  }',
+    '  [Console]::Error.WriteLine($_.Exception.Message)',
+    '  exit 1',
+    '}'
+  ]
+}
+
 /**
  * PowerShell text that runs `<exe> install --user-sid <sid>` elevated (UAC), with output redirected to `outFile`.
  * The whole cmd line is wrapped in one more pair of quotes because `cmd /c` strips the first and last one.
@@ -72,17 +95,18 @@ export function installScript(exe: string, sid: string, outFile: string): string
   if (!SID_RE.test(sid)) throw new Error(`invalid SID: ${sid}`)
   const cmd = `""${exe}" install --user-sid ${sid} > "${outFile}" 2>&1"`
   return [
+    "$ProgressPreference = 'SilentlyContinue'",
     'try {',
-    `  Start-Process -FilePath cmd.exe -ArgumentList '/c', ${psSingleQuoted(cmd)} -Verb RunAs -Wait -WindowStyle Hidden -ErrorAction Stop`,
-    '} catch {',
-    '  $e = $_.Exception',
-    '  while ($null -ne $e) {',
-    `    if (($e -is [System.ComponentModel.Win32Exception]) -and ($e.NativeErrorCode -eq ${UAC_CANCELLED})) { exit ${UAC_CANCELLED} }`,
-    '    $e = $e.InnerException',
-    '  }',
-    '  [Console]::Error.WriteLine($_.Exception.Message)',
-    '  exit 1',
-    '}',
+    '  $psi = New-Object System.Diagnostics.ProcessStartInfo',
+    "  $psi.FileName = 'cmd.exe'",
+    `  $psi.Arguments = ${psSingleQuoted(`/c ${cmd}`)}`,
+    '  $psi.UseShellExecute = $true',
+    "  $psi.Verb = 'runas'",
+    '  $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden',
+    '  $p = [System.Diagnostics.Process]::Start($psi)',
+    '  if ($null -eq $p) { throw "the installer process was not started" }',
+    '  $p.WaitForExit()',
+    ...launchCatch(UAC_CANCELLED),
     'exit 0',
     ''
   ].join('\r\n')
@@ -153,7 +177,7 @@ export async function installHelper(d: {
       return { kind: 'failed', detail: e instanceof Error ? e.message : String(e) }
     }
     if (r.code === UAC_CANCELLED) return { kind: 'cancelled' }
-    if (r.code !== 0) return { kind: 'failed', detail: `powershell failed with code ${r.code}: ${tail(r.stderr || r.stdout)}` }
+    if (r.code !== 0) return { kind: 'failed', detail: `powershell failed with code ${r.code}: ${tail(stderrLines(r.stderr).join('\n') || r.stdout)}` }
 
     try {
       return parseInstallOutput(await d.readText(outFile))

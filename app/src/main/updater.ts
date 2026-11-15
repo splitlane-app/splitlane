@@ -13,7 +13,7 @@ import {
   type Feed,
   type UpdateState
 } from '../shared/update'
-import { checkPath, psSingleQuoted } from './setup'
+import { checkPath, launchCatch, psSingleQuoted, stderrLines } from './setup'
 
 /** One HTTP response; redirects are not followed by the transport. */
 export interface HopResponse {
@@ -116,17 +116,15 @@ export function nodeFs(): UpdaterDeps['fs'] {
 export function runInstallerScript(exe: string): string {
   checkPath(exe)
   return [
+    "$ProgressPreference = 'SilentlyContinue'",
     'try {',
-    `  Start-Process -FilePath ${psSingleQuoted(exe)} -ArgumentList '/S','--force-run' -Verb RunAs -ErrorAction Stop`,
-    '} catch {',
-    '  $e = $_.Exception',
-    '  while ($null -ne $e) {',
-    `    if (($e -is [System.ComponentModel.Win32Exception]) -and ($e.NativeErrorCode -eq ${UAC_CANCELLED})) { exit ${UAC_CANCELLED} }`,
-    '    $e = $e.InnerException',
-    '  }',
-    '  [Console]::Error.WriteLine($_.Exception.Message)',
-    '  exit 1',
-    '}',
+    '  $psi = New-Object System.Diagnostics.ProcessStartInfo',
+    `  $psi.FileName = ${psSingleQuoted(exe)}`,
+    "  $psi.Arguments = '/S --force-run'",
+    '  $psi.UseShellExecute = $true',
+    "  $psi.Verb = 'runas'",
+    '  $null = [System.Diagnostics.Process]::Start($psi)',
+    ...launchCatch(UAC_CANCELLED),
     'exit 0',
     ''
   ].join('\r\n')
@@ -136,7 +134,7 @@ export function runInstallerScript(exe: string): string {
 export function installerOutcome(code: number, stderr = ''): 'started' | 'cancelled' | { error: string } {
   if (code === 0) return 'started'
   if (code === UAC_CANCELLED) return 'cancelled'
-  const first = stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l !== '') ?? ''
+  const first = stderrLines(stderr)[0] ?? ''
   return { error: first === '' ? `powershell exit ${code}` : first.slice(0, 300) }
 }
 

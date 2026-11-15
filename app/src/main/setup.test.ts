@@ -66,9 +66,16 @@ describe('setup', () => {
 
   it('installScript quotes paths and maps a cancelled UAC to 1223', () => {
     const s = installScript(EXE, SID, OUT)
-    expect(s).toContain(
-      `Start-Process -FilePath cmd.exe -ArgumentList '/c', '""${EXE}" install --user-sid ${SID} > "${OUT}" 2>&1"' -Verb RunAs -Wait -WindowStyle Hidden -ErrorAction Stop`
-    )
+    expect(s).toContain("$ProgressPreference = 'SilentlyContinue'")
+    expect(s).toContain("$psi.FileName = 'cmd.exe'")
+    expect(s).toContain(`$psi.Arguments = '/c ""${EXE}" install --user-sid ${SID} > "${OUT}" 2>&1"'`)
+    expect(s).toContain('$psi.UseShellExecute = $true')
+    expect(s).toContain("$psi.Verb = 'runas'")
+    expect(s).toContain('ProcessWindowStyle]::Hidden')
+    expect(s).toContain('[System.Diagnostics.Process]::Start($psi)')
+    expect(s).toContain('$p.WaitForExit()')
+    expect(s).not.toContain('Start-Process')
+    expect(s).toBe(s.replace(/[^\x00-\x7f]/g, ''))
     expect(s).toContain('exit 1223')
     expect(s).toContain('exit 0')
     expect(s).toMatch(/try\s*\{/)

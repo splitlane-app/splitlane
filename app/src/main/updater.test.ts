@@ -1015,13 +1015,18 @@ describe('start', () => {
 describe('runInstallerScript', () => {
   it('runInstallerScript quotes the path and maps a cancelled UAC to 1223', () => {
     const s = runInstallerScript('C:\\Temp\\SplitLane-update\\SplitLane-Setup-1.2.3.exe')
-    expect(s).toContain("-FilePath 'C:\\Temp\\SplitLane-update\\SplitLane-Setup-1.2.3.exe'")
-    expect(s).toContain("-ArgumentList '/S','--force-run' -Verb RunAs -ErrorAction Stop")
-    expect(s).not.toContain('-Wait')
+    expect(s).toContain("$ProgressPreference = 'SilentlyContinue'")
+    expect(s).toContain("$psi.FileName = 'C:\\Temp\\SplitLane-update\\SplitLane-Setup-1.2.3.exe'")
+    expect(s).toContain("$psi.Arguments = '/S --force-run'")
+    expect(s).toContain('$psi.UseShellExecute = $true')
+    expect(s).toContain("$psi.Verb = 'runas'")
+    expect(s).toContain('[System.Diagnostics.Process]::Start($psi)')
+    expect(s).not.toContain('Start-Process')
+    expect(s).not.toContain('WaitForExit')
     expect(s).toContain('exit 1223')
     expect(s).toMatch(/exit 0\r\n$/)
-    expect(runInstallerScript("C:\\O'Brien\\a.exe")).toContain("-FilePath 'C:\\O''Brien\\a.exe'")
-    expect(runInstallerScript('C:\\O\u2019Brien\\a.exe')).toContain("-FilePath 'C:\\O\u2019\u2019Brien\\a.exe'")
+    expect(runInstallerScript("C:\\O'Brien\\a.exe")).toContain("$psi.FileName = 'C:\\O''Brien\\a.exe'")
+    expect(runInstallerScript('C:\\O\u2019Brien\\a.exe')).toContain("$psi.FileName = 'C:\\O\u2019\u2019Brien\\a.exe'")
     expect(() => runInstallerScript('C:\\a\u0001b.exe')).toThrow()
     expect(() => runInstallerScript('C:\\a"b.exe')).toThrow()
     expect(() => runInstallerScript('relative\\a.exe')).toThrow()
@@ -1039,5 +1044,12 @@ describe('installerOutcome', () => {
     expect(installerOutcome(1, 'x'.repeat(500))).toEqual({ error: 'x'.repeat(300) })
     expect(installerOutcome(1, '  \r\n')).toEqual({ error: 'powershell exit 1' })
     expect(installerOutcome(0, 'warning')).toBe('started')
+  })
+
+  it('ignores the CLIXML serialization on stderr', () => {
+    const header = '#< CLIXML'
+    const objs = '<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04"><Obj S="progress" RefId="0"></Obj></Objs>'
+    expect(installerOutcome(1, `${header}\r\nThe file is blocked\r\n${objs}`)).toEqual({ error: 'The file is blocked' })
+    expect(installerOutcome(1, `${header}\r\n${objs}\r\n`)).toEqual({ error: 'powershell exit 1' })
   })
 })
