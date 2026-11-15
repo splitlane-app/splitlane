@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type WindowSettings } from '../shared/settings'
 import { feedFrom, type Feed, type UpdateState } from '../shared/update'
-import { nodeFs, runInstallerScript, Updater, type HopResponse, type UpdaterDeps } from './updater'
+import { abortable, nodeFs, runInstallerScript, Updater, type HopResponse, type UpdaterDeps } from './updater'
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
 
@@ -139,11 +139,11 @@ interface Rig {
   lastInstallFile: string
 }
 
-function rig(o: Partial<Omit<UpdaterDeps, 'settings'>> & { settings?: Partial<WindowSettings>; installer?: 'started' | 'cancelled' | { error: string } } = {}): Rig {
+function rig(o: Partial<Omit<UpdaterDeps, 'settings'>> & { settings?: Partial<WindowSettings>; installer?: 'started' | 'cancelled' | { error: string }; setHook?: () => Promise<void> } = {}): Rig {
   const states: UpdateState[] = []
   const logs: string[] = []
   const sets: Partial<WindowSettings>[] = []
-  const { settings: initial, installer, ...over } = o
+  const { settings: initial, installer, setHook, ...over } = o
   const settings: WindowSettings = { ...DEFAULT_SETTINGS, ...initial }
   const clock = fakeClock()
   const runInstaller = vi.fn(async () => installer ?? 'started')
@@ -160,6 +160,7 @@ function rig(o: Partial<Omit<UpdaterDeps, 'settings'>> & { settings?: Partial<Wi
     settings: {
       get: () => ({ ...settings }),
       set: async (p) => {
+        if (p.pendingUpdate !== null && p.pendingUpdate !== undefined) await setHook?.()
         sets.push(p)
         Object.assign(settings, p)
       }
@@ -276,14 +277,211 @@ describe('check', () => {
     expect(hits).toEqual([])
   })
 
-  it('later hides the offer and the next check shows it again', async () => {
+  it('later hides the offer; an automatic check of the same version keeps it hidden', async () => {
     serveGood()
     const r = rig()
     await r.u.check(false)
     r.u.later()
     expect(r.u.state()).toMatchObject({ kind: 'available', hidden: true })
     await r.u.check(false)
+    expect(r.u.state()).toMatchObject({ kind: 'available', hidden: true })
+    await r.u.check(true)
     expect(r.u.state()).toMatchObject({ kind: 'available', hidden: false })
+  })
+
+  it('an automatic check does not replace a result banner', async () => {
+    serveGood()
+    for (const pendingUpdate of ['1.2.0', '1.0.0']) {
+      const r = rig({ settings: { pendingUpdate } })
+      await r.u.start()
+      r.u.stop()
+      const before = r.u.state()
+      expect(['installRefused', 'installed']).toContain(before.kind)
+      const n = hits.length
+      await r.u.check(false)
+      expect(r.u.state()).toEqual(before)
+      expect(hits.length).toBe(n)
+      expect(r.logs.join('\n')).toContain('skipped')
+    }
+    // a failed download is a result too
+    routes[SHA] = text('garbage')
+    const f = rig()
+    await f.u.check(false)
+    await f.u.update()
+    const failed = f.u.state()
+    expect(failed.kind).toBe('downloadFailed')
+    await f.u.check(false)
+    expect(f.u.state()).toEqual(failed)
+  })
+
+  it('an automatic check is silent while it runs', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    routes[API] = async (_q, res) => {
+      await gate
+      res.writeHead(200).end(JSON.stringify(releaseJson(feed)))
+    }
+    const r = rig()
+    const p = r.u.check(false)
+    await vi.waitFor(() => expect(hits).toContain(API))
+    expect(r.u.state()).toEqual({ kind: 'idle' })
+    expect(r.states).toEqual([])
+    release()
+    await p
+    expect(r.states.map((x) => x.kind)).toEqual(['available'])
+    // a failure leaves the state alone and only logs
+    routes[API] = status(500)
+    await r.u.check(false)
+    expect(r.u.state().kind).toBe('available')
+    expect(r.states.map((x) => x.kind)).toEqual(['available'])
+    expect(r.logs.join('\n')).toContain('HTTP 500')
+  })
+
+  it('a check refuses an answer over 1 MB', async () => {
+    routes[API] = (_q, res) => void res.writeHead(200).end(Buffer.alloc(1024 * 1024 + 1, 0x20))
+    const r = rig()
+    await r.u.check(true)
+    expect(r.u.state()).toEqual({ kind: 'checkFailed', reason: 'the release answer is larger than 1 MB' })
+  })
+
+  it('a first address that is not allowed is refused before any request', async () => {
+    const hop = vi.fn(fetchHop)
+    const r = rig({ hop, feed: { ...feed, api: 'http://127.0.0.1:1/repos/x' } })
+    await r.u.check(true)
+    expect(r.u.state()).toEqual({ kind: 'checkFailed', reason: 'the address is not allowed' })
+    expect(hop).not.toHaveBeenCalled()
+  })
+
+  it('a listener that throws does not leave the updater stuck', async () => {
+    serveGood()
+    const r = rig({
+      changed: () => {
+        throw new Error('listener bug')
+      }
+    })
+    await r.u.check(false)
+    expect(r.u.state().kind).toBe('available')
+    await r.u.check(true)
+    expect(r.u.state().kind).toBe('available')
+    expect(r.logs.join('\n')).toContain('listener bug')
+  })
+})
+
+describe('abortable', () => {
+  it('removes its abort listener when the promise settles', async () => {
+    const added: unknown[] = []
+    const removed: unknown[] = []
+    const signal = {
+      aborted: false,
+      addEventListener: (_t: string, f: unknown) => added.push(f),
+      removeEventListener: (_t: string, f: unknown) => removed.push(f)
+    } as unknown as AbortSignal
+    for (let i = 0; i < 50; i++) await abortable(Promise.resolve(new Uint8Array(10)), signal)
+    await expect(abortable(Promise.reject(new Error('x')), signal)).rejects.toThrow('x')
+    expect(added).toHaveLength(51)
+    expect(removed).toEqual(added)
+  })
+
+  it('answers aborted when the signal fires first', async () => {
+    const c = new AbortController()
+    const p = abortable(new Promise<number>(() => undefined), c.signal)
+    c.abort()
+    await expect(p).resolves.toBe('aborted')
+    await expect(abortable(Promise.resolve(1), c.signal)).resolves.toBe('aborted')
+  })
+})
+
+describe('update details', () => {
+  const ghAnswers = (body: HopResponse): Record<string, HopResponse> => ({
+    [GH_API]: ghApi(),
+    [`${GH_ROOT}/${NAME}.sha256`]: ok(GOOD_SHA),
+    [`${GH_ROOT}/${NAME}`]: body
+  })
+  const chunks = (clock: ReturnType<typeof fakeClock> | null): AsyncIterable<Uint8Array> =>
+    (async function* () {
+      for (let i = 0; i < 10; i++) {
+        if (clock) clock.advance(250)
+        yield PAYLOAD.subarray(i * 100, (i + 1) * 100)
+      }
+    })()
+  const percents = (r: Rig): number[] =>
+    r.states.filter((x) => x.kind === 'downloading').map((x) => (x as { percent: number }).percent)
+
+  it('a checksum mismatch says so in English', async () => {
+    serveGood()
+    routes[SHA] = text(`${'0'.repeat(64)}  ${NAME}\n`)
+    const r = rig()
+    await r.u.check(false)
+    await r.u.update()
+    expect(r.u.state()).toMatchObject({ reason: 'the file does not match its checksum' })
+  })
+
+  it('a content-length above the announced size is refused before reading', async () => {
+    let read = false
+    let returned = false
+    const body: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]: () => ({
+        next: () => {
+          read = true
+          return Promise.resolve({ done: true, value: undefined })
+        },
+        return: () => {
+          returned = true
+          return Promise.resolve({ done: true, value: undefined })
+        }
+      })
+    }
+    const s = scripted(ghAnswers({ status: 200, location: null, body, contentLength: 5000 }))
+    const r = rig({ feed: GH, hop: s.hop })
+    await r.u.check(false)
+    await r.u.update()
+    expect(r.u.state()).toMatchObject({ kind: 'downloadFailed', reason: 'the file is larger than the release says' })
+    expect(read).toBe(false)
+    expect(returned).toBe(true)
+  })
+
+  it('progress changes at most once per 250 ms, and 100% always shows', async () => {
+    const s = scripted(ghAnswers({ status: 200, location: null, body: chunks(null), contentLength: null }))
+    const r = rig({ feed: GH, hop: s.hop })
+    await r.u.check(false)
+    await r.u.update()
+    expect(percents(r)).toEqual([0, 10, 100])
+  })
+
+  it('progress follows every whole percent when 250 ms pass', async () => {
+    let clock: ReturnType<typeof fakeClock> | null = null
+    const answers = scripted(ghAnswers(ok('')))
+    const r = rig({
+      feed: GH,
+      hop: async (url, sig) =>
+        url.endsWith('.exe') ? { status: 200, location: null, body: chunks(clock), contentLength: null } : answers.hop(url, sig)
+    })
+    clock = r.clock
+    await r.u.check(false)
+    await r.u.update()
+    expect(percents(r)).toEqual([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
+  })
+
+  it('stop() before the installer starts prevents runInstaller', async () => {
+    serveGood()
+    let entered!: () => void
+    const inSet = new Promise<void>((res) => (entered = res))
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    const r = rig({
+      setHook: async () => {
+        entered()
+        await gate
+      }
+    })
+    await r.u.check(false)
+    const p = r.u.update()
+    await inSet
+    r.u.stop()
+    release()
+    await p
+    expect(r.runInstaller).not.toHaveBeenCalled()
+    expect(r.settings.pendingUpdate).toBeNull()
   })
 })
 
@@ -335,7 +533,7 @@ describe('update', () => {
     const r = rig()
     await r.u.check(false)
     await r.u.update()
-    expect(r.u.state()).toMatchObject({ kind: 'downloadFailed', reason: 'the file is larger than allowed' })
+    expect(r.u.state()).toMatchObject({ kind: 'downloadFailed', reason: 'the file is larger than the release says' })
     expect(await files(r.tempDir)).toEqual([])
     expect(r.runInstaller).not.toHaveBeenCalled()
   })
@@ -576,10 +774,10 @@ describe('start', () => {
     serveGood()
     const r = rig({ settings: { pendingUpdate: '9.9.9' } })
     await r.u.start()
-    r.u.stop()
     expect(r.u.state().kind).toBe('installRefused')
     await r.u.update()
     expect(r.u.state()).toMatchObject({ kind: 'launching', version: '9.9.9' })
+    r.u.stop()
   })
 
   it('schedule: first check after 30 s, then every 24 h, none when checkUpdates is off', async () => {
@@ -623,7 +821,9 @@ describe('runInstallerScript', () => {
     expect(s).not.toContain('-Wait')
     expect(s).toContain('exit 1223')
     expect(s).toMatch(/exit 0\r\n$/)
-    expect(() => runInstallerScript("C:\\a'b.exe")).toThrow()
+    expect(runInstallerScript("C:\\O'Brien\\a.exe")).toContain("-FilePath 'C:\\O''Brien\\a.exe'")
+    expect(runInstallerScript('C:\\O\u2019Brien\\a.exe')).toContain("-FilePath 'C:\\O\u2019\u2019Brien\\a.exe'")
+    expect(() => runInstallerScript('C:\\a\u0001b.exe')).toThrow()
     expect(() => runInstallerScript('C:\\a"b.exe')).toThrow()
     expect(() => runInstallerScript('relative\\a.exe')).toThrow()
     expect(() => runInstallerScript('C:\\%TEMP%\\a.exe')).toThrow()

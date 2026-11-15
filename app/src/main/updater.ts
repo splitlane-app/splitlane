@@ -12,7 +12,7 @@ import {
   type Feed,
   type UpdateState
 } from '../shared/update'
-import { checkPath } from './setup'
+import { checkPath, psSingleQuoted } from './setup'
 
 /** One HTTP response; redirects are not followed by the transport. */
 export interface HopResponse {
@@ -57,6 +57,8 @@ const FIRST_CHECK_MS = 30_000
 const CHECK_EVERY_MS = 24 * 60 * 60 * 1000
 const PROGRESS_EVERY_MS = 250
 const UAC_CANCELLED = 1223
+
+const AUTO_CHECK_STATES: readonly UpdateState['kind'][] = ['idle', 'upToDate', 'checkFailed', 'available']
 
 const NOT_INSTALLED = 'updates are available only for an installed SplitLane'
 
@@ -110,7 +112,7 @@ export function runInstallerScript(exe: string): string {
   checkPath(exe)
   return [
     'try {',
-    `  Start-Process -FilePath '${exe}' -ArgumentList '/S','--force-run' -Verb RunAs -ErrorAction Stop`,
+    `  Start-Process -FilePath ${psSingleQuoted(exe)} -ArgumentList '/S','--force-run' -Verb RunAs -ErrorAction Stop`,
     '} catch {',
     '  $e = $_.Exception',
     '  while ($null -ne $e) {',
@@ -179,16 +181,23 @@ export class Updater {
       if (manual) this.set({ kind: 'checkFailed', reason: NOT_INSTALLED })
       return
     }
-    const prev = this.s
+    if (!manual && !AUTO_CHECK_STATES.includes(this.s.kind)) {
+      this.d.log(`automatic update check skipped: state is ${this.s.kind}`)
+      return
+    }
     this.begin()
-    this.set({ kind: 'checking', manual })
+    // An automatic check is silent: no `checking` state, it never disturbs what is on screen.
+    if (manual) this.set({ kind: 'checking', manual })
     try {
       const pick = await this.fetchPick()
       if (pick.kind === 'newer') {
         this.pick = pick
-        this.set({ kind: 'available', version: pick.version, notesUrl: pick.notesUrl, hidden: false })
+        const cur = this.s
+        if (manual || !(cur.kind === 'available' && cur.version === pick.version)) {
+          this.set({ kind: 'available', version: pick.version, notesUrl: pick.notesUrl, hidden: false })
+        }
       } else if (pick.kind === 'notNewer') {
-        this.set(manual ? { kind: 'upToDate' } : prev)
+        if (manual) this.set({ kind: 'upToDate' })
       } else {
         throw new Error(pick.reason)
       }
@@ -198,7 +207,6 @@ export class Updater {
         this.set({ kind: 'checkFailed', reason })
       } else {
         this.d.log(`update check failed: ${reason}`)
-        this.set(prev.kind === 'available' ? prev : { kind: 'idle' })
       }
     } finally {
       this.busy = false
@@ -232,7 +240,7 @@ export class Updater {
       await fs.rmDir(this.d.tempDir)
       await fs.mkdir(this.d.tempDir)
 
-      const shaText = await this.fetchText(release.shaUrl, SHA_LIMIT)
+      const shaText = await this.fetchText(release.shaUrl, SHA_LIMIT, 'the checksum file is larger than 1 KB')
       const expected = parseSha256File(shaText, release.name)
       if (expected === null) throw new Error('the checksum file is not valid')
 
@@ -243,14 +251,15 @@ export class Updater {
       const hash = createHash('sha256')
       let received = 0
       let lastPercent = 0
-      let lastEmit = this.d.clock.now()
-      await this.request(release.installerUrl, Math.min(INSTALLER_LIMIT, release.size), async (chunk) => {
+      let lastEmit = Number.NEGATIVE_INFINITY
+      const announced = release.size <= INSTALLER_LIMIT
+      await this.request(release.installerUrl, Math.min(INSTALLER_LIMIT, release.size), announced ? 'the file is larger than the release says' : 'the file is larger than 400 MB', async (chunk) => {
         hash.update(chunk)
         await out.write(chunk)
         received += chunk.length
         const percent = Math.min(100, Math.floor((received * 100) / release.size))
         const now = this.d.clock.now()
-        if (percent > lastPercent || now - lastEmit >= PROGRESS_EVERY_MS) {
+        if (percent !== lastPercent && (percent === 100 || now - lastEmit >= PROGRESS_EVERY_MS)) {
           lastPercent = percent
           lastEmit = now
           this.set({ kind: 'downloading', version, notesUrl, percent })
@@ -261,12 +270,17 @@ export class Updater {
       if (this.ctl?.signal.aborted) throw new Cancelled()
 
       this.set({ kind: 'verifying', version, notesUrl })
-      if (hash.digest('hex') !== expected) throw new Error('файл не совпал с контрольной суммой')
+      if (hash.digest('hex') !== expected) throw new Error('the file does not match its checksum')
       await fs.rename(part, finalPath)
       part = null
 
+      if (this.stopped) throw new Cancelled()
       await this.d.settings.set({ pendingUpdate: version })
       this.set({ kind: 'launching', version, notesUrl })
+      if (this.stopped) {
+        await this.clearPending()
+        throw new Cancelled()
+      }
       let result: Awaited<ReturnType<UpdaterDeps['runInstaller']>>
       try {
         result = await this.d.runInstaller(finalPath)
@@ -336,13 +350,18 @@ export class Updater {
 
   private set(s: UpdateState): void {
     this.s = s
-    if (!this.stopped) this.d.changed(s)
+    if (this.stopped) return
+    try {
+      this.d.changed(s)
+    } catch (e) {
+      this.d.log(`state listener failed: ${errText(e)}`)
+    }
   }
 
   private tick(): void {
     this.timer = this.d.clock.setTimeout(() => this.tick(), CHECK_EVERY_MS)
     if (this.stopped || !this.d.settings.get().checkUpdates) return
-    void this.check(false)
+    this.check(false).catch((e) => this.d.log(`update check crashed: ${errText(e)}`))
   }
 
   private async clearPending(): Promise<void> {
@@ -354,7 +373,7 @@ export class Updater {
   }
 
   private async fetchPick(): Promise<Pick> {
-    const text = await this.fetchText(this.d.feed.api, API_LIMIT)
+    const text = await this.fetchText(this.d.feed.api, API_LIMIT, 'the release answer is larger than 1 MB')
     let json: unknown
     try {
       json = JSON.parse(text)
@@ -369,9 +388,9 @@ export class Updater {
     return { ...pick, size }
   }
 
-  private async fetchText(url: string, limit: number): Promise<string> {
+  private async fetchText(url: string, limit: number, tooLarge: string): Promise<string> {
     const parts: Buffer[] = []
-    await this.request(url, limit, async (c) => {
+    await this.request(url, limit, tooLarge, async (c) => {
       parts.push(Buffer.from(c))
     })
     return Buffer.concat(parts).toString('utf8')
@@ -391,21 +410,19 @@ export class Updater {
   }
 
   /** GET with manual redirects; the body goes to `onChunk`. Throws on any refusal. */
-  private async request(url: string, limit: number, onChunk: (c: Uint8Array) => Promise<void>): Promise<void> {
+  private async request(url: string, limit: number, tooLarge: string, onChunk: (c: Uint8Array) => Promise<void>): Promise<void> {
     const signal = (this.ctl ??= new AbortController()).signal
-    const aborted = new Promise<'aborted'>((resolve) => {
-      if (signal.aborted) resolve('aborted')
-      else signal.addEventListener('abort', () => resolve('aborted'), { once: true })
-    })
     const fail = (): Error => (this.stalled ? new Error('no data for 60 seconds') : new Cancelled())
     let current = url
     try {
       for (let step = 1; ; step++) {
-        if (!allowedHop(current, this.d.feed)) throw new Error('redirect to a host that is not allowed')
+        if (!allowedHop(current, this.d.feed)) {
+          throw new Error(step === 1 ? 'the address is not allowed' : 'redirect to a host that is not allowed')
+        }
         this.arm()
         let res: HopResponse
         try {
-          res = await Promise.race([this.d.hop(current, signal), aborted])
+          res = await abortable(this.d.hop(current, signal), signal)
             .then((r) => {
               if (r === 'aborted') throw fail()
               return r
@@ -431,7 +448,7 @@ export class Updater {
         }
         if (res.contentLength !== null && res.contentLength > limit) {
           void discard(res.body)
-          throw new Error('the file is larger than allowed')
+          throw new Error(tooLarge)
         }
         if (res.body === null) throw new Error('the answer has no body')
         const it = res.body[Symbol.asyncIterator]()
@@ -440,7 +457,7 @@ export class Updater {
           this.arm()
           let r: IteratorResult<Uint8Array> | 'aborted'
           try {
-            r = await Promise.race([it.next(), aborted])
+            r = await abortable(it.next(), signal)
           } catch (e) {
             if (signal.aborted) throw fail()
             throw e
@@ -453,7 +470,7 @@ export class Updater {
           total += r.value.length
           if (total > limit) {
             void Promise.resolve(it.return?.()).catch(() => undefined)
-            throw new Error('the file is larger than allowed')
+            throw new Error(tooLarge)
           }
           await onChunk(r.value)
         }
@@ -462,6 +479,29 @@ export class Updater {
       this.disarm()
     }
   }
+}
+
+/** Resolves with 'aborted' when the signal fires first; its abort listener is removed as soon as `p` settles. */
+export function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T | 'aborted'> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      p.catch(() => undefined)
+      resolve('aborted')
+      return
+    }
+    const on = (): void => resolve('aborted')
+    signal.addEventListener('abort', on, { once: true })
+    p.then(
+      (v) => {
+        signal.removeEventListener('abort', on)
+        resolve(v)
+      },
+      (e: unknown) => {
+        signal.removeEventListener('abort', on)
+        reject(e)
+      }
+    )
+  })
 }
 
 function discard(body: AsyncIterable<Uint8Array> | null): Promise<void> {

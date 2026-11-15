@@ -93,9 +93,15 @@ describe('setup', () => {
 
   it('installScript refuses quotes in paths', () => {
     expect(() => installScript('C:\\a"b\\x.exe', SID, OUT)).toThrow(Error)
-    expect(() => installScript(EXE, SID, "C:\\a'b.txt")).toThrow(Error)
+    expect(() => installScript(EXE, SID, 'C:\\a\u0001b.txt')).toThrow(Error)
     expect(() => installScript('relative\\x.exe', SID, OUT)).toThrow(Error)
     expect(() => installScript(EXE, 'S-1-bad', OUT)).toThrow(Error)
+  })
+
+  it('installScript doubles apostrophes in paths', () => {
+    const s = installScript("C:\\O'Brien\\x.exe", SID, 'C:\\O\u2019Brien\\o.txt')
+    expect(s).toContain("O''Brien")
+    expect(s).toContain('O\u2019\u2019Brien')
   })
 
   it('encodePowerShell is UTF-16LE base64', () => {

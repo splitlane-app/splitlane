@@ -50,9 +50,15 @@ export function parseSid(whoamiCsv: string): string {
 }
 
 export function checkPath(p: string): void {
-  if (/["']/.test(p)) throw new Error(`path must not contain quotes: ${p}`)
+  if (p.includes('"')) throw new Error(`path must not contain double quotes: ${p}`)
+  if (/[\u0000-\u001f\u007f]/.test(p)) throw new Error('path must not contain control characters')
   if (!/^[A-Za-z]:\\/.test(p)) throw new Error(`path must be absolute: ${p}`)
   if (p.includes('%')) throw new Error(`path must not contain %: ${p}`)
+}
+
+/** A PowerShell single-quoted string: U+0027 and U+2018..U+201B are all single-quote characters to PowerShell, so each is doubled. */
+export function psSingleQuoted(s: string): string {
+  return `'${s.replace(/['‘-‛]/g, (c) => c + c)}'`
 }
 
 /**
@@ -67,7 +73,7 @@ export function installScript(exe: string, sid: string, outFile: string): string
   const cmd = `""${exe}" install --user-sid ${sid} > "${outFile}" 2>&1"`
   return [
     'try {',
-    `  Start-Process -FilePath cmd.exe -ArgumentList '/c', '${cmd}' -Verb RunAs -Wait -WindowStyle Hidden -ErrorAction Stop`,
+    `  Start-Process -FilePath cmd.exe -ArgumentList '/c', ${psSingleQuoted(cmd)} -Verb RunAs -Wait -WindowStyle Hidden -ErrorAction Stop`,
     '} catch {',
     '  $e = $_.Exception',
     '  while ($null -ne $e) {',
