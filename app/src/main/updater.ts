@@ -127,6 +127,13 @@ export function runInstallerScript(exe: string): string {
   ].join('\r\n')
 }
 
+/** powershell.exe's exit code of runInstallerScript as the result of runInstaller. */
+export function installerOutcome(code: number): 'started' | 'cancelled' | { error: string } {
+  if (code === 0) return 'started'
+  if (code === UAC_CANCELLED) return 'cancelled'
+  return { error: `powershell exit ${code}` }
+}
+
 export class Updater {
   private s: UpdateState = { kind: 'idle' }
   private busy = false
@@ -137,6 +144,9 @@ export class Updater {
   private timer: unknown = null
   private stallTimer: unknown = null
   private pick: Newer | null = null
+  private checkRun: Promise<void> | null = null
+  /** Whether the running check reports as a manual one (an automatic check turns manual on a press). */
+  private checkManual = false
 
   constructor(private readonly d: UpdaterDeps) {}
 
@@ -175,8 +185,26 @@ export class Updater {
     this.ctl?.abort()
   }
 
-  async check(manual: boolean): Promise<void> {
-    if (this.busy || this.inProgress()) return
+  check(manual: boolean): Promise<void> {
+    if (this.checkRun !== null) {
+      // a manual press during a silent automatic check: that check becomes the manual one
+      if (manual && !this.checkManual) {
+        this.checkManual = true
+        this.set({ kind: 'checking', manual: true })
+      }
+      return this.checkRun
+    }
+    if (this.busy || this.inProgress()) return Promise.resolve()
+    const run = this.runCheck(manual).finally(() => {
+      this.checkRun = null
+    })
+    this.checkRun = run
+    return run
+  }
+
+  private async runCheck(manualAtStart: boolean): Promise<void> {
+    const manual = manualAtStart
+    this.checkManual = manual
     if (!this.d.canUpdate) {
       if (manual) this.set({ kind: 'checkFailed', reason: NOT_INSTALLED })
       return
@@ -193,17 +221,17 @@ export class Updater {
       if (pick.kind === 'newer') {
         this.pick = pick
         const cur = this.s
-        if (manual || !(cur.kind === 'available' && cur.version === pick.version)) {
+        if (this.checkManual || !(cur.kind === 'available' && cur.version === pick.version)) {
           this.set({ kind: 'available', version: pick.version, notesUrl: pick.notesUrl, hidden: false })
         }
       } else if (pick.kind === 'notNewer') {
-        if (manual) this.set({ kind: 'upToDate' })
+        if (this.checkManual) this.set({ kind: 'upToDate' })
       } else {
         throw new Error(pick.reason)
       }
     } catch (e) {
       const reason = errText(e)
-      if (manual) {
+      if (this.checkManual) {
         this.set({ kind: 'checkFailed', reason })
       } else {
         this.d.log(`update check failed: ${reason}`)

@@ -8,6 +8,7 @@ import { Toggle } from '../components/Toggle'
 import { t } from '../i18n/t'
 import { selectedExitNodeName } from '../model/banners'
 import { connectStep, type ConnectStep } from '../model/connect'
+import { updateBusy, updateStatusLine } from '../model/update'
 import { sendCommand, useApp, useServices } from '../services'
 import styles from './screens.module.css'
 
@@ -204,6 +205,7 @@ export function ConnectionScreen(): React.JSX.Element | null {
   const state = useApp((s) => s.snapshot?.state ?? null)
   const settings = useApp((s) => s.snapshot?.settings ?? null)
   const link = useApp((s) => s.snapshot?.link ?? null)
+  const update = useApp((s) => s.snapshot?.update ?? null)
   const [appVersion, setAppVersion] = useState<string | null>(null)
   useEffect(() => {
     let live = true
@@ -231,6 +233,7 @@ export function ConnectionScreen(): React.JSX.Element | null {
     })
   }
   const canLogout = !live(state.phase)
+  const updateLine = update === null ? null : updateStatusLine(update)
 
   return (
     <ScreenFrame title={t('connection.title')} wide>
@@ -255,6 +258,12 @@ export function ConnectionScreen(): React.JSX.Element | null {
           onToggle={() => save({ openAtLogin: !settings.openAtLogin })}
         />
         <Toggle
+          on={settings.checkUpdates}
+          label={t('connection.checkUpdates')}
+          caption={t('connection.checkUpdates')}
+          onToggle={() => save({ checkUpdates: !settings.checkUpdates })}
+        />
+        <Toggle
           on={settings.enableOnStart}
           label={t('connection.enableOnStart')}
           caption={t('connection.enableOnStart')}
@@ -277,6 +286,23 @@ export function ConnectionScreen(): React.JSX.Element | null {
       </div>
       {!canLogout && <p className={styles.lead}>{t('connection.logoutBlocked')}</p>}
       {versions !== null && <p className={styles.lead}>{versions}</p>}
+      {updateLine !== null && (
+        <p className={styles.lead} role="status">
+          {updateLine}
+        </p>
+      )}
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={styles.button}
+          disabled={update !== null && updateBusy(update)}
+          onClick={() => {
+            bridge.checkUpdates().catch(() => {})
+          }}
+        >
+          {t('update.check')}
+        </button>
+      </div>
     </ScreenFrame>
   )
 }

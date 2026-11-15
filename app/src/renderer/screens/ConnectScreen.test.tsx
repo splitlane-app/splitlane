@@ -307,3 +307,56 @@ test('connection screen changes the settings and goes back', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Назад к дорожкам' }))
   expect(services.store.getState().ui.screen).toBe('board')
 })
+
+const NOTES = 'https://github.com/splitlane-app/splitlane/releases/tag/v1.2.0'
+
+test('ConnectionScreen shows the update line and the check button', async () => {
+  const checkUpdates = vi.fn(async () => {})
+  const { bridge } = fakeBridge({ checkUpdates })
+  const services = servicesFor(bridge, withTs({}, { phase: 'off' }, true))
+  renderWith(<ConnectionScreen />, services)
+  expect(screen.queryByText('Установлена последняя версия')).toBeNull()
+  const show = (update: Snapshot['update']): void =>
+    act(() => services.store.getState().setSnapshot({ ...withTs({}, { phase: 'off' }, true), update }))
+  show({ kind: 'upToDate' })
+  expect(screen.getByText('Установлена последняя версия')).toBeTruthy()
+  show({ kind: 'checkFailed', reason: 'HTTP 403' })
+  expect(screen.getByText('Не удалось проверить обновления: HTTP 403')).toBeTruthy()
+  show({ kind: 'available', version: '1.2.0', notesUrl: NOTES, hidden: true })
+  expect(screen.getByText('Доступна версия 1.2.0')).toBeTruthy()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Проверить обновления' }))
+  })
+  expect(checkUpdates).toHaveBeenCalledTimes(1)
+})
+
+test('the check button is disabled while checking or downloading', () => {
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, withTs({}, { phase: 'off' }, true))
+  renderWith(<ConnectionScreen />, services)
+  const button = (): HTMLButtonElement => screen.getByRole('button', { name: 'Проверить обновления' }) as HTMLButtonElement
+  const show = (update: Snapshot['update']): void =>
+    act(() => services.store.getState().setSnapshot({ ...withTs({}, { phase: 'off' }, true), update }))
+  expect(button().disabled).toBe(false)
+  show({ kind: 'checking', manual: true })
+  expect(button().disabled).toBe(true)
+  expect(screen.getByText('Проверка обновлений…')).toBeTruthy()
+  show({ kind: 'downloading', version: '1.2.0', notesUrl: NOTES, percent: 3 })
+  expect(button().disabled).toBe(true)
+  show({ kind: 'verifying', version: '1.2.0', notesUrl: NOTES })
+  expect(button().disabled).toBe(true)
+  show({ kind: 'launching', version: '1.2.0', notesUrl: NOTES })
+  expect(button().disabled).toBe(true)
+  show({ kind: 'upToDate' })
+  expect(button().disabled).toBe(false)
+})
+
+test('the checkUpdates toggle saves the setting', () => {
+  const setSettings = vi.fn(async () => DEFAULT_SETTINGS)
+  const { bridge } = fakeBridge({ setSettings })
+  renderWith(<ConnectionScreen />, servicesFor(bridge, withTs({}, { phase: 'off' }, true)))
+  const sw = screen.getByRole('switch', { name: 'Проверять обновления' })
+  expect(sw.getAttribute('aria-checked')).toBe('true')
+  fireEvent.click(sw)
+  expect(setSettings).toHaveBeenLastCalledWith({ checkUpdates: false })
+})

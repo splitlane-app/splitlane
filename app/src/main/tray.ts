@@ -7,6 +7,7 @@ import { laneGlyphBitmap, trayIconFor, trayMenuModel, type TrayIcon } from './tr
 export const MAIN_TEXT = {
   open: 'Открыть',
   settings: 'Настройки…',
+  checkUpdates: 'Проверить обновления',
   enable: 'Включить',
   disable: 'Выключить',
   quit: 'Выход',
@@ -56,11 +57,13 @@ export interface TrayActions {
   open(): void
   /** Shows the window on «Подключение» with the settings. */
   settings(): void
+  /** Starts a manual update check and shows the window on «Подключение». */
+  checkUpdates(): void
   toggle(to: 'enable' | 'disable'): void
   quit(): void
 }
 
-/** The tray icon and its menu (spec 9.6): Открыть, Настройки…, Включить or Выключить, Выход. */
+/** The tray icon and its menu (spec 9.6): Открыть, Настройки…, Включить or Выключить, Проверить обновления, Выход. */
 export class AppTray {
   private readonly tray: Tray
   private readonly images = new Map<TrayIcon, NativeImage>()
@@ -95,6 +98,7 @@ export class AppTray {
             if (toggle !== null) this.actions.toggle(toggle)
           }
         },
+        { label: MAIN_TEXT.checkUpdates, click: () => this.actions.checkUpdates() },
         { type: 'separator' },
         { label: MAIN_TEXT.quit, click: () => this.actions.quit() }
       ])

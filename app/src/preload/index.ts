@@ -35,7 +35,14 @@ const bridge: SplitLaneBridge = {
   icon: (exe) => ipcRenderer.invoke(IPC.icon, exe),
   openLogin: (url) => ipcRenderer.invoke(IPC.openLogin, url),
   saveDiagnostics: () => ipcRenderer.invoke(IPC.saveDiagnostics),
-  quit: () => ipcRenderer.invoke(IPC.quit)
+  quit: () => ipcRenderer.invoke(IPC.quit),
+  // no arguments cross: the page only presses the button
+  checkUpdates: () => ipcRenderer.invoke(IPC.checkUpdates),
+  installUpdate: () => ipcRenderer.invoke(IPC.installUpdate),
+  cancelUpdate: () => ipcRenderer.invoke(IPC.cancelUpdate),
+  updateLater: () => ipcRenderer.invoke(IPC.updateLater),
+  dismissUpdate: () => ipcRenderer.invoke(IPC.dismissUpdate),
+  openUpdateNotes: () => ipcRenderer.invoke(IPC.openUpdateNotes)
 }
 
 contextBridge.exposeInMainWorld('splitlane', bridge)

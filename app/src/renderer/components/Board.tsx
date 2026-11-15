@@ -12,6 +12,7 @@ import { Header } from './Header'
 import { Lane } from './Lane'
 import { Notice } from './Notice'
 import { ProgramCard } from './ProgramCard'
+import { UpdateBanner } from './UpdateBanner'
 
 /**
  * The main window (spec 9.1): the header, the state banner and the two lanes side by side, VPN on the left; the
@@ -41,6 +42,7 @@ export function Board(): React.JSX.Element {
         <Header />
         <div className={styles.bannerSlot}>
           <Banner />
+          <UpdateBanner />
         </div>
         <div className={styles.content}>
           {view !== null && (

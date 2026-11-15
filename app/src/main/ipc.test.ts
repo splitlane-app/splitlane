@@ -1,6 +1,7 @@
 import { expect, test, vi } from 'vitest'
 import { IPC, type Command, type Snapshot } from '../shared/ipc'
 import type { AppRule } from '../shared/protocol'
+import type { UpdateState } from '../shared/update'
 import {
   exportPath,
   mergePrograms,
@@ -312,6 +313,12 @@ function ipcHarness() {
     openExternal: vi.fn(async (_url: string) => {}),
     saveDiagnostics: vi.fn(async () => ({ saved: false })),
     quit: vi.fn(async () => {}),
+    updateState: vi.fn((): UpdateState => ({ kind: 'idle' })),
+    checkUpdates: vi.fn(async () => {}),
+    installUpdate: vi.fn(async () => {}),
+    cancelUpdate: vi.fn(() => {}),
+    updateLater: vi.fn(() => {}),
+    dismissUpdate: vi.fn(() => {}),
     log: vi.fn()
   } satisfies IpcDeps
   registerIpc(d)
@@ -437,4 +444,54 @@ test('exportPath takes the archive path from diagnostics.export', () => {
   for (const bad of [{}, { path: 42 }, { path: 'export\\a.zip' }, { path: 'C:\\ProgramData\\SplitLane\\export\\a.txt' }, null, 'x']) {
     expect(() => exportPath(bad)).toThrow()
   }
+})
+
+test('validateSettingsPatch accepts checkUpdates and refuses pendingUpdate', () => {
+  expect(validateSettingsPatch({ checkUpdates: false })).toEqual({ checkUpdates: false })
+  expect(() => validateSettingsPatch({ checkUpdates: 'no' })).toThrow()
+  expect(() => validateSettingsPatch({ pendingUpdate: '1.2.0' })).toThrow()
+  expect(() => validateSettingsPatch({ pendingUpdate: null })).toThrow()
+  expect(() => validateSettingsPatch({ checkUpdates: true, pendingUpdate: '1.2.0' })).toThrow()
+})
+
+test('openUpdateNotes opens only the release page of the current state', async () => {
+  const h = ipcHarness()
+  const notes = 'https://github.com/splitlane-app/splitlane/releases/tag/v1.2.0'
+  const cases: [UpdateState, boolean][] = [
+    [{ kind: 'available', version: '1.2.0', notesUrl: notes, hidden: false }, true],
+    [{ kind: 'installRefused', version: '1.2.0', notesUrl: notes, reason: '' }, true],
+    [{ kind: 'idle' }, false],
+    [{ kind: 'installed', version: '1.2.0' }, false],
+    [{ kind: 'available', version: '1.2.0', notesUrl: 'https://example.net/releases/tag/v1.2.0', hidden: false }, false],
+    [{ kind: 'available', version: '1.2.0', notesUrl: 'http://github.com/splitlane-app/splitlane/releases/tag/v1.2.0', hidden: false }, false],
+    [{ kind: 'available', version: '1.2.0', notesUrl: `${notes}?x=1`, hidden: false }, false],
+    [{ kind: 'available', version: '1.2.0', notesUrl: `${notes}/`, hidden: false }, false],
+    [{ kind: 'available', version: '1.2', notesUrl: 'https://github.com/splitlane-app/splitlane/releases/tag/v1.2', hidden: false }, false]
+  ]
+  for (const [update, opens] of cases) {
+    h.d.updateState.mockReturnValue(update)
+    h.d.openExternal.mockClear()
+    expect(await h.invoke(IPC.openUpdateNotes), JSON.stringify(update)).toBe(opens)
+    expect(h.d.openExternal).toHaveBeenCalledTimes(opens ? 1 : 0)
+    if (opens) expect(h.d.openExternal).toHaveBeenCalledWith(notes)
+  }
+  h.d.updateState.mockReturnValue(cases[0][0])
+  h.d.openExternal.mockRejectedValueOnce(new Error('no browser'))
+  expect(await h.invoke(IPC.openUpdateNotes)).toBe(false)
+})
+
+test('the update requests reach the updater without arguments', async () => {
+  const h = ipcHarness()
+  await h.invoke(IPC.checkUpdates, 'ignored')
+  await h.invoke(IPC.installUpdate)
+  await h.invoke(IPC.cancelUpdate)
+  await h.invoke(IPC.updateLater)
+  await h.invoke(IPC.dismissUpdate)
+  expect(h.d.checkUpdates).toHaveBeenCalledWith()
+  expect(h.d.installUpdate).toHaveBeenCalledTimes(1)
+  expect(h.d.cancelUpdate).toHaveBeenCalledTimes(1)
+  expect(h.d.updateLater).toHaveBeenCalledTimes(1)
+  expect(h.d.dismissUpdate).toHaveBeenCalledTimes(1)
+  await expect(h.invokeFrom({ id: 'other' }, IPC.installUpdate)).rejects.toThrow()
+  expect(h.d.installUpdate).toHaveBeenCalledTimes(1)
 })

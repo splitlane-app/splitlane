@@ -34,7 +34,7 @@ export function state(over: Partial<HelperState> = {}): HelperState {
 }
 
 export function snap(over: Partial<HelperState> = {}, link: LinkStatus = ready): Snapshot {
-  return { link, state: state(over), settings: DEFAULT_SETTINGS, install: { kind: 'idle' } }
+  return { link, state: state(over), settings: DEFAULT_SETTINGS, install: { kind: 'idle' }, update: { kind: 'idle' } }
 }
 
 export function rule(id: string, name: string, exe: string, lane: Lane): AppRule {
@@ -80,6 +80,12 @@ export function fakeBridge(over: Partial<SplitLaneBridge> = {}, answer: CommandR
     openLogin: async () => true,
     saveDiagnostics: async () => ({ saved: false }),
     quit: async () => {},
+    checkUpdates: async () => {},
+    installUpdate: async () => {},
+    cancelUpdate: async () => {},
+    updateLater: async () => {},
+    dismissUpdate: async () => {},
+    openUpdateNotes: async () => true,
     ...over
   }
   return { bridge, commands }

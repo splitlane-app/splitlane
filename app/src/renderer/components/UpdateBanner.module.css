@@ -1,0 +1,28 @@
+/* the update banner looks like the state banner (Banner.module.css) */
+.banner {
+  composes: banner from './Banner.module.css';
+}
+
+.body {
+  composes: body from './Banner.module.css';
+}
+
+.title {
+  composes: title from './Banner.module.css';
+}
+
+.dot {
+  composes: dot from './Banner.module.css';
+}
+
+.actions {
+  composes: actions from './Banner.module.css';
+}
+
+.primary {
+  composes: primary from './Banner.module.css';
+}
+
+.ghost {
+  composes: ghost from './Banner.module.css';
+}

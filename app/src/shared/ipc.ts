@@ -2,6 +2,7 @@ import type { Dropped, Program } from './programs'
 import type { Activity, AppRule, HelperError, HelperState, Lane } from './protocol'
 import type { WindowSettings } from './settings'
 import type { InstallOutcome, LinkStatus } from './status'
+import type { UpdateState } from './update'
 
 /** The install of the helper started from the window (spec 4.3). */
 export type InstallState = { kind: 'idle' } | { kind: 'running' } | { kind: 'done'; outcome: InstallOutcome }
@@ -17,6 +18,8 @@ export interface Snapshot {
   state: HelperState | null
   settings: WindowSettings
   install: InstallState
+  /** The window's own updates (stage 2 part 2). */
+  update: UpdateState
 }
 
 /** The helper methods the page may send (spec 5.1); the main process owns the rest. */
@@ -60,6 +63,16 @@ export interface SplitLaneBridge {
   openLogin(url: string): Promise<boolean>
   saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError }>
   quit(): Promise<void>
+  /** A manual check for a new version; the result comes in the snapshot. */
+  checkUpdates(): Promise<void>
+  installUpdate(): Promise<void>
+  cancelUpdate(): Promise<void>
+  /** «Позже»: hides the offer of this version. */
+  updateLater(): Promise<void>
+  /** Closes a result banner. */
+  dismissUpdate(): Promise<void>
+  /** Opens the release page of the current state; false when there is none or it cannot be opened. */
+  openUpdateNotes(): Promise<boolean>
 }
 
 /** IPC channel names: requests go through ipcMain.handle, the three pushes through webContents.send. */
@@ -78,6 +91,12 @@ export const IPC = {
   openLogin: 'splitlane:open-login',
   saveDiagnostics: 'splitlane:save-diagnostics',
   quit: 'splitlane:quit',
+  checkUpdates: 'splitlane:check-updates',
+  installUpdate: 'splitlane:install-update',
+  cancelUpdate: 'splitlane:cancel-update',
+  updateLater: 'splitlane:update-later',
+  dismissUpdate: 'splitlane:dismiss-update',
+  openUpdateNotes: 'splitlane:open-update-notes',
   /** main to page: a new Snapshot */
   snapshotChanged: 'splitlane:snapshot-changed',
   /** main to page: an Activity event of the helper */

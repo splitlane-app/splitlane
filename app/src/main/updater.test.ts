@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_SETTINGS, type WindowSettings } from '../shared/settings'
 import { feedFrom, type Feed, type UpdateState } from '../shared/update'
-import { abortable, nodeFs, runInstallerScript, Updater, type HopResponse, type UpdaterDeps } from './updater'
+import { abortable, installerOutcome, nodeFs, runInstallerScript, Updater, type HopResponse, type UpdaterDeps } from './updater'
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
 
@@ -335,6 +335,38 @@ describe('check', () => {
     expect(r.u.state().kind).toBe('available')
     expect(r.states.map((x) => x.kind)).toEqual(['available'])
     expect(r.logs.join('\n')).toContain('HTTP 500')
+  })
+
+  it('a manual check during an automatic one reports as manual', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    routes[API] = async (_q, res) => {
+      await gate
+      res.writeHead(200).end(JSON.stringify(releaseJson(feed, '1.0.0')))
+    }
+    const r = rig()
+    const auto = r.u.check(false)
+    await vi.waitFor(() => expect(hits).toContain(API))
+    expect(r.states).toEqual([])
+    const manual = r.u.check(true)
+    expect(r.u.state()).toEqual({ kind: 'checking', manual: true })
+    release()
+    await Promise.all([auto, manual])
+    // one request, and its result is shown as a manual one
+    expect(hits.filter((h) => h === API)).toHaveLength(1)
+    expect(r.u.state()).toEqual({ kind: 'upToDate' })
+
+    // a failure of the promoted check shows its reason
+    routes[API] = async (_q, res) => {
+      await gate
+      res.writeHead(500).end('x')
+    }
+    r.u.dismiss()
+    const auto2 = r.u.check(false)
+    await vi.waitFor(() => expect(hits.filter((h) => h === API)).toHaveLength(2))
+    const manual2 = r.u.check(true)
+    await Promise.all([auto2, manual2])
+    expect(r.u.state()).toEqual({ kind: 'checkFailed', reason: 'HTTP 500' })
   })
 
   it('a check refuses an answer over 1 MB', async () => {
@@ -827,5 +859,14 @@ describe('runInstallerScript', () => {
     expect(() => runInstallerScript('C:\\a"b.exe')).toThrow()
     expect(() => runInstallerScript('relative\\a.exe')).toThrow()
     expect(() => runInstallerScript('C:\\%TEMP%\\a.exe')).toThrow()
+  })
+})
+
+describe('installerOutcome', () => {
+  it('maps the exit code of powershell', () => {
+    expect(installerOutcome(0)).toBe('started')
+    expect(installerOutcome(1223)).toBe('cancelled')
+    expect(installerOutcome(1)).toEqual({ error: 'powershell exit 1' })
+    expect(installerOutcome(-1)).toEqual({ error: 'powershell exit -1' })
   })
 })

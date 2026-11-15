@@ -2,11 +2,12 @@ import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
 import { access, copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, win32 } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, shell } from 'electron'
 import { IPC, type InstallState, type Snapshot } from '../shared/ipc'
 import type { Dropped } from '../shared/programs'
 import { PIPE_NAME, type HelperError, type HelperState } from '../shared/protocol'
 import { DEFAULT_SETTINGS, type WindowSettings } from '../shared/settings'
+import { feedFrom, type UpdateState } from '../shared/update'
 import type { InstallOutcome, LinkStatus } from '../shared/status'
 import { AutoEnable } from './autoEnable'
 import { Games, type GamesFs } from './games'
@@ -15,6 +16,7 @@ import { exportPath, mergePrograms, registerIpc, runCommand, toHelperError } fro
 import { HelperLink, SHUTDOWN_TIMEOUT_MS } from './link'
 import { APP_USER_MODEL_ID, loginItemSettings, startupLoginItem } from './loginItem'
 import { PageCrashReload } from './pageCrash'
+import { hopWith, type RequestLike } from './netHop'
 import { dialPipe } from './pipe'
 import { installedPrograms, pickedFile, resolveDropped, startMenuDirs, type DropReaders, type ProgramsFs } from './programs'
 import { SettingsFile } from './settingsFile'
@@ -30,6 +32,7 @@ import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
 import { forbiddenSwitch } from './switches'
 import { runTask, systemTools, taskRegistered, type Exec } from './task'
 import { AppTray, MAIN_TEXT, windowIcon } from './tray'
+import { installerOutcome, nodeFs, runInstallerScript, Updater } from './updater'
 
 // The helper serves the installed window without elevation: started with a debugger or V8 switch, it exits at once,
 // before any window or the pipe (switches.ts).
@@ -143,6 +146,7 @@ const tools = systemTools(process.env)
 
 let win: BrowserWindow | null = null
 let tray: AppTray | null = null
+let updater: Updater | null = null
 /** Set by before-quit or the end of the Windows session: the window closes instead of hiding. */
 let allowClose = false
 /** "Выход" in progress. */
@@ -275,8 +279,12 @@ const icons = new IconCache(
 
 // ---- snapshot ----
 
+function updateState(): UpdateState {
+  return updater?.state() ?? { kind: 'idle' }
+}
+
 function snapshot(): Snapshot {
-  return { link: link.status(), state: link.state(), settings, install }
+  return { link: link.status(), state: link.state(), settings, install, update: updateState() }
 }
 
 function send(channel: string, data: unknown): void {
@@ -336,6 +344,56 @@ async function setSettings(patch: Partial<WindowSettings>): Promise<WindowSettin
   pushSnapshot()
   await saveSettings(settings)
   return settings
+}
+
+// ---- updates of the window (stage 2 part 2) ----
+
+/** The updater; its states go to the page in the snapshot. */
+function createUpdater(): Updater {
+  const { feed, refused } = feedFrom(process.env['SPLITLANE_UPDATE_FEED'])
+  if (refused !== undefined) log(`update: ${refused}`)
+  const version = app.getVersion()
+  return new Updater({
+    appVersion: version,
+    feed,
+    canUpdate:
+      canInstall(app.isPackaged, process.execPath, process.env['ProgramFiles']) ||
+      (!app.isPackaged && feed.origin === 'test'),
+    hop: (url, signal) =>
+      hopWith(
+        net.request({ url, method: 'GET', redirect: 'manual' }) as unknown as RequestLike,
+        `SplitLane/${version}`,
+        signal
+      ),
+    tempDir: join(app.getPath('temp'), 'SplitLane-update'),
+    fs: nodeFs(),
+    // the elevated installer is not waited for: powershell exits once the prompt is answered
+    runInstaller: async (exe) => {
+      const r = await execText()(tools.powershell, encodePowerShell(runInstallerScript(exe)))
+      return installerOutcome(r.code)
+    },
+    settings: {
+      get: () => settings,
+      set: async (patch) => {
+        await setSettings(patch)
+      }
+    },
+    lastInstallFile: join(process.env['ProgramData'] ?? 'C:\\ProgramData', 'SplitLane', 'export', 'last-install.txt'),
+    clock: {
+      now: () => Date.now(),
+      setTimeout: (fn, ms) => setTimeout(fn, ms),
+      clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout)
+    },
+    log: (line) => log(`update: ${line}`),
+    changed: () => pushSnapshot()
+  })
+}
+
+/** A manual check from the tray: the window opens on the connection screen, where its result shows. */
+function checkUpdatesFromTray(): void {
+  void updater?.check(true)
+  showWindow()
+  send(IPC.openSettings, null)
 }
 
 // ---- install (spec 4.3) ----
@@ -534,6 +592,16 @@ async function main(): Promise<void> {
     openExternal: (url) => shell.openExternal(url),
     saveDiagnostics,
     quit,
+    updateState,
+    checkUpdates: async () => {
+      await updater?.check(true)
+    },
+    installUpdate: async () => {
+      await updater?.update()
+    },
+    cancelUpdate: () => updater?.cancel(),
+    updateLater: () => updater?.later(),
+    dismissUpdate: () => updater?.dismiss(),
     log
   })
   tray = new AppTray({
@@ -548,12 +616,15 @@ async function main(): Promise<void> {
         if (!r.ok) log(`tray: ${to}: ${r.error.code}`)
       })
     },
+    checkUpdates: checkUpdatesFromTray,
     quit: () => void quit()
   })
   tray.update(link.status(), link.state())
   // the page is dark only: Windows then draws a dark title bar and frame too
   nativeTheme.themeSource = 'dark'
   createWindow()
+  updater = createUpdater()
+  void updater.start().catch((e: unknown) => log(`update: cannot start: ${errText(e)}`))
   log(`window started${startHidden ? ' hidden' : ''}`)
   link.start()
 }
@@ -573,6 +644,7 @@ if (forbidden !== null) {
     if (allowClose) app.quit()
   })
   app.on('will-quit', () => {
+    updater?.stop()
     link.stop()
     tray?.destroy()
     tray = null

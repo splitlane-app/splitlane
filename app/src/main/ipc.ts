@@ -2,6 +2,7 @@ import { IPC, LINK_CLOSED, MAX_DROPPED, type AppInfo, type Command, type Command
 import type { Dropped, Program } from '../shared/programs'
 import { LIMITS, utf8Bytes, type AppRule, type HelperError, type Lane, type MatcherKind } from '../shared/protocol'
 import type { WindowSettings } from '../shared/settings'
+import { notesUrlFor, parseVersion, type UpdateState } from '../shared/update'
 import { CallTimeoutError, ConnectionClosedError, HelperCallError } from './rpc'
 
 // ---- checks of what the page sends (spec 11: the page is checked like any other client) ----
@@ -146,7 +147,8 @@ export function validateDetailKey(x: unknown): string | null {
   return upTo(str(x, 'key'), LIMITS.maxPathBytes, 'key')
 }
 
-const SETTING_KEYS = ['openAtLogin', 'enableOnStart', 'connectedOnce'] as const satisfies readonly (keyof WindowSettings)[]
+// pendingUpdate belongs to the updater of the main process: the page cannot set it
+const SETTING_KEYS = ['openAtLogin', 'enableOnStart', 'connectedOnce', 'checkUpdates'] as const satisfies readonly (keyof WindowSettings)[]
 
 export function validateSettingsPatch(x: unknown): Partial<WindowSettings> {
   const o = plain(x, 'settings')
@@ -156,6 +158,17 @@ export function validateSettingsPatch(x: unknown): Partial<WindowSettings> {
     if (o[k] !== undefined) out[k] = bool(o[k], `settings.${k}`)
   }
   return out
+}
+
+const NOTES_PREFIX = notesUrlFor('') // https://github.com/splitlane-app/splitlane/releases/tag/v
+
+/** The release page of the state, or null: exactly https://github.com/splitlane-app/splitlane/releases/tag/v<x.y.z>. */
+export function notesUrlOf(s: UpdateState): string | null {
+  if (!('notesUrl' in s)) return null
+  const url = s.notesUrl
+  if (!url.startsWith(NOTES_PREFIX)) return null
+  const version = url.slice(NOTES_PREFIX.length)
+  return parseVersion(version) !== null && url === notesUrlFor(version) ? url : null
 }
 
 // ---- the command path ----
@@ -258,6 +271,12 @@ export interface IpcDeps {
   openExternal(url: string): Promise<void>
   saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError }>
   quit(): Promise<void>
+  updateState(): UpdateState
+  checkUpdates(): Promise<void>
+  installUpdate(): Promise<void>
+  cancelUpdate(): void
+  updateLater(): void
+  dismissUpdate(): void
   log(message: string): void
 }
 
@@ -325,4 +344,27 @@ export function registerIpc(d: IpcDeps): void {
   })
   on(IPC.saveDiagnostics, () => d.saveDiagnostics())
   on(IPC.quit, () => d.quit())
+  // no argument of the page is read: the buttons carry none
+  on(IPC.checkUpdates, () => d.checkUpdates())
+  on(IPC.installUpdate, () => d.installUpdate())
+  on(IPC.cancelUpdate, () => {
+    d.cancelUpdate()
+  })
+  on(IPC.updateLater, () => {
+    d.updateLater()
+  })
+  on(IPC.dismissUpdate, () => {
+    d.dismissUpdate()
+  })
+  on(IPC.openUpdateNotes, async () => {
+    const url = notesUrlOf(d.updateState())
+    if (url === null) return false
+    try {
+      await d.openExternal(url)
+      return true
+    } catch {
+      d.log('ipc: cannot open the release page')
+      return false
+    }
+  })
 }
