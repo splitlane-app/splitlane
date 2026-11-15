@@ -121,6 +121,7 @@ func (s *Server) admit(c *client) {
 		s.wg.Done()
 		return
 	}
+	s.clients[c] = true // under the same lock as the closing check: Close sees every served client
 	s.wg.Add(1)
 	s.mu.Unlock()
 	go s.write(c)
@@ -253,9 +254,6 @@ func (s *Server) reply(c *client, line []byte) {
 
 func (s *Server) read(c *client) {
 	defer s.wg.Done()
-	s.mu.Lock()
-	s.clients[c] = true
-	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		s.end(c, !s.closing) // while closing, the writer writes the queue out first
