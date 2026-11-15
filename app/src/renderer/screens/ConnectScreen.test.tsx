@@ -272,7 +272,7 @@ test('ConnectScreen shows the banner of a failed first enable, of the start and 
   renderWith(<ConnectScreen />, services)
   expect(
     screen.getByText(
-      'Не удалось включить: exit node выходит в интернет с того же адреса, что и этот компьютер, такой exit node не подходит'
+      'Не удалось включить: VPN-сервер выходит в интернет с того же адреса, что и этот компьютер, такой сервер не подходит'
     )
   ).toBeTruthy()
   await act(async () => {

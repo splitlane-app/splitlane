@@ -39,7 +39,7 @@ test('Banner renders actions and calls the bridge', async () => {
 
   // degraded: «Повторить» is the extra check of the link
   show(snap({ phase: 'degraded', reason: { code: 'vpn_unreachable', params: {} } }))
-  expect(screen.getByText(/^Сервер node-a недоступен/)).toBeTruthy()
+  expect(screen.getByText(/^VPN-сервер node-a недоступен/)).toBeTruthy()
   await click('Повторить')
   expect(commands.at(-1)).toEqual({ method: 'routing.enable' })
   await click('Всё напрямую')

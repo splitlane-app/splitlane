@@ -80,39 +80,6 @@
   color: var(--warn);
 }
 
-.tiles {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.tile {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px;
-  border: 1px solid var(--line2);
-  border-radius: 9px;
-  background: var(--card);
-}
-
-.tile[data-active='true'] {
-  border-color: var(--vpn);
-}
-
-.tile[data-active='false'] {
-  color: var(--dim);
-}
-
-.tileNote {
-  color: var(--muted);
-  font-size: 12px;
-}
-
 .steps {
   display: flex;
   flex-direction: column;
@@ -158,59 +125,11 @@
   width: 100%;
 }
 
-.nodes {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-}
-
-.node {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--line2);
-  border-radius: 7px;
-  background: var(--card);
-  cursor: pointer;
-}
-
-.node:hover {
-  border-color: var(--line3);
-}
-
-.node:has(input:checked) {
-  border-color: var(--vpn);
-  background: color-mix(in srgb, var(--vpn) 12%, var(--card));
-}
-
-.node:has(input:focus-visible) {
-  outline: 2px solid var(--vpn);
-  outline-offset: 1px;
-}
-
-.nodeRadio {
-  margin: 0;
-  accent-color: var(--vpn);
-}
-
-.nodeName {
-  flex: 1;
-}
-
 .updateLine {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-
-.offline {
-  color: var(--warn);
-  font-size: 12px;
 }
 
 .row {

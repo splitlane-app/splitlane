@@ -1,0 +1,41 @@
+/* The connection methods: three tiles, one of them chosen (spec 6). */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line2);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tiles[data-compact='true'] .tile {
+  padding: 6px 10px;
+}
+
+.tile:hover {
+  border-color: var(--line3);
+  color: var(--text);
+}
+
+.tile[aria-checked='true'] {
+  border-color: var(--vpn);
+  background: color-mix(in srgb, var(--vpn) 12%, var(--card));
+  color: var(--text);
+}
+
+.note {
+  color: var(--muted);
+  font-size: 12px;
+}

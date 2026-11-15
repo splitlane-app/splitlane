@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { ERROR_CODES, REASON_CODES, type RejectReason } from '../../shared/protocol'
+import { ERROR_CODES, PROXY_REJECT_CODES, REASON_CODES, type RejectReason } from '../../shared/protocol'
 import { en } from './en'
 import { ru, type Key } from './ru'
 import { currentLang, setLang, t } from './t'
@@ -25,6 +25,35 @@ describe('dictionary', () => {
         expect(text.trim().length, key).toBeGreaterThan(0)
       }
     }
+  })
+
+  it('every code a line of proxy.add may be rejected with has a text of its own', () => {
+    for (const dict of [ru, en] as Record<string, string>[]) {
+      for (const code of PROXY_REJECT_CODES) expect(dict[`error.${code}`]?.trim().length, code).toBeGreaterThan(0)
+    }
+    // no two codes read the same: each tells the user something different
+    for (const dict of [ru, en] as Record<string, string>[]) {
+      const texts = PROXY_REJECT_CODES.map((c) => dict[`error.${c}`])
+      expect(new Set(texts).size).toBe(texts.length)
+    }
+  })
+
+  it('the failures of the VPN lane speak of the VPN server, not of an exit node (either connector)', () => {
+    const neutral: Key[] = [
+      'reason.tunnel_not_proven',
+      'reason.same_address',
+      'reason.vpn_unreachable',
+      'banner.degraded',
+      'banner.degradedUnnamed'
+    ]
+    for (const key of neutral) {
+      expect(ru[key], key).not.toMatch(/exit node/i)
+      expect(ru[key], key).toContain('VPN-сервер')
+      expect(en[key], key).not.toMatch(/exit node/i)
+      expect(en[key], key).toMatch(/VPN server/)
+    }
+    expect(ru['lane.vpnSees']).not.toMatch(/exit node/i)
+    expect(en['lane.vpnSees']).not.toMatch(/exit node/i)
   })
 
   it('en has every key of ru', () => {
@@ -77,9 +106,25 @@ describe('dictionary', () => {
       'action.cancel': 'Cancel',
       'add.close': 'Close',
       'connection.language': 'Language',
-      'connection.languageSystem': 'Same as Windows'
+      'connection.languageSystem': 'Same as Windows',
+      'connect.key': 'Key or subscription',
+      'connect.file': 'Configuration file',
+      'proxy.refresh': 'Refresh',
+      'proxy.subscriptions': 'Subscriptions',
+      'proxy.servers': 'Servers'
     }
     for (const [key, text] of Object.entries(glossary)) expect(en[key as Key], key).toBe(text)
+  })
+
+  it('Russian texts follow the glossary', () => {
+    const glossary: Partial<Record<Key, string>> = {
+      'connect.key': 'Ключ или подписка',
+      'connect.file': 'Файл настроек',
+      'proxy.refresh': 'Обновить',
+      'proxy.subscriptions': 'Подписки',
+      'proxy.servers': 'Серверы'
+    }
+    for (const [key, text] of Object.entries(glossary)) expect(ru[key as Key], key).toBe(text)
   })
 
   it('the names of the languages are in their own language in both dictionaries', () => {

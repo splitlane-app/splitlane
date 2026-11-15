@@ -26,10 +26,6 @@ export interface Banner {
   actions: BannerAction[]
 }
 
-function exitNodeName(state: HelperState): string {
-  return laneServerName(state, null) ?? t('banner.serverFallback')
-}
-
 export function bannerFor(link: LinkStatus, state: HelperState | null): Banner | null {
   if (link.kind === 'restarting') return { tone: 'warn', title: t('banner.restarting'), actions: [] }
   if (link.kind === 'unresponsive') return { tone: 'error', title: t('banner.unresponsive'), actions: ['retryLink'] }
@@ -46,15 +42,18 @@ export function bannerFor(link: LinkStatus, state: HelperState | null): Banner |
       return { tone: 'info', title: t('banner.starting'), actions: ['cancel'] }
     case 'on':
       return null
-    case 'degraded':
+    case 'degraded': {
       if (state.reason?.code === 'login_expired') {
         return { tone: 'warn', title: t('banner.loginAgain'), actions: ['loginAgain'] }
       }
+      // the server of either connector, by name when the window knows it
+      const name = laneServerName(state, null)
       return {
         tone: 'warn',
-        title: t('banner.degraded', { name: exitNodeName(state) }),
+        title: name === null ? t('banner.degradedUnnamed') : t('banner.degraded', { name }),
         actions: ['retry', 'allDirectOn']
       }
+    }
     case 'blocked':
       return { tone: 'warn', title: t('banner.blocked'), actions: ['clearSystemExitNode', 'disable'] }
     case 'stopping': {

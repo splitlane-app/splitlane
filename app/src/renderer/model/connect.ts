@@ -1,4 +1,4 @@
-import type { ExitNode, HelperState, ProxyServer, Subscription } from '../../shared/protocol'
+import type { ExitNode, HelperState, Phase, ProxyServer, Subscription } from '../../shared/protocol'
 import type { LastExitNode } from '../../shared/settings'
 import type { Snapshot } from '../../shared/ipc'
 
@@ -41,6 +41,57 @@ export function connectStep(state: HelperState): ConnectStep {
   const known = selectedExitNode !== null || exitNodes.length > 0
   if (afterEnable && backend === 'stopped' && !loginGone && known) return next
   return 'login'
+}
+
+/** The tiles of both connect screens: Tailscale, a key or a subscription, a configuration file (spec 6). */
+export type ConnectMethod = 'tailscale' | 'key' | 'file'
+
+/** The tile a screen opens on: the one of the connector in force (a key and a file are one connector, the key first). */
+export function methodOf(state: HelperState): ConnectMethod {
+  return state.connector === 'proxy' ? 'key' : 'tailscale'
+}
+
+/**
+ * The step of the Tailscale tile whatever the connector: while the proxy is in force it is left only by choosing an
+ * exit node (tailscale.setExitNode makes the connector Tailscale), so the last step is that choice, not the enable.
+ */
+export function tailscaleStep(state: HelperState): ConnectStep {
+  const step = connectStep({ ...state, connector: 'tailscale' })
+  return step === 'enable' && state.connector !== 'tailscale' ? 'exitNode' : step
+}
+
+/** The steps of a key or a file: add one (the list is empty), choose a server (none in force), turn splitting on. */
+export type ProxyStep = 'add' | 'server' | 'enable'
+
+export function proxyStep(state: HelperState): ProxyStep {
+  if (state.proxy.servers.length === 0) return 'add'
+  return state.connector === 'proxy' && connectStep(state) === 'enable' ? 'enable' : 'server'
+}
+
+/** The server the radio group shows as chosen: the selected one, only while the proxy is the connector. */
+export function serverInForce(state: HelperState): string | null {
+  return state.connector === 'proxy' ? state.proxy.selected : null
+}
+
+/** The exit node the radio group shows as chosen: the selected one, only while Tailscale is the connector. */
+export function exitNodeInForce(state: HelperState): string | null {
+  return state.connector === 'tailscale' ? state.tailscale.selectedExitNode : null
+}
+
+/**
+ * Whether the selected server (or its subscription) is held by live routing: the helper then refuses to remove it or
+ * to refresh that subscription until routing is off.
+ */
+export function selectedHeld(state: HelperState): boolean {
+  return state.connector === 'proxy' && routingLive(state.phase)
+}
+
+/**
+ * Routing is not off: on its way on, on (degraded or blocked too) or on its way off; a change of the way out (the exit
+ * node, the server) restarts it.
+ */
+export function routingLive(phase: Phase): boolean {
+  return phase !== 'off' && phase !== 'error'
 }
 
 /**

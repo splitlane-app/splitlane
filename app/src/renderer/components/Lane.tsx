@@ -21,16 +21,19 @@ function LaneSpeed({ down, up }: { down: number; up: number }): React.JSX.Elemen
 }
 
 /**
- * What the lane means for a program (spec 9.1): the VPN lane names the server and its address; the direct one
- * shows the real address masked (the first two numbers), the whole of it while pressed.
+ * What the lane means for a program (spec 9.1): the VPN lane names the server of either connector (the exit node, or
+ * the selected server) and its address; the direct one shows the real address masked (the first two numbers), the
+ * whole of it while pressed.
  */
 function Sees({ lane, address }: { lane: LaneName; address: string | null }): React.JSX.Element {
-  const server = useApp((s) => (s.snapshot?.state ? laneServerName(s.snapshot.state, null) : null))
+  const server = useApp((s) =>
+    s.snapshot?.state ? laneServerName(s.snapshot.state, s.snapshot.settings.lastExitNode) : null
+  )
   const [shown, setShown] = useState(false)
   if (lane === 'vpn') {
     return (
       <p className={styles.sees}>
-        {t('lane.vpnSees', { name: server ?? t('banner.serverFallback') })}
+        {t('lane.vpnSees', { name: server ?? t('lane.serverFallback') })}
         {address !== null && (
           <>
             {t('sep')}

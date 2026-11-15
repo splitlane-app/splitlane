@@ -27,3 +27,18 @@ test('the notification texts carry the version of an update', () => {
   expect(MAIN_TEXT.ru.notifyUpdateTitle).toContain('{v}')
   expect(MAIN_TEXT.en.notifyUpdateTitle).toContain('{v}')
 })
+
+test('the texts of the VPN lane fit either connector; only the Tailscale app and its login name Tailscale', () => {
+  for (const lang of ['ru', 'en'] as const) {
+    const m = MAIN_TEXT[lang]
+    // the tray menu and the toasts name no exit node and no server: nothing to change between Tailscale and a key
+    for (const key of ['notifyVpnDownTitle', 'notifyVpnDownBody', 'notifyErrorTitle', 'notifyErrorBody'] as const) {
+      expect(m[key], key).not.toMatch(/exit node|Tailscale/i)
+    }
+  }
+  expect(MAIN_TEXT.ru.notifyVpnDownTitle).toContain('VPN-сервер')
+  expect(MAIN_TEXT.en.notifyVpnDownTitle).toContain('VPN server')
+  // the file dialog of «Файл настроек» (the glossary: «Файл настроек», "Configuration file")
+  expect(MAIN_TEXT.ru.confFilter).toBe('Файлы настроек WireGuard')
+  expect(MAIN_TEXT.en.confFilter).toBe('WireGuard configuration files')
+})

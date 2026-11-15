@@ -1,0 +1,94 @@
+/* The radio groups of the connection screens: the exit nodes of the tailnet and the servers of the proxy list. */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--card);
+  cursor: pointer;
+}
+
+.item:hover {
+  border-color: var(--line3);
+}
+
+.item:has(input:checked) {
+  border-color: var(--vpn);
+  background: color-mix(in srgb, var(--vpn) 12%, var(--card));
+}
+
+.item:has(input:focus-visible) {
+  outline: 2px solid var(--vpn);
+  outline-offset: 1px;
+}
+
+.radio {
+  margin: 0;
+  accent-color: var(--vpn);
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.offline {
+  color: var(--warn);
+  font-size: 12px;
+}
+
+/* a server: its row of the group and the remove button beside it */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.meta {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.protocol {
+  font-family: var(--font-num);
+}
+
+.remove {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.remove:hover:not(:disabled) {
+  border-color: var(--line3);
+  color: var(--text);
+}
+
+.remove:disabled {
+  color: var(--dim);
+  cursor: default;
+}
+
+.note {
+  margin: 0;
+  color: var(--muted);
+}

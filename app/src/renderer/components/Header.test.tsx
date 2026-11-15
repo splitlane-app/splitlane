@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
-import { fakeBridge, renderWith, servicesFor, snap, state } from '../testing'
+import { fakeBridge, proxyServer, proxyState, renderWith, servicesFor, snap, state } from '../testing'
 import { Header } from './Header'
 
 afterEach(cleanup)
@@ -100,4 +100,24 @@ test('the pill shows the remembered name of the exit node while the list is empt
   expect(screen.getByRole('button', { name: 'Tailscale · 100.64.0.2' })).toBeTruthy()
   act(() => services.store.getState().setSnapshot(off(null)))
   expect(screen.getByRole('button', { name: 'Tailscale · 100.64.0.2' })).toBeTruthy()
+})
+
+test('the pill of the proxy: «<server> · <protocol>», up only while routing is on', () => {
+  const { bridge } = fakeBridge()
+  const a = proxyServer('0123456789abcdef', 'edge-a.example.com', { protocol: 'hysteria2' })
+  const at = (s: ReturnType<typeof proxyState>) => ({ ...snap(), state: s })
+  const services = servicesFor(bridge, at(proxyState([a], a.id, [], { phase: 'on' })))
+  renderWith(<Header />, services)
+  const pill = (): HTMLElement => screen.getByRole('button', { name: /edge-a|сервер не выбран/ })
+  expect(pill().textContent).toBe('edge-a.example.com · Hysteria2')
+  expect(pill().dataset.tone).toBe('up')
+  // the Tailscale part (node, path) is not shown for the proxy
+  expect(screen.queryByText(/Tailscale/)).toBeNull()
+
+  act(() => services.store.getState().setSnapshot(at(proxyState([a], a.id, [], { phase: 'off' }))))
+  expect(pill().dataset.tone).toBe('idle')
+  act(() => services.store.getState().setSnapshot(at(proxyState([a], a.id, [], { phase: 'degraded' }))))
+  expect(pill().dataset.tone).toBe('warn')
+  act(() => services.store.getState().setSnapshot(at(proxyState([a], null, [], { phase: 'off' }))))
+  expect(pill().textContent).toBe('сервер не выбран')
 })

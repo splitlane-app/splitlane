@@ -1,111 +1,87 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Command } from '../../shared/ipc'
-import type { ExitNode, HelperState } from '../../shared/protocol'
-import type { LastExitNode, WindowSettings } from '../../shared/settings'
+import type { HelperState } from '../../shared/protocol'
+import type { WindowSettings } from '../../shared/settings'
 import { Banner } from '../components/Banner'
-import { useUpdateActions } from '../components/useUpdateActions'
+import { ExitNodeList } from '../components/ExitNodeList'
 import { LanguageSelect } from '../components/LanguageSelect'
-import { UpdateBanner } from '../components/UpdateBanner'
+import { MethodTiles } from '../components/MethodTiles'
+import { ProxyPanel } from '../components/ProxyPanel'
 import { ScreenFrame } from '../components/ScreenFrame'
+import { Subscriptions } from '../components/Subscriptions'
 import { Toggle } from '../components/Toggle'
-import { currentLang, t } from '../i18n/t'
-import { connectStep, exitNodeChoices, type ConnectStep } from '../model/connect'
+import { UpdateBanner } from '../components/UpdateBanner'
+import { useUpdateActions } from '../components/useUpdateActions'
+import type { Key } from '../i18n/ru'
+import { t } from '../i18n/t'
+import {
+  methodOf,
+  proxyStep,
+  routingLive,
+  tailscaleStep,
+  type ConnectMethod,
+  type ConnectStep,
+  type ProxyStep
+} from '../model/connect'
 import { updateBusy, updateStatusActions, updateStatusLine } from '../model/update'
 import { sendCommand, useApp, useServices } from '../services'
 import styles from './screens.module.css'
 
-/** Online nodes first, then by name in the order of the current language. */
-function sortedNodes(nodes: ExitNode[]): ExitNode[] {
-  const lang = currentLang()
-  return [...nodes].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name, lang))
+const TAILSCALE_STEP: Record<ConnectStep, number> = {
+  login: 0,
+  waitLogin: 0,
+  approval: 0,
+  exitNode: 1,
+  server: 1,
+  enable: 2
+}
+const PROXY_STEP: Record<ProxyStep, number> = { add: 0, server: 1, enable: 2 }
+const STEP_KEYS: Record<ConnectMethod, readonly Key[]> = {
+  tailscale: ['connect.step.login', 'connect.step.exitNode', 'connect.step.enable'],
+  key: ['connect.step.add', 'connect.step.server', 'connect.step.enable'],
+  file: ['connect.step.file', 'connect.step.server', 'connect.step.enable']
 }
 
-const isLive = (phase: HelperState['phase']): boolean => phase !== 'off' && phase !== 'error'
-
-/** How long a choice of the exit node waits for the next one before it is sent. */
-const CHOICE_SETTLE_MS = 500
-
-/**
- * The exit nodes of the tailnet as one radio group; choosing one sends tailscale.setExitNode (the helper validates
- * it). The selected node is always in it, named as far as the window knows (the list is empty while routing is off).
- */
-function ExitNodeList({ state, last }: { state: HelperState; last: LastExitNode | null }): React.JSX.Element {
-  const services = useServices()
-  const { selectedExitNode } = state.tailscale
-  const nodes = exitNodeChoices(state, last)
-  // arrow keys move through native radios and change the choice on each press, and while split routing is live every
-  // setExitNode restarts it: a live choice is sent when settled (the last one, after a pause). Without routing the
-  // choice goes at once, so the steps of the wizard do not lag.
-  const [pending, setPending] = useState<string | null>(null)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const waiting = useRef<string | null>(null)
-  const mounted = useRef(true)
-  const send = (id: string): void => {
-    void sendCommand(services, { method: 'tailscale.setExitNode', id }).finally(() => {
-      if (mounted.current) setPending((p) => (p === id ? null : p))
-    })
-  }
-  const sendRef = useRef(send)
-  sendRef.current = send
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
-      // leaving the screen applies the choice made, it does not drop it
-      if (timer.current !== null && waiting.current !== null) {
-        clearTimeout(timer.current)
-        sendRef.current(waiting.current)
-      }
-    }
-  }, [])
-  const choose = (id: string): void => {
-    if (timer.current !== null) clearTimeout(timer.current)
-    timer.current = null
-    waiting.current = null
-    // back on the node that is in force: nothing to send (the helper restarts on any setExitNode while live)
-    if (id === selectedExitNode) {
-      setPending(null)
-      return
-    }
-    setPending(id)
-    if (!isLive(state.phase)) {
-      send(id)
-      return
-    }
-    waiting.current = id
-    timer.current = setTimeout(() => {
-      timer.current = null
-      waiting.current = null
-      send(id)
-    }, CHOICE_SETTLE_MS)
-  }
-  const shown = pending ?? selectedExitNode
-  if (nodes.length === 0) return <p className={styles.lead}>{t('connect.noExitNodes')}</p>
+/** The three steps of a method, the current one marked. */
+function Steps({ method, current }: { method: ConnectMethod; current: number }): React.JSX.Element {
   return (
-    <div className={styles.nodes} role="radiogroup" aria-label={t('connect.exitNodes')}>
-      {sortedNodes(nodes).map((n) => (
-        <label key={n.id} className={styles.node} title={n.online ? undefined : t('connect.offlineWarn')}>
-          <input
-            type="radio"
-            name="exit-node"
-            className={styles.nodeRadio}
-            checked={n.id === shown}
-            onChange={() => choose(n.id)}
-          />
-          <span className={styles.nodeName}>{n.name || n.id}</span>
-          {!n.online && <span className={styles.offline}>{t('connect.offline')}</span>}
-        </label>
+    <ol className={styles.steps} aria-label={t('connect.steps')}>
+      {STEP_KEYS[method].map((key, i) => (
+        <li
+          key={key}
+          className={styles.step}
+          data-state={i < current ? 'done' : i === current ? 'current' : 'todo'}
+          aria-current={i === current ? 'step' : undefined}
+        >
+          <span className={styles.stepNum}>{i + 1}</span>
+          {t(key)}
+        </li>
       ))}
+    </ol>
+  )
+}
+
+/** The last step of either method: the warning about the exit node of the Tailscale app and the enable button. */
+function EnableStep({ state, busy, onEnable }: { state: HelperState; busy: boolean; onEnable(): void }): React.JSX.Element {
+  const starting = state.phase === 'starting'
+  return (
+    <div className={styles.section}>
+      {state.systemTailscale.exitNodeOn && (
+        <p className={styles.warning} role="note">
+          {t('connect.systemWarn')}
+        </p>
+      )}
+      <button type="button" className={`${styles.button} ${styles.primary}`} disabled={busy || starting} onClick={onEnable}>
+        {starting ? t('connect.enabling') : t('connect.enable')}
+      </button>
     </div>
   )
 }
 
-const STEP_OF: Record<ConnectStep, number> = { login: 0, waitLogin: 0, approval: 0, exitNode: 1, server: 1, enable: 2 }
-const STEP_KEYS = ['connect.step.login', 'connect.step.exitNode', 'connect.step.enable'] as const
-
 /**
- * «Подключите VPN» (spec 9.5): the tiles of the connection methods and the three steps of Tailscale: log in, choose
- * the exit node, turn splitting on. Once routing is on the first time it records `connectedOnce`.
+ * «Подключите VPN» (spec 9.5, stage 3 spec 6): the tiles of the connection methods and the three steps of the chosen
+ * one. Tailscale: log in, choose the exit node, turn splitting on. A key or a file: add one, choose a server, turn
+ * splitting on. The tile opens on the connector in force. Once routing is on the first time it records `connectedOnce`.
  */
 export function ConnectScreen(): React.JSX.Element | null {
   const services = useServices()
@@ -115,6 +91,7 @@ export function ConnectScreen(): React.JSX.Element | null {
   const lastExitNode = useApp((s) => s.snapshot?.settings.lastExitNode ?? null)
   const loginRequested = useApp((s) => s.loginRequested)
   const [busy, setBusy] = useState(false)
+  const [method, setMethod] = useState<ConnectMethod>(() => (state === null ? 'tailscale' : methodOf(state)))
   const recorded = useRef(false)
   const authUrl = state?.tailscale.authUrl ?? null
   const phase = state?.phase ?? null
@@ -153,8 +130,8 @@ export function ConnectScreen(): React.JSX.Element | null {
   }, [phase, connectedOnce, bridge])
 
   if (state === null) return null
-  const step = connectStep(state)
-  const current = STEP_OF[step]
+  const step = tailscaleStep(state)
+  const proxy = proxyStep(state)
 
   const run = async (c: Command): Promise<void> => {
     setBusy(true)
@@ -164,41 +141,24 @@ export function ConnectScreen(): React.JSX.Element | null {
       setBusy(false)
     }
   }
+  const enable = <EnableStep state={state} busy={busy} onEnable={() => void run({ method: 'routing.enable' })} />
 
   return (
     <ScreenFrame title={t('connect.title')} wide>
       <Banner withoutOff />
       <UpdateBanner />
       <p className={styles.lead}>{t('connect.lead')}</p>
-      <ul className={styles.tiles} aria-label={t('connect.methods')}>
-        <li className={styles.tile} data-active="true">
-          <strong>{t('connect.tailscale')}</strong>
-          <span className={styles.tileNote}>{t('connect.tailscaleNote')}</span>
-        </li>
-        <li className={styles.tile} data-active="false" aria-disabled="true">
-          <strong>{t('connect.key')}</strong>
-          <span className={styles.tileNote}>{t('connect.soon')}</span>
-        </li>
-        <li className={styles.tile} data-active="false" aria-disabled="true">
-          <strong>{t('connect.file')}</strong>
-          <span className={styles.tileNote}>{t('connect.soon')}</span>
-        </li>
-      </ul>
-      <ol className={styles.steps} aria-label={t('connect.steps')}>
-        {STEP_KEYS.map((key, i) => (
-          <li
-            key={key}
-            className={styles.step}
-            data-state={i < current ? 'done' : i === current ? 'current' : 'todo'}
-            aria-current={i === current ? 'step' : undefined}
-          >
-            <span className={styles.stepNum}>{i + 1}</span>
-            {t(key)}
-          </li>
-        ))}
-      </ol>
+      <MethodTiles value={method} onChange={setMethod} />
+      <Steps method={method} current={method === 'tailscale' ? TAILSCALE_STEP[step] : PROXY_STEP[proxy]} />
 
-      {step === 'login' && (
+      {method !== 'tailscale' && (
+        <>
+          {/* a tile of its own: the pasted text does not follow to the file tile */}
+          <ProxyPanel key={method} mode={method} />
+          {proxy === 'enable' && enable}
+        </>
+      )}
+      {method === 'tailscale' && step === 'login' && (
         <div className={styles.section}>
           <p className={styles.lead}>{t('connect.loginHint')}</p>
           <button
@@ -211,7 +171,7 @@ export function ConnectScreen(): React.JSX.Element | null {
           </button>
         </div>
       )}
-      {step === 'waitLogin' && authUrl !== null && (
+      {method === 'tailscale' && step === 'waitLogin' && authUrl !== null && (
         <div className={styles.section}>
           <p className={styles.status} role="status">
             {t('connect.waitLogin')}
@@ -221,43 +181,29 @@ export function ConnectScreen(): React.JSX.Element | null {
           </button>
         </div>
       )}
-      {step === 'approval' && (
+      {method === 'tailscale' && step === 'approval' && (
         <p className={styles.status} role="status">
           {t('connect.approval')}
         </p>
       )}
-      {(step === 'exitNode' || step === 'enable') && (
+      {method === 'tailscale' && (step === 'exitNode' || step === 'enable') && (
         <div className={styles.section}>
           <p className={styles.lead}>{t('connect.exitNodeHint')}</p>
           <ExitNodeList state={state} last={lastExitNode} />
         </div>
       )}
-      {step === 'enable' && (
-        <div className={styles.section}>
-          {state.systemTailscale.exitNodeOn && (
-            <p className={styles.warning} role="note">
-              {t('connect.systemWarn')}
-            </p>
-          )}
-          <button
-            type="button"
-            className={`${styles.button} ${styles.primary}`}
-            disabled={busy || phase === 'starting'}
-            onClick={() => void run({ method: 'routing.enable' })}
-          >
-            {phase === 'starting' ? t('connect.enabling') : t('connect.enable')}
-          </button>
-        </div>
-      )}
+      {method === 'tailscale' && step === 'enable' && enable}
       <LanguageSelect />
     </ScreenFrame>
   )
 }
 
-
 /**
- * «Подключение» (spec 9.5, 9.6), opened from the connection pill: the device, the exit node and its change,
- * logout (only while routing is off) and the settings of the window, «Язык» among them.
+ * «Подключение» (spec 9.5, 9.6, stage 3 spec 6), opened from the connection pill: the tiles of the methods, opened on
+ * the connector in force, and the part of the chosen one. Tailscale: the device, the exit node and its change, logout
+ * (only while routing is off). A key or a file: the add, the servers with their choice and removal, the
+ * subscriptions with their refresh and removal. Switching the connector is choosing a server or an exit node. Then
+ * the settings of the window, «Язык» among them.
  */
 export function ConnectionScreen(): React.JSX.Element | null {
   const services = useServices()
@@ -267,14 +213,16 @@ export function ConnectionScreen(): React.JSX.Element | null {
   const link = useApp((s) => s.snapshot?.link ?? null)
   const update = useApp((s) => s.snapshot?.update ?? null)
   const [appVersion, setAppVersion] = useState<string | null>(null)
+  const [method, setMethod] = useState<ConnectMethod>(() => (state === null ? 'tailscale' : methodOf(state)))
   const updates = useUpdateActions()
   const back = (): void => store.getState().showConnection(false)
 
-  // Esc goes back to the lanes, unless a select or a list inside has the key (an open select closes on it)
+  // Esc goes back to the lanes, unless a select or a list inside has the key (an open select closes on it) or the
+  // text of a key is being typed (going back would drop it)
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
-      if (e.target instanceof Element && e.target.closest('select, [role="listbox"]') !== null) return
+      if (e.target instanceof Element && e.target.closest('select, textarea, [role="listbox"]') !== null) return
       store.getState().showConnection(false)
     }
     document.addEventListener('keydown', onKey)
@@ -306,21 +254,43 @@ export function ConnectionScreen(): React.JSX.Element | null {
       store.getState().showNotice(t('connection.saveFailed'))
     })
   }
-  const canLogout = !isLive(state.phase)
+  const live = routingLive(state.phase)
   const updateLine = update === null ? null : updateStatusLine(update)
   const updateActions = update === null ? [] : updateStatusActions(update)
 
   return (
     <ScreenFrame title={t('connection.title')} wide onBack={back}>
       <Banner />
-      <div className={styles.row}>
-        <span className={styles.label}>{t('connection.device')}</span>
-        <span className={styles.value}>{state.tailscale.deviceName}</span>
-      </div>
-      <div className={styles.section}>
-        <ExitNodeList state={state} last={settings.lastExitNode} />
-        {isLive(state.phase) && <p className={styles.lead}>{t('connection.changeNote')}</p>}
-      </div>
+      <MethodTiles value={method} onChange={setMethod} compact />
+      {method === 'tailscale' ? (
+        <>
+          <div className={styles.row}>
+            <span className={styles.label}>{t('connection.device')}</span>
+            <span className={styles.value}>{state.tailscale.deviceName}</span>
+          </div>
+          <div className={styles.section}>
+            <ExitNodeList state={state} last={settings.lastExitNode} />
+            {live && <p className={styles.lead}>{t('connection.changeNote')}</p>}
+          </div>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              className={styles.button}
+              disabled={live}
+              title={live ? t('connection.logoutBlocked') : undefined}
+              onClick={() => void sendCommand(services, { method: 'tailscale.logout' })}
+            >
+              {t('connection.logout')}
+            </button>
+          </div>
+          {live && <p className={styles.lead}>{t('connection.logoutBlocked')}</p>}
+        </>
+      ) : (
+        <>
+          <ProxyPanel key={method} mode={method} removable />
+          <Subscriptions state={state} />
+        </>
+      )}
       <div className={styles.section} role="group" aria-label={t('connection.settings')}>
         <Toggle
           on={settings.openAtLogin}
@@ -348,18 +318,6 @@ export function ConnectionScreen(): React.JSX.Element | null {
         />
         <LanguageSelect />
       </div>
-      <div className={styles.actions}>
-        <button
-          type="button"
-          className={styles.button}
-          disabled={!canLogout}
-          title={canLogout ? undefined : t('connection.logoutBlocked')}
-          onClick={() => void sendCommand(services, { method: 'tailscale.logout' })}
-        >
-          {t('connection.logout')}
-        </button>
-      </div>
-      {!canLogout && <p className={styles.lead}>{t('connection.logoutBlocked')}</p>}
       {versions !== null && <p className={styles.lead}>{versions}</p>}
       {updateLine !== null && (
         <div className={styles.updateLine} role="status">

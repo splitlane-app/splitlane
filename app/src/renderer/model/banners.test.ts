@@ -44,7 +44,7 @@ describe('bannerFor', () => {
     ])
     const noNode = state('degraded', {}, null)
     noNode.tailscale.selectedExitNode = null
-    expect(bannerFor(ready, noNode)?.title).toBe(t('banner.degraded', { name: 'VPN' }))
+    expect(bannerFor(ready, noNode)?.title).toBe(t('banner.degradedUnnamed'))
     expect(bannerFor(ready, state('degraded', {}, { code: 'login_expired', params: {} }))).toEqual({
       tone: 'warn',
       title: t('banner.loginAgain'),

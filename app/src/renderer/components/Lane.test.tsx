@@ -2,12 +2,16 @@ import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
 import type { Snapshot } from '../../shared/ipc'
 import type { Activity } from '../../shared/protocol'
+import { setLang } from '../i18n/t'
 import { boardView, type CardVM } from '../model/board'
-import { activity, entry, fakeBridge, renderWith, rule, servicesFor, snap } from '../testing'
+import { activity, entry, fakeBridge, proxyServer, proxyState, renderWith, rule, servicesFor, snap } from '../testing'
 import { AppCard } from './AppCard'
 import { Lane } from './Lane'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  setLang('ru')
+})
 
 const MAIL = 'C:\\Apps\\Mail\\mail.exe'
 const BROWSER = 'C:\\Apps\\Browser\\browser.exe'
@@ -270,4 +274,36 @@ test('files dropped from Explorer are pinned in that lane, the rest named in a n
   expect(services.store.getState().notice).toBe(
     'Не программа: notes, Документы; Старая игра: это ярлык игры — запустите игру, и она появится в «Сейчас в сети»'
   )
+})
+
+test('the VPN lane names the server of the proxy, and says VPN without a name', () => {
+  const server = proxyServer('0123456789abcdef', 'edge-a.example.com')
+  const { services, view } = setup({ ...board, state: proxyState([server], server.id, [], { apps: board.state!.apps }) }, null)
+  renderWith(<Lane vm={view.vpn} onMakeDefault={() => {}} />, services)
+  expect(screen.getByText(/^Сайты видят адрес сервера/).textContent).toBe('Сайты видят адрес сервера edge-a.example.com · 198.51.100.7')
+  act(() => services.store.getState().setSnapshot({ ...board, state: proxyState([server], null, [], { apps: board.state!.apps }) }))
+  expect(screen.getByText(/^Сайты видят адрес сервера/).textContent).toBe('Сайты видят адрес сервера VPN · 198.51.100.7')
+})
+
+test('the VPN lane names the exit node remembered while the list is empty, in either language', () => {
+  const off = snap({ apps: board.state!.apps, phase: 'off' })
+  const st = off.state!
+  const remembered: Snapshot = {
+    ...off,
+    state: { ...st, tailscale: { ...st.tailscale, exitNodes: [], path: null } },
+    settings: { ...off.settings, lastExitNode: { id: '100.64.0.2', name: 'node-a' } }
+  }
+  const { services, view } = setup(remembered, null)
+  renderWith(<Lane vm={view.vpn} onMakeDefault={() => {}} />, services)
+  expect(screen.getByText(/^Сайты видят адрес сервера/).textContent).toBe('Сайты видят адрес сервера node-a · 198.51.100.7')
+  // the board renders again in a new language (its view takes the language); here the lane is rendered anew
+  const inEnglish = (s: Snapshot): void => {
+    cleanup()
+    act(() => services.store.getState().setSnapshot({ ...s, language: 'en' }))
+    renderWith(<Lane vm={view.vpn} onMakeDefault={() => {}} />, services)
+  }
+  inEnglish(remembered)
+  expect(screen.getByText(/^Websites see/).textContent).toBe('Websites see the address of node-a · 198.51.100.7')
+  inEnglish({ ...remembered, settings: { ...remembered.settings, lastExitNode: null } })
+  expect(screen.getByText(/^Websites see/).textContent).toBe('Websites see the address of the VPN server · 198.51.100.7')
 })

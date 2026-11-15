@@ -1,0 +1,85 @@
+/* The add of a key, a subscription or a WireGuard file, its result and the server list (spec 6). */
+.panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+}
+
+.label {
+  color: var(--muted);
+}
+
+.text {
+  width: 100%;
+  min-height: 76px;
+  padding: 8px 10px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--lane-bg);
+  color: var(--text);
+  font-family: var(--font-num);
+  font-size: 12px;
+  resize: vertical;
+}
+
+.text:hover {
+  border-color: var(--line3);
+}
+
+.text:focus-visible {
+  border-color: var(--vpn);
+  outline: none;
+}
+
+.text:read-only {
+  color: var(--muted);
+}
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.button {
+  composes: button from '../screens/screens.module.css';
+}
+
+.primary {
+  composes: primary from '../screens/screens.module.css';
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+
+.line {
+  margin: 0;
+}
+
+.rejected {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--warn);
+}
+
+.failed {
+  margin: 0;
+  color: var(--error);
+}

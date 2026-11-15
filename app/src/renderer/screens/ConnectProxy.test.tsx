@@ -1,0 +1,301 @@
+import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
+import { afterEach, expect, test, vi } from 'vitest'
+import type { ProxyOutcome, Snapshot } from '../../shared/ipc'
+import type { HelperState, Subscription } from '../../shared/protocol'
+import { DEFAULT_SETTINGS } from '../../shared/settings'
+import { setLang } from '../i18n/t'
+import { fakeBridge, proxyServer, proxyState, renderWith, servicesFor, snap, state } from '../testing'
+import { ConnectionScreen, ConnectScreen } from './ConnectScreen'
+
+afterEach(() => {
+  cleanup()
+  setLang('ru')
+})
+
+const SUB: Subscription = { id: 'sub-0123456789abcdef', name: 'sub.example.com', updatedAt: '2026-11-16T10:00:00Z', count: 2, error: null }
+const A = proxyServer('0123456789abcdef', 'edge-a.example.com')
+const B = proxyServer('fedcba9876543210', 'edge-b.example.com', { protocol: 'trojan', source: SUB.id })
+
+const at = (s: HelperState, once = false): Snapshot => ({ ...snap(), state: s, settings: { ...DEFAULT_SETTINGS, connectedOnce: once } })
+const firstRun = (over: Partial<HelperState['tailscale']> = {}): HelperState =>
+  state({ phase: 'off', tailscale: { ...state().tailscale, backend: 'needs_login', selectedExitNode: null, exitNodes: [], path: null, ...over } })
+
+const tile = (name: RegExp): HTMLElement => within(screen.getByRole('radiogroup', { name: 'Способы подключения' })).getByRole('radio', { name })
+const checkedTile = (): string | undefined =>
+  within(screen.getByRole('radiogroup', { name: 'Способы подключения' }))
+    .getAllByRole('radio')
+    .find((r) => r.getAttribute('aria-checked') === 'true')?.textContent ?? undefined
+const steps = (): (string | null)[] => within(screen.getByRole('list', { name: 'Шаги' })).getAllByRole('listitem').map((li) => li.textContent)
+const currentStep = (): string | null | undefined =>
+  within(screen.getByRole('list', { name: 'Шаги' }))
+    .getAllByRole('listitem')
+    .find((li) => li.getAttribute('aria-current') === 'step')?.textContent
+
+test('the tiles are one radio group: the arrows, Home and End choose and move the focus; Tab enters on the chosen one', () => {
+  const { bridge } = fakeBridge()
+  renderWith(<ConnectScreen />, servicesFor(bridge, at(firstRun())))
+  const [ts, key, file] = within(screen.getByRole('radiogroup', { name: 'Способы подключения' })).getAllByRole('radio')
+  expect(checkedTile()).toMatch(/^Tailscale/)
+  expect([ts, key, file].map((r) => r!.tabIndex)).toEqual([0, -1, -1])
+  // the notes say what each tile is; «скоро» is gone
+  expect(screen.queryByText('скоро')).toBeNull()
+  expect(key!.getAttribute('aria-describedby')).not.toBeNull()
+
+  ts!.focus()
+  fireEvent.keyDown(ts!, { key: 'ArrowRight' })
+  expect(checkedTile()).toMatch(/^Ключ или подписка/)
+  expect(document.activeElement).toBe(key)
+  expect([ts, key, file].map((r) => r!.tabIndex)).toEqual([-1, 0, -1])
+  expect(steps()).toEqual(['1Добавьте ключ или подписку', '2Выберите сервер', '3Включите деление'])
+
+  fireEvent.keyDown(key!, { key: 'ArrowDown' })
+  expect(checkedTile()).toMatch(/^Файл настроек/)
+  expect(steps()[0]).toBe('1Выберите файл настроек')
+  fireEvent.keyDown(file!, { key: 'ArrowRight' })
+  expect(checkedTile()).toMatch(/^Tailscale/)
+  expect(document.activeElement).toBe(ts)
+  fireEvent.keyDown(ts!, { key: 'ArrowLeft' })
+  expect(checkedTile()).toMatch(/^Файл настроек/)
+  fireEvent.keyDown(file!, { key: 'Home' })
+  expect(checkedTile()).toMatch(/^Tailscale/)
+  expect(steps()).toEqual(['1Войдите в Tailscale', '2Выберите exit node', '3Включите деление'])
+  fireEvent.keyDown(ts!, { key: 'End' })
+  expect(checkedTile()).toMatch(/^Файл настроек/)
+  fireEvent.click(tile(/Ключ или подписка/))
+  expect(checkedTile()).toMatch(/^Ключ или подписка/)
+})
+
+test('the screen opens on the tile of the connector in force', () => {
+  const { bridge } = fakeBridge()
+  renderWith(<ConnectScreen />, servicesFor(bridge, at(proxyState([A], A.id, [], { phase: 'off' }))))
+  expect(checkedTile()).toMatch(/^Ключ или подписка/)
+})
+
+test('the key tile walks add, choose a server, enable; the enable only with a server in force', async () => {
+  const { bridge, commands } = fakeBridge()
+  const services = servicesFor(bridge, at(firstRun()))
+  renderWith(<ConnectScreen />, services)
+  fireEvent.click(tile(/Ключ или подписка/))
+  expect(currentStep()).toBe('1Добавьте ключ или подписку')
+  expect(screen.getByRole('textbox', { name: 'Ссылки или адрес подписки' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Войти в Tailscale' })).toBeNull()
+  const enable = (): HTMLElement | null => screen.queryByRole('button', { name: 'Включить деление' })
+  expect(enable()).toBeNull()
+
+  // the server was added for later while Tailscale stays the connector: it is still to be chosen
+  const later = firstRun()
+  act(() => services.store.getState().setSnapshot(at({ ...later, proxy: { servers: [A, B], selected: A.id, subscriptions: [SUB] } })))
+  expect(currentStep()).toBe('2Выберите сервер')
+  expect(enable()).toBeNull()
+  expect((screen.getByRole('radio', { name: /edge-a/ }) as HTMLInputElement).checked).toBe(false)
+  fireEvent.click(screen.getByRole('radio', { name: /edge-a/ }))
+  await vi.waitFor(() => expect(commands).toEqual([{ method: 'proxy.select', id: A.id }]))
+
+  // the proxy connector without a selected server
+  act(() => services.store.getState().setSnapshot(at(proxyState([A, B], null, [SUB], { phase: 'off' }))))
+  expect(currentStep()).toBe('2Выберите сервер')
+  expect(enable()).toBeNull()
+
+  act(() => services.store.getState().setSnapshot(at(proxyState([A, B], A.id, [SUB], { phase: 'off' }))))
+  expect(currentStep()).toBe('3Включите деление')
+  expect((screen.getByRole('radio', { name: /edge-a/ }) as HTMLInputElement).checked).toBe(true)
+  await act(async () => {
+    fireEvent.click(enable()!)
+  })
+  expect(commands.at(-1)).toEqual({ method: 'routing.enable' })
+})
+
+test('the file tile chooses a file; with a server in force the enable warns about the exit node of the Tailscale app', async () => {
+  const proxyAddFile = vi.fn(async (): Promise<ProxyOutcome> => ({ kind: 'cancelled' }))
+  const { bridge } = fakeBridge({ proxyAddFile })
+  const services = servicesFor(bridge, at(firstRun()))
+  renderWith(<ConnectScreen />, services)
+  fireEvent.click(tile(/Файл настроек/))
+  expect(currentStep()).toBe('1Выберите файл настроек')
+  expect(screen.queryByRole('textbox')).toBeNull()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл .conf…' }))
+  })
+  expect(proxyAddFile).toHaveBeenCalledTimes(1)
+
+  const wg = proxyServer('00000000000000c0', 'home', { protocol: 'wireguard', source: 'file' })
+  const s = proxyState([wg], wg.id, [], { phase: 'off', systemTailscale: { installed: true, exitNodeOn: true, restoreOnDisable: false } })
+  act(() => services.store.getState().setSnapshot(at(s)))
+  expect(currentStep()).toBe('3Включите деление')
+  expect(screen.getByText(/В приложении Tailscale сейчас включён exit node/)).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Включить деление' })).toBeTruthy()
+})
+
+test('the Tailscale tile while a server is in force: the exit node is chosen again, there is no enable yet', async () => {
+  const { bridge, commands } = fakeBridge()
+  const s = proxyState([A], A.id, [], { phase: 'off', tailscale: { ...state().tailscale, backend: 'stopped', path: null } })
+  renderWith(<ConnectScreen />, servicesFor(bridge, at(s)))
+  fireEvent.click(tile(/^Tailscale/))
+  expect(currentStep()).toBe('2Выберите exit node')
+  const node = screen.getByRole('radio', { name: 'node-a' }) as HTMLInputElement
+  expect(node.checked).toBe(false)
+  expect(screen.queryByRole('button', { name: 'Включить деление' })).toBeNull()
+  fireEvent.click(node)
+  await vi.waitFor(() => expect(commands).toEqual([{ method: 'tailscale.setExitNode', id: '100.64.0.2' }]))
+})
+
+test('«Подключение» opens on the part of the connector in force and switches with the tiles', () => {
+  const { bridge } = fakeBridge()
+  renderWith(<ConnectionScreen />, servicesFor(bridge, at(proxyState([A, B], A.id, [SUB], { phase: 'off' }), true)))
+  expect(checkedTile()).toBe('Ключ или подписка')
+  expect(screen.getByRole('textbox', { name: 'Ссылки или адрес подписки' })).toBeTruthy()
+  expect(screen.getByRole('radiogroup', { name: 'Серверы' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Удалить edge-a.example.com' })).toBeTruthy()
+  expect(screen.getByRole('heading', { name: 'Подписки' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Выйти из Tailscale' })).toBeNull()
+  expect(screen.queryByText('Устройство в сети Tailscale')).toBeNull()
+
+  fireEvent.click(tile(/^Tailscale/))
+  expect(screen.getByText('Устройство в сети Tailscale')).toBeTruthy()
+  expect(screen.getByRole('radiogroup', { name: 'Exit node' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Выйти из Tailscale' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: 'Подписки' })).toBeNull()
+
+  fireEvent.click(tile(/Файл настроек/))
+  expect(screen.getByRole('button', { name: 'Выбрать файл .conf…' })).toBeTruthy()
+  expect(screen.queryByRole('textbox')).toBeNull()
+  // the settings stay below either part
+  expect(screen.getByRole('switch', { name: 'Запускать при входе в Windows' })).toBeTruthy()
+})
+
+const subItem = (): HTMLElement => screen.getByText('sub.example.com', { selector: 'strong' }).closest('li') as HTMLElement
+
+test('a subscription shows its servers, its last update and its last error', () => {
+  const { bridge } = fakeBridge()
+  const failed = { ...SUB, error: 'fetch_timeout' }
+  const services = servicesFor(bridge, at(proxyState([A, B], A.id, [failed], { phase: 'off' }), true))
+  renderWith(<ConnectionScreen />, services)
+  const item = subItem()
+  expect(within(item).getByText('Серверов: 2')).toBeTruthy()
+  const time = new Intl.DateTimeFormat('ru', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(SUB.updatedAt))
+  expect(within(item).getByText(`Обновлена: ${time}`)).toBeTruthy()
+  expect(within(item).getByText('Последнее обновление не удалось: Сервер подписки не ответил за 20 секунд')).toBeTruthy()
+
+  act(() => services.store.getState().setSnapshot(at(proxyState([A, B], A.id, [{ ...SUB, updatedAt: '' }], { phase: 'off' }), true)))
+  expect(within(subItem()).queryByText(/^Обновлена/)).toBeNull()
+  expect(within(subItem()).queryByText(/^Последнее обновление/)).toBeNull()
+})
+
+test('«Обновить»: says it is refreshing, then shows the result beside its subscription', async () => {
+  let answer: (o: ProxyOutcome) => void = () => {}
+  const proxyRefresh = vi.fn((_id: string) => new Promise<ProxyOutcome>((r) => (answer = r)))
+  const { bridge } = fakeBridge({ proxyRefresh })
+  renderWith(<ConnectionScreen />, servicesFor(bridge, at(proxyState([A, B], A.id, [SUB], { phase: 'off' }), true)))
+  const refresh = (): HTMLButtonElement => within(subItem()).getByRole('button', { name: /^(Обновить|Обновляю…)$/ }) as HTMLButtonElement
+  fireEvent.click(refresh())
+  expect(proxyRefresh).toHaveBeenCalledWith(SUB.id)
+  expect(refresh().textContent).toBe('Обновляю…')
+  expect(refresh().disabled).toBe(true)
+  await act(async () => {
+    answer({ kind: 'done', result: { added: ['00000000000000d0'], existing: 1, rejected: [{ line: 4, code: 'bad_link' }], rejectedMore: 0 } })
+  })
+  expect(refresh().textContent).toBe('Обновить')
+  const status = within(subItem()).getByRole('status')
+  expect([...status.querySelectorAll('p, li')].map((e) => e.textContent)).toEqual([
+    'Добавлено серверов: 1',
+    'Уже были в списке: 1',
+    'Строка 4: Ссылка повреждена или записана с ошибкой'
+  ])
+})
+
+test('a refused refresh: the subscription of the selected server while live, another download, a failed download', async () => {
+  const proxyRefresh = vi.fn(async (): Promise<ProxyOutcome> => ({ kind: 'failed', error: { code: 'wrong_phase', message: 'on' } }))
+  const { bridge } = fakeBridge({ proxyRefresh })
+  renderWith(<ConnectionScreen />, servicesFor(bridge, at(proxyState([A, B], B.id, [SUB], { phase: 'on' }), true)))
+  const click = (): Promise<void> =>
+    act(async () => {
+      fireEvent.click(within(subItem()).getByRole('button', { name: 'Обновить' }))
+    })
+  await click()
+  expect(within(subItem()).getByRole('alert').textContent).toBe('Подписку выбранного сервера можно обновить, когда деление выключено')
+  proxyRefresh.mockResolvedValueOnce({ kind: 'failed', error: { code: 'busy', message: 'another subscription is being downloaded' } })
+  await click()
+  expect(within(subItem()).getByRole('alert').textContent).toBe('Уже идёт загрузка подписки')
+  proxyRefresh.mockResolvedValueOnce({ kind: 'failed', error: { code: 'fetch_http_status', message: 'HTTP 404' } })
+  await click()
+  expect(within(subItem()).getByRole('alert').textContent).toBe('Сервер подписки ответил ошибкой. Проверьте адрес')
+})
+
+test('«Удалить» of a subscription asks once more in place; «Отмена» and Esc keep it', async () => {
+  const { bridge, commands } = fakeBridge()
+  const services = servicesFor(bridge, at(proxyState([A, B], A.id, [SUB], { phase: 'off' }), true))
+  services.store.getState().showConnection(true)
+  renderWith(<ConnectionScreen />, services)
+  const ask = (): void => {
+    fireEvent.click(within(subItem()).getByRole('button', { name: 'Удалить' }))
+  }
+
+  ask()
+  expect(within(subItem()).getByText('Удалить подписку и её серверы?')).toBeTruthy()
+  expect(within(subItem()).queryByRole('button', { name: 'Обновить' })).toBeNull()
+  const cancel = within(subItem()).getByRole('button', { name: 'Отмена' })
+  expect(document.activeElement).toBe(cancel)
+  fireEvent.click(cancel)
+  expect(within(subItem()).queryByText('Удалить подписку и её серверы?')).toBeNull()
+  expect(document.activeElement).toBe(within(subItem()).getByRole('button', { name: 'Удалить' }))
+  expect(commands).toEqual([])
+
+  // Esc answers the question; it does not leave «Подключение»
+  ask()
+  fireEvent.keyDown(within(subItem()).getByRole('button', { name: 'Отмена' }), { key: 'Escape' })
+  expect(within(subItem()).queryByText('Удалить подписку и её серверы?')).toBeNull()
+  expect(services.store.getState().ui.screen).toBe('connection')
+  expect(commands).toEqual([])
+
+  ask()
+  await act(async () => {
+    fireEvent.click(within(subItem()).getByRole('button', { name: 'Удалить' }))
+  })
+  expect(commands).toEqual([{ method: 'proxy.remove', id: SUB.id }])
+})
+
+test('while live routing runs on a server, neither it nor its subscription can be removed', () => {
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, at(proxyState([A, B], B.id, [SUB], { phase: 'on' }), true))
+  renderWith(<ConnectionScreen />, services)
+  const server = screen.getByRole('button', { name: 'Удалить edge-b.example.com' }) as HTMLButtonElement
+  expect(server.disabled).toBe(true)
+  expect(screen.getByText('Выбранный сервер можно удалить, когда деление выключено')).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Удалить edge-a.example.com' }) as HTMLButtonElement).disabled).toBe(false)
+  const sub = within(subItem()).getByRole('button', { name: 'Удалить' }) as HTMLButtonElement
+  expect(sub.disabled).toBe(true)
+  expect(within(subItem()).getByText('Подписку выбранного сервера можно удалить, когда деление выключено')).toBeTruthy()
+  // the refresh is left to the helper, which says why it refuses
+  expect((within(subItem()).getByRole('button', { name: 'Обновить' }) as HTMLButtonElement).disabled).toBe(false)
+
+  act(() => services.store.getState().setSnapshot(at(proxyState([A, B], B.id, [SUB], { phase: 'off' }), true)))
+  expect((screen.getByRole('button', { name: 'Удалить edge-b.example.com' }) as HTMLButtonElement).disabled).toBe(false)
+  expect((within(subItem()).getByRole('button', { name: 'Удалить' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+test('Esc in the field of a key does not leave «Подключение» (the text would be lost)', () => {
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, at(proxyState([], null, [], { phase: 'off' }), true))
+  services.store.getState().showConnection(true)
+  renderWith(<ConnectionScreen />, services)
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Ссылки или адрес подписки' }), { key: 'Escape' })
+  expect(services.store.getState().ui.screen).toBe('connection')
+  fireEvent.keyDown(screen.getByRole('heading', { name: 'Подключение' }), { key: 'Escape' })
+  expect(services.store.getState().ui.screen).toBe('board')
+})
+
+test('«Подключение» in English', () => {
+  setLang('en')
+  const { bridge } = fakeBridge()
+  renderWith(<ConnectionScreen />, servicesFor(bridge, { ...at(proxyState([A, B], A.id, [SUB], { phase: 'on' }), true), language: 'en' }))
+  expect(within(screen.getByRole('radiogroup', { name: 'Connection methods' })).getAllByRole('radio').map((r) => r.textContent)).toEqual([
+    'Tailscale',
+    'Key or subscription',
+    'Configuration file'
+  ])
+  expect(screen.getByRole('radio', { name: /edge-b\.example\.comTrojan · sub\.example\.com/ })).toBeTruthy()
+  expect(screen.getByText('Changing the server briefly restarts split routing')).toBeTruthy()
+  expect(screen.getByText('You can remove the selected server when split routing is off')).toBeTruthy()
+  expect(within(subItem()).getByText('Servers: 2')).toBeTruthy()
+  expect(within(subItem()).getByRole('button', { name: 'Refresh' })).toBeTruthy()
+})

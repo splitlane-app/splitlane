@@ -4,7 +4,21 @@ import type { HelperState } from '../../shared/protocol'
 import { DEFAULT_SETTINGS } from '../../shared/settings'
 import { proxyServer, proxyState, snap, state } from '../testing'
 import { bannerFor } from './banners'
-import { connectStep, laneServerName, screenFor, selectedServer, serverChoices, subscriptionOf } from './connect'
+import {
+  connectStep,
+  exitNodeInForce,
+  laneServerName,
+  methodOf,
+  proxyStep,
+  routingLive,
+  screenFor,
+  selectedHeld,
+  selectedServer,
+  serverChoices,
+  serverInForce,
+  subscriptionOf,
+  tailscaleStep
+} from './connect'
 
 const A = proxyServer('0123456789abcdef', 'edge-a.example.com')
 const B = proxyServer('fedcba9876543210', 'edge-b.example.com', { source: 'sub-0123456789abcdef', protocol: 'trojan' })
@@ -83,8 +97,57 @@ test('laneServerName: the exit node for Tailscale, the server for the proxy, nul
   expect(laneServerName(proxyState([A], B.id), null)).toBeNull()
 })
 
-test('the degraded banner names the server of either connector', () => {
+test('the degraded banner names the server of either connector, and says VPN server without a name', () => {
   const link = snap().link
-  expect(bannerFor(link, state({ phase: 'degraded' }))?.title).toContain('node-a')
-  expect(bannerFor(link, proxyState([A], A.id, [], { phase: 'degraded' }))?.title).toContain('edge-a.example.com')
+  expect(bannerFor(link, state({ phase: 'degraded' }))?.title).toMatch(/^VPN-сервер node-a недоступен/)
+  expect(bannerFor(link, proxyState([A], A.id, [], { phase: 'degraded' }))?.title).toMatch(/^VPN-сервер edge-a\.example\.com недоступен/)
+  expect(bannerFor(link, proxyState([A], null, [], { phase: 'degraded' }))?.title).toMatch(/^VPN-сервер недоступен/)
+})
+
+test('methodOf: the tile of the connector in force, the key for the proxy', () => {
+  expect(methodOf(state())).toBe('tailscale')
+  expect(methodOf(proxyState([A], A.id))).toBe('key')
+  expect(methodOf(proxyState([], null))).toBe('key')
+})
+
+test('tailscaleStep: as connectStep for Tailscale; with the proxy in force the exit node is to choose, not the enable', () => {
+  expect(tailscaleStep(state())).toBe('enable')
+  expect(tailscaleStep(state({ tailscale: { ...state().tailscale, selectedExitNode: null } }))).toBe('exitNode')
+  // the proxy in force: a node selected before is not in force, it is chosen again
+  expect(tailscaleStep(proxyState([A], A.id))).toBe('exitNode')
+  const login = { ...state().tailscale, backend: 'needs_login' as const, selectedExitNode: null, exitNodes: [] }
+  expect(tailscaleStep(proxyState([A], A.id, [], { phase: 'off', tailscale: login }))).toBe('login')
+  const waiting = { ...login, authUrl: 'https://login.tailscale.com/a/x' }
+  expect(tailscaleStep(proxyState([A], A.id, [], { phase: 'off', tailscale: waiting }))).toBe('waitLogin')
+})
+
+test('proxyStep: add with an empty list, server until one is in force, then enable', () => {
+  expect(proxyStep(proxyState([], null))).toBe('add')
+  expect(proxyStep(state())).toBe('add')
+  expect(proxyStep(proxyState([A, B], null))).toBe('server')
+  expect(proxyStep(proxyState([A, B], B.id))).toBe('enable')
+  expect(proxyStep(proxyState([B], A.id))).toBe('server')
+  // a server selected for later while Tailscale is in force: it is still to choose
+  expect(proxyStep(state({ proxy: { servers: [A], selected: A.id, subscriptions: [] } }))).toBe('server')
+})
+
+test('the choice in force of each radio group follows the connector', () => {
+  const both = proxyState([A], A.id)
+  expect(serverInForce(both)).toBe(A.id)
+  expect(exitNodeInForce(both)).toBeNull()
+  const ts = state({ proxy: { servers: [A], selected: A.id, subscriptions: [] } })
+  expect(serverInForce(ts)).toBeNull()
+  expect(exitNodeInForce(ts)).toBe('100.64.0.2')
+})
+
+test('selectedHeld: only the proxy connector while routing is not off', () => {
+  for (const phase of ['starting', 'on', 'degraded', 'blocked', 'stopping'] as const) {
+    expect(selectedHeld(proxyState([A], A.id, [], { phase })), phase).toBe(true)
+    expect(routingLive(phase), phase).toBe(true)
+  }
+  for (const phase of ['off', 'error'] as const) {
+    expect(selectedHeld(proxyState([A], A.id, [], { phase })), phase).toBe(false)
+    expect(routingLive(phase), phase).toBe(false)
+  }
+  expect(selectedHeld(state({ phase: 'on', proxy: { servers: [A], selected: A.id, subscriptions: [] } }))).toBe(false)
 })
