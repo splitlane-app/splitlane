@@ -61,6 +61,9 @@ func (e *FetchError) Unwrap() error { return e.cause }
 
 func fetchError(code, detail string) *FetchError { return &FetchError{Code: code, Detail: detail} }
 
+// deadlineKey is the context key of the deadline of Get, for dial.
+type deadlineKey struct{}
+
 // fetchOptions are for tests only; NewFetcher uses none of them.
 type fetchOptions struct {
 	allowLoopback bool           // the test server listens on 127.0.0.1; no other blocked address opens
@@ -90,8 +93,9 @@ type httpFetcher struct {
 // times: the host of the address and of every redirect when it is an IP address, before anything is
 // sent; every address a name resolves to, before connecting (a name with one bad address is refused
 // whole); and the address of the socket itself, right before it connects, so what is checked is what
-// is connected. No proxy of the environment is used: the helper has the user's environment. At most
-// MaxRedirects redirects, a body of MaxSubscriptionLen and FetchTimeout for the whole download.
+// is connected. No proxy of the environment is used: the helper has the user's environment. HTTP/1.1
+// only, without compression; at most MaxRedirects redirects, a body of MaxSubscriptionLen bytes as
+// downloaded, and FetchTimeout for the whole download, its connections included.
 func NewFetcher(version string) Fetcher { return newFetcher(version, fetchOptions{}) }
 
 func newFetcher(version string, o fetchOptions) Fetcher {
@@ -108,13 +112,16 @@ func newFetcher(version string, o fetchOptions) Fetcher {
 		f.lookup = net.DefaultResolver.LookupNetIP
 	}
 	f.dialer = net.Dialer{Control: f.control}
+	var http1 http.Protocols // HTTP/1.1 only: one connection per request, and the path the tests run
+	http1.SetHTTP1(true)
 	f.client = &http.Client{
 		Transport: &http.Transport{
 			Proxy:                  nil, // never HTTP(S)_PROXY: the helper has the user's environment
 			DialContext:            f.dial,
 			TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: o.roots},
-			ForceAttemptHTTP2:      true,
+			Protocols:              &http1,
 			DisableKeepAlives:      true, // one download at a time; nothing stays open in the helper
+			DisableCompression:     true, // the body as sent: the limit is of the bytes downloaded
 			TLSHandshakeTimeout:    10 * time.Second,
 			MaxResponseHeaderBytes: 64 << 10,
 		},
@@ -138,6 +145,11 @@ func (f *httpFetcher) Get(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, f.timeout)
 	defer cancel()
+	deadline, _ := ctx.Deadline()
+	// The transport dials under context.WithoutCancel of the request, which keeps values only: the
+	// deadline goes to dial as a value.
+	ctx = context.WithValue(ctx, deadlineKey{}, deadline)
+	defer f.client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fetchError(CodeFetchFailed, "bad address")
@@ -157,7 +169,7 @@ func (f *httpFetcher) Get(ctx context.Context, rawURL string) ([]byte, error) {
 	if resp.ContentLength > MaxSubscriptionLen {
 		return nil, fetchError(CodeFetchTooLarge, "")
 	}
-	// One byte over the limit tells a body over it; a gzip body is limited as decompressed.
+	// One byte over the limit tells a body over it.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxSubscriptionLen+1))
 	if err != nil {
 		return nil, classify(ctx, err)
@@ -191,8 +203,12 @@ func (f *httpFetcher) checkURL(u *url.URL) *FetchError {
 // addresses is blocked, and connects only to the addresses it checked, one after another.
 func (f *httpFetcher) dial(ctx context.Context, network, address string) (net.Conn, error) {
 	// The transport dials without the deadline of the request (a dial outlives a canceled request,
-	// for the next one to use): the dial has its own.
-	ctx, cancel := context.WithTimeout(ctx, f.timeout)
+	// for the next one to use): the dial ends at the deadline of Get, which comes as a value.
+	deadline, ok := ctx.Value(deadlineKey{}).(time.Time)
+	if !ok || deadline.IsZero() {
+		deadline = time.Now().Add(f.timeout)
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	host, p, err := net.SplitHostPort(address)
 	if err != nil {
@@ -266,16 +282,18 @@ func (f *httpFetcher) blocked(a netip.Addr) bool { return blockedAddr(a, f.allow
 
 // blockedPrefixes are blocked beside what the methods of netip.Addr name in blockedAddr.
 var blockedPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),      // "this network": 0.x.x.x reaches the machine itself on some systems
-	netip.MustParsePrefix("100.64.0.0/10"),  // CGNAT, the tailnet of Tailscale among it
-	netip.MustParsePrefix("192.0.0.0/24"),   // IETF protocol assignments
-	netip.MustParsePrefix("240.0.0.0/4"),    // reserved, the broadcast 255.255.255.255 among it
-	netip.MustParsePrefix("::/96"),          // IPv4-compatible (deprecated): an IPv4 address inside
-	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use NAT64
-	netip.MustParsePrefix("100::/64"),       // discard-only
-	netip.MustParsePrefix("2001::/32"),      // Teredo: an IPv4 address inside
-	netip.MustParsePrefix("2002::/16"),      // 6to4: an IPv4 address inside
-	netip.MustParsePrefix("fec0::/10"),      // site-local (deprecated)
+	netip.MustParsePrefix("0.0.0.0/8"),       // "this network": 0.x.x.x reaches the machine itself on some systems
+	netip.MustParsePrefix("100.64.0.0/10"),   // CGNAT, the tailnet of Tailscale among it
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking; the fake-IP range of local proxy clients
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved, the broadcast 255.255.255.255 among it
+	netip.MustParsePrefix("::/96"),           // IPv4-compatible (deprecated): an IPv4 address inside
+	netip.MustParsePrefix("::ffff:0:0:0/96"), // IPv4-translated (SIIT): an IPv4 address inside
+	netip.MustParsePrefix("64:ff9b:1::/48"),  // local-use NAT64
+	netip.MustParsePrefix("100::/64"),        // discard-only
+	netip.MustParsePrefix("2001::/32"),       // Teredo: an IPv4 address inside
+	netip.MustParsePrefix("2002::/16"),       // 6to4: an IPv4 address inside
+	netip.MustParsePrefix("fec0::/10"),       // site-local (deprecated)
 }
 
 // nat64 is the well-known NAT64 prefix: the IPv4 address in its last 32 bits is checked instead.
