@@ -3,6 +3,7 @@ import type { InstallState } from '../shared/ipc'
 import type { LinkStatus } from '../shared/status'
 import {
   HELPER_FILES,
+  canInstall,
   encodePowerShell,
   helperSourceDir,
   installAfterLink,
@@ -40,6 +41,17 @@ describe('setup', () => {
     expect(installedAt('c:\\program files\\splitlane\\SplitLane.exe', 'C:\\PROGRAM FILES')).toBe(true)
     expect(installedAt('C:\\Program Files\\SplitLane\\SplitLane.exe', undefined)).toBe(false)
     expect(installedAt('C:\\Program Files\\SplitLane\\SplitLane.exe', '')).toBe(false)
+    // only ASCII letters fold: a dotted capital I is not an i
+    expect(installedAt('C:\\Program Files\\SplitLane\\SplitLane.exe', 'C:\\Program F\u0130les')).toBe(false)
+    expect(installedAt('C:\\Program F\u0130les\\SplitLane\\SplitLane.exe', 'C:\\Program Files')).toBe(false)
+  })
+
+  it('canInstall refuses a packaged copy outside the install folder', () => {
+    const pf = 'C:\\Program Files'
+    expect(canInstall(true, 'C:\\Program Files\\SplitLane\\SplitLane.exe', pf)).toBe(true)
+    expect(canInstall(true, 'C:\\x\\win-unpacked\\SplitLane.exe', pf)).toBe(false)
+    expect(canInstall(true, 'C:\\Program Files\\SplitLane\\SplitLane.exe', undefined)).toBe(false)
+    expect(canInstall(false, 'C:\\x\\electron.exe', undefined)).toBe(true)
   })
 
   it('parseSid takes the SID from whoami csv', () => {

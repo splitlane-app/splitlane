@@ -25,9 +25,21 @@ export function helperSourceDir(o: { isPackaged: boolean; execPath: string; appP
 /** True when the exe lies inside `<programFiles>\SplitLane\` (case ignored, on a folder boundary); no Program Files: false. */
 export function installedAt(execPath: string, programFiles: string | undefined): boolean {
   if (programFiles === undefined || programFiles.trim() === '') return false
-  const dir = win32.join(programFiles, 'SplitLane').toLowerCase().replace(/\\+$/, '')
-  return execPath.toLowerCase().startsWith(`${dir}\\`)
+  const dir = foldAscii(win32.join(programFiles, 'SplitLane')).replace(/\\+$/, '')
+  return foldAscii(execPath).startsWith(`${dir}\\`)
 }
+
+/** A-Z to a-z only: any other character (Unicode case mapping included) is compared exactly. */
+function foldAscii(s: string): string {
+  return s.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32))
+}
+
+/** The install runs only in development or from the installed folder: a copy elsewhere must not start UAC. */
+export function canInstall(isPackaged: boolean, execPath: string, programFiles: string | undefined): boolean {
+  return !isPackaged || installedAt(execPath, programFiles)
+}
+
+export const NOT_INSTALLED_REASON = 'this copy of SplitLane is not installed: run the SplitLane installer'
 
 /** Takes the SID from `whoami /user /fo csv /nh` output (`"DOMAIN\user","S-1-5-..."`). */
 export function parseSid(whoamiCsv: string): string {

@@ -14,15 +14,18 @@ export function SetupScreen({ update }: { update: boolean }): React.JSX.Element 
   const running = install.kind === 'running'
   const done = install.kind === 'done' ? install.outcome : null
   const finished = done?.kind === 'ok'
-  // a packaged window outside the install folder cannot repair the helper; until the main process answers, the button stays
-  const [installed, setInstalled] = useState(true)
+  // a packaged window outside the install folder cannot repair the helper; neither button nor hint until the main
+  // process answers, and a failed answer counts as not installed
+  const [installed, setInstalled] = useState<boolean | null>(null)
   useEffect(() => {
     let live = true
     bridge.appInfo().then(
       (i) => {
         if (live) setInstalled(i.installed)
       },
-      () => {}
+      () => {
+        if (live) setInstalled(false)
+      }
     )
     return () => {
       live = false
@@ -62,8 +65,8 @@ export function SetupScreen({ update }: { update: boolean }): React.JSX.Element 
           <pre className={styles.mono}>{done.detail}</pre>
         </>
       )}
-      {!installed && <p className={styles.lead}>{t('setup.notInstalled')}</p>}
-      {installed && !running && !finished && (
+      {installed === false && <p className={styles.lead}>{t('setup.notInstalled')}</p>}
+      {installed === true && !running && !finished && (
         <div className={styles.actions}>
           <button type="button" className={`${styles.button} ${styles.primary}`} onClick={start}>
             {update ? t('setup.update') : t('setup.install')}

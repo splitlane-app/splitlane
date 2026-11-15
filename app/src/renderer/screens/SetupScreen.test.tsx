@@ -13,7 +13,7 @@ const setup = (install: InstallState): Snapshot => ({
   install
 })
 
-test('SetupScreen installs on the button and shows the progress', () => {
+test('SetupScreen installs on the button and shows the progress', async () => {
   const installHelper = vi.fn(async () => {})
   const { bridge } = fakeBridge({ installHelper })
   const services = servicesFor(bridge, setup({ kind: 'idle' }))
@@ -24,7 +24,7 @@ test('SetupScreen installs on the button and shows the progress', () => {
       'Чтобы разделять трафик программ, SplitLane нужна фоновая служба с правами администратора. Она устанавливается один раз: Windows попросит подтвердить. Потом окно работает без прав администратора.'
     )
   ).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Установить службу' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Установить службу' }))
   expect(installHelper).toHaveBeenCalledTimes(1)
 
   act(() => services.store.getState().setSnapshot(setup({ kind: 'running' })))
@@ -44,19 +44,41 @@ test('SetupScreen shows the install hint when not installed', async () => {
   expect(screen.queryByRole('button', { name: 'Установить службу' })).toBeNull()
 })
 
-test('SetupScreen offers the update of an older helper', () => {
+test('SetupScreen shows neither button nor hint until appInfo answers', async () => {
+  let answer: (i: { version: string; installed: boolean }) => void = () => {}
+  const { bridge } = fakeBridge({ appInfo: () => new Promise((r) => (answer = r)) })
+  renderWith(<SetupScreen update={false} />, servicesFor(bridge, setup({ kind: 'idle' })))
+  expect(screen.getByRole('heading', { name: 'Первая настройка' })).toBeTruthy()
+  expect(screen.queryByRole('button')).toBeNull()
+  expect(screen.queryByText(/не установлена/)).toBeNull()
+  await act(async () => answer({ version: '0.2.0', installed: true }))
+  expect(screen.getByRole('button', { name: 'Установить службу' })).toBeTruthy()
+})
+
+test('SetupScreen treats a failed appInfo as not installed', async () => {
+  const { bridge } = fakeBridge({
+    appInfo: async () => {
+      throw new Error('no bridge')
+    }
+  })
+  renderWith(<SetupScreen update={false} />, servicesFor(bridge, setup({ kind: 'idle' })))
+  expect(await screen.findByText(/не установлена/)).toBeTruthy()
+  expect(screen.queryByRole('button')).toBeNull()
+})
+
+test('SetupScreen offers the update of an older helper', async () => {
   const { bridge } = fakeBridge()
   renderWith(<SetupScreen update />, servicesFor(bridge, setup({ kind: 'idle' })))
   expect(screen.getByRole('heading', { name: 'Обновите служебный процесс' })).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Обновить службу' })).toBeTruthy()
+  expect(await screen.findByRole('button', { name: 'Обновить службу' })).toBeTruthy()
 })
 
-test('SetupScreen shows cancelled and refused outcomes', () => {
+test('SetupScreen shows cancelled and refused outcomes', async () => {
   const { bridge } = fakeBridge()
   const services = servicesFor(bridge, setup({ kind: 'done', outcome: { kind: 'cancelled' } }))
   renderWith(<SetupScreen update={false} />, services)
   expect(screen.getByText('Настройка отменена')).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Установить службу' })).toBeTruthy()
+  expect(await screen.findByRole('button', { name: 'Установить службу' })).toBeTruthy()
 
   act(() =>
     services.store

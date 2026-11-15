@@ -18,7 +18,14 @@ import { PageCrashReload } from './pageCrash'
 import { dialPipe } from './pipe'
 import { installedPrograms, pickedFile, resolveDropped, startMenuDirs, type DropReaders, type ProgramsFs } from './programs'
 import { SettingsFile } from './settingsFile'
-import { encodePowerShell, helperSourceDir, installAfterLink, installHelper, installedAt } from './setup'
+import {
+  NOT_INSTALLED_REASON,
+  canInstall,
+  encodePowerShell,
+  helperSourceDir,
+  installAfterLink,
+  installHelper
+} from './setup'
 import { STORE_APPS_SCRIPT, StoreAppsCache } from './storeApps'
 import { runTask, systemTools, taskRegistered, type Exec } from './task'
 import { AppTray, MAIN_TEXT, windowIcon } from './tray'
@@ -325,6 +332,13 @@ async function setSettings(patch: Partial<WindowSettings>): Promise<WindowSettin
 // ---- install (spec 4.3) ----
 
 async function runInstall(): Promise<void> {
+  if (!canInstall(app.isPackaged, process.execPath, process.env['ProgramFiles'])) {
+    // a copy outside the install folder never starts the Windows prompt
+    log('setup: install refused: the window is not installed')
+    install = { kind: 'done', outcome: { kind: 'refused', reason: NOT_INSTALLED_REASON } }
+    pushSnapshot()
+    return
+  }
   install = { kind: 'running' }
   pushSnapshot()
   let outcome: InstallOutcome
@@ -494,7 +508,7 @@ async function main(): Promise<void> {
     // in development the setup screen works with dist\helper, so the window counts as installed
     appInfo: async () => ({
       version: app.getVersion(),
-      installed: !app.isPackaged || installedAt(process.execPath, process.env['ProgramFiles'])
+      installed: canInstall(app.isPackaged, process.execPath, process.env['ProgramFiles'])
     }),
     setSettings,
     installedPrograms: async () => {
