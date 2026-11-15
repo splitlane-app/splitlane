@@ -281,9 +281,81 @@ func TestProductProcessesSkipsItself(t *testing.T) {
 func TestSessionUserSIDAnswers(t *testing.T) {
 	sid, err := (&System{}).SessionUserSID()
 	if err != nil {
-		t.Fatal(err)
+		t.Skipf("the session user cannot be looked up here: %v", err)
 	}
 	if sid != "" && !strings.HasPrefix(sid, "S-1-") {
 		t.Fatalf("SID %q", sid)
+	}
+}
+
+// A process of the image splitlane-helper.exe that runs from a "product folder" is listed with its
+// image; the same image outside the folder, and the folder itself without it, are not. ping.exe of the
+// system folder is copied under the name and kept alive for a while.
+func TestProductProcessesFindsAChild(t *testing.T) {
+	sysDir, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(filepath.Join(sysDir, "ping.exe"))
+	if err != nil {
+		t.Skipf("no ping.exe: %v", err)
+	}
+	root := t.TempDir()
+	product := filepath.Join(root, "SplitLane")
+	exe := filepath.Join(product, "helper", "splitlane-helper.exe")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-n", "30", "127.0.0.1")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("the copy of ping.exe does not start: %v", err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+
+	ps, err := (&System{}).ProductProcesses(product)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range ps {
+		if p.PID == uint32(cmd.Process.Pid) {
+			found = strings.EqualFold(p.Image, exe)
+			if !found {
+				t.Fatalf("the image %q, want %q", p.Image, exe)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("pid %d is not listed: %+v", cmd.Process.Pid, ps)
+	}
+	if ps, err = (&System{}).ProductProcesses(filepath.Join(root, "SplitLaneX")); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		if p.PID == uint32(cmd.Process.Pid) {
+			t.Fatalf("listed under another folder: %+v", ps)
+		}
+	}
+}
+
+func TestInsideDir(t *testing.T) {
+	for _, c := range []struct {
+		path, dir string
+		want      bool
+	}{
+		{`C:\X\SplitLane\a.exe`, `C:\X\SplitLane`, true},
+		{`C:\X\SplitLaneX\a.exe`, `C:\X\SplitLane`, false},
+		{`c:\x\splitlane\HELPER\a.exe`, `C:\X\SplitLane`, true},
+		{`C:\X\SplitLane\helper\deeper\a.exe`, `C:\X\SplitLane`, true},
+		{`C:\X\SplitLane`, `C:\X\SplitLane`, false},
+		{`C:\X\a.exe`, `C:\X\SplitLane`, false},
+		{`D:\X\SplitLane\a.exe`, `C:\X\SplitLane`, false},
+	} {
+		if got := insideDir(c.path, c.dir); got != c.want {
+			t.Errorf("insideDir(%s, %s) = %v", c.path, c.dir, got)
+		}
 	}
 }

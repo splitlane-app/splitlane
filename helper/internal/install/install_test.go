@@ -39,8 +39,6 @@ type fakeSys struct {
 	setTakes bool              // SetExitNode turns the exit node on
 	core     *fakeCore         // the core of an earlier run that FindCore finds
 	dirOwner string            // the owner CheckDir finds for a folder that is there; "" is the administrators
-	inUse    string            // the name of a file that WriteFile cannot replace
-	written  map[string][]byte // what WriteFile wrote, by full path
 	xml      string            // the XML of the task registered
 	session  string            // the user of the session (SessionUserSID); "" is a session without a user
 	procs    [][]Proc          // the answers of ProductProcesses, one per call; none left is "no process"
@@ -75,6 +73,14 @@ func (f *fakeSys) ProductProcesses(dir string) ([]Proc, error) {
 func (f *fakeSys) AccountName(sid string) (string, error) {
 	f.add("sid account %s", sid)
 	return account, nil
+}
+
+func (f *fakeSys) StatFile(path string) error {
+	f.add("hash stat %s", filepath.Base(path))
+	if _, ok := f.files[path]; !ok {
+		return &fs.PathError{Op: "stat", Path: path, Err: fs.ErrNotExist}
+	}
+	return nil
 }
 
 func (f *fakeSys) ReadFile(path string) ([]byte, error) {
@@ -141,15 +147,6 @@ func (f *fakeSys) After(d time.Duration) <-chan time.Time {
 	ch := make(chan time.Time, 1)
 	ch <- time.Time{}
 	return ch
-}
-
-func (f *fakeSys) WriteFile(path string, data []byte) error {
-	f.add("copy %s", path)
-	if filepath.Base(path) == f.inUse {
-		return fmt.Errorf("%s cannot be replaced (a program that runs may hold it): Access is denied.", path)
-	}
-	f.written[path] = data
-	return nil
 }
 
 func (f *fakeSys) SecureDir(dir, sddl string) error {
@@ -235,7 +232,7 @@ func setup(t *testing.T) (*fakeSys, Options, *strings.Builder) {
 		Out:         out,
 	}
 	f := &fakeSys{user: testSID, session: testSID, elevated: true, files: map[string][]byte{}, helper: "none",
-		sys: engine.SysStatus{Installed: true}, written: map[string][]byte{}}
+		sys: engine.SysStatus{Installed: true}}
 	for _, name := range Files {
 		f.files[filepath.Join(o.ProgramDir, name)] = []byte("content of " + name)
 	}
@@ -299,7 +296,7 @@ func TestInstallOrder(t *testing.T) {
 		t.Fatalf("steps %s, want %s; log:\n%s", got, want, strings.Join(f.log, "\n"))
 	}
 	for _, name := range Files {
-		if !slices.Contains(f.log, "hash read "+name) {
+		if !slices.Contains(f.log, "hash read "+name) && !slices.Contains(f.log, "hash stat "+name) {
 			t.Errorf("%s was not read from %s", name, o.ProgramDir)
 		}
 	}
@@ -396,8 +393,8 @@ func TestReinstallWaitsForRestore(t *testing.T) {
 	if got := steps(f.log); got != "sid,hash,stop" {
 		t.Fatalf("steps %s; log:\n%s", got, strings.Join(f.log, "\n"))
 	}
-	if got := strings.Join(f.log[len(f.log)-1:], ""); got != "stop shutdown 2m0s" || len(f.written) != 0 {
-		t.Fatalf("last %q, written %d", got, len(f.written))
+	if got := strings.Join(f.log[len(f.log)-1:], ""); got != "stop shutdown 2m0s" {
+		t.Fatalf("last %q", got)
 	}
 }
 
@@ -506,8 +503,8 @@ func TestDataFolderOfAUserIsNotRead(t *testing.T) {
 		t.Errorf("%v\n%s", err, out)
 	}
 	notRead(f, journal)
-	if got := steps(f.log); got != "sid,hash,stop" || count(f.log, "stop shutdown") != 0 || len(f.written) != 0 {
-		t.Errorf("steps %s, written %d; log:\n%s", got, len(f.written), strings.Join(f.log, "\n"))
+	if got := steps(f.log); got != "sid,hash,stop" || count(f.log, "stop shutdown") != 0 {
+		t.Errorf("steps %s; log:\n%s", got, strings.Join(f.log, "\n"))
 	}
 
 	f, o, out, journal = prepare()
@@ -683,15 +680,12 @@ func TestInstallRunsOnlyFromTheProgramFolder(t *testing.T) {
 	}
 }
 
-// install no longer copies: nothing is written into the program folder, and the task runs
+// install no longer copies (Sys has no way to write a file): the task runs
 // <ProgramDir>\splitlane-helper.exe.
 func TestInstallDoesNotCopy(t *testing.T) {
 	f, o, out := setup(t)
 	if err := Install(o, f); err != nil {
 		t.Fatalf("%v\n%s", err, out)
-	}
-	if n := count(f.log, "copy"); n != 0 || len(f.written) != 0 {
-		t.Fatalf("%d files written:\n%s", n, strings.Join(f.log, "\n"))
 	}
 	if !strings.Contains(f.xml, "<Command>"+esc(filepath.Join(o.ProgramDir, "splitlane-helper.exe"))+"</Command>") {
 		t.Fatalf("task XML:\n%s", f.xml)

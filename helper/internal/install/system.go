@@ -53,9 +53,8 @@ func (*System) Token() (string, bool, error) {
 }
 
 var (
-	wtsapi32          = windows.NewLazySystemDLL("wtsapi32.dll")
-	procWTSQuerySess  = wtsapi32.NewProc("WTSQuerySessionInformationW")
-	procWTSFreeMemory = wtsapi32.NewProc("WTSFreeMemory")
+	wtsapi32         = windows.NewLazySystemDLL("wtsapi32.dll")
+	procWTSQuerySess = wtsapi32.NewProc("WTSQuerySessionInformationW")
 )
 
 const (
@@ -72,7 +71,7 @@ func wtsString(sess uint32, class uintptr) (string, error) {
 	if r == 0 {
 		return "", err
 	}
-	defer procWTSFreeMemory.Call(uintptr(unsafe.Pointer(buf)))
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(buf)))
 	return windows.UTF16PtrToString(buf), nil
 }
 
@@ -176,6 +175,11 @@ func (*System) AccountName(sid string) (string, error) {
 }
 
 func (*System) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+func (*System) StatFile(path string) error {
+	_, err := os.Stat(path)
+	return err
+}
 
 // dialTimeout bounds the connection to a pipe that is there and busy.
 const dialTimeout = 5 * time.Second
@@ -317,44 +321,6 @@ func (*System) FindCore(exe string, id store.CoreIdentity) (engine.CoreProc, boo
 }
 
 func (*System) After(d time.Duration) <-chan time.Time { return time.After(d) }
-
-// WriteFile: a temporary file in the same folder, flushed to disk, then renamed over path. Windows does
-// not replace a program or a library that runs: that is the error of a file in use.
-func (*System) WriteFile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer os.Remove(name) // nothing left behind on failure; a no-op after the rename
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	from, err := windows.UTF16PtrFromString(name)
-	if err != nil {
-		return err
-	}
-	to, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	if err := windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH); err != nil {
-		return fmt.Errorf("%s cannot be replaced (a program that runs may hold it): %w", path, err)
-	}
-	return nil
-}
 
 // adminOwners may own a folder that is there already: what install or the helper made (the objects of
 // an elevated administrator belong to the administrators) or the system.

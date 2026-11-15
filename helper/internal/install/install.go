@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -97,6 +98,8 @@ type Sys interface {
 	AccountName(sid string) (string, error)
 	// ReadFile reads a file whole: install checks the core and its library with it.
 	ReadFile(path string) ([]byte, error)
+	// StatFile is nil when the file is there.
+	StatFile(path string) error
 	// ShutdownHelper: when a helper has the pipe, it sends hello and helper.shutdown and waits at most
 	// wait for the helper's process to end. found is false when no helper has the pipe; err tells that
 	// one has it and did not end, with its last phase and reason.
@@ -114,8 +117,6 @@ type Sys interface {
 	CheckDir(dir string) (there bool, err error)
 	// After is time.After.
 	After(d time.Duration) <-chan time.Time
-	// WriteFile replaces path with data, making its folder when it is missing; a file in use is an error (install no longer calls it).
-	WriteFile(path string, data []byte) error
 	// SecureDir makes the folder dir with the access list sddl, or gives the list to the folder that is
 	// there and to everything in it; a folder that is a link, or that was not made by an administrator,
 	// is refused.
@@ -176,7 +177,7 @@ func install(o Options, s Sys, say sayFunc) error {
 	if !sameDir(filepath.Dir(o.Exe), o.ProgramDir) {
 		return fmt.Errorf("install runs from %s, where the installer puts the files", o.ProgramDir)
 	}
-	if _, err := readSource(s, o.ProgramDir); err != nil {
+	if err := readSource(s, o.ProgramDir); err != nil {
 		return err
 	}
 	there, err := s.CheckDir(o.DataDir)
@@ -205,7 +206,9 @@ func install(o Options, s Sys, say sayFunc) error {
 
 // Prepare is `prepare --session-user` (spec 3 step 2), run by the installer from its temporary folder before
 // any file is touched: the user as for install, the data folder, the stop of the helper that runs
-// (stopOld), then the wait until no process of the product is left. It changes nothing. It prints
+// (stopOld), then the wait until no process of the product is left. It changes no file of the program, no
+// access list and no task; stopOld may give the system exit node back, drop restore.json after a confirmed
+// return and stop a core left from an earlier run. It prints
 // PREPARE-OK, or PREPARE-REFUSED: <reason> and returns the error.
 func Prepare(o Options, s Sys) error {
 	return finish(o, "PREPARE", prepare(o, s, progress(o, "PREPARE")))
@@ -305,7 +308,11 @@ func checkUser(cmd string, o Options, s Sys) (string, Options, error) {
 	}
 	o.UserSID = sid
 	if p, err := windows.StringToSid(o.UserSID); err != nil || p.String() != o.UserSID {
-		return "", o, fmt.Errorf("--user-sid %q is not a SID in the form S-1-...", o.UserSID)
+		src := "--user-sid"
+		if o.SessionUser {
+			src = "the session user"
+		}
+		return "", o, fmt.Errorf("%s %q is not a SID in the form S-1-...", src, o.UserSID)
 	}
 	user, elevated, err := s.Token()
 	switch {
@@ -323,24 +330,28 @@ func checkUser(cmd string, o Options, s Sys) (string, Options, error) {
 	return account, o, nil
 }
 
-// readSource is step 2: every file of Files from the folder src, the pinned ones checked.
-func readSource(s Sys, src string) (map[string][]byte, error) {
-	files := map[string][]byte{}
+// readSource is step 2: every file of Files is there in the folder src, and the pinned ones (the core and
+// its library) have their SHA-256.
+func readSource(s Sys, src string) error {
 	for _, name := range Files {
+		want, ok := pinned[name]
+		if !ok {
+			if err := s.StatFile(filepath.Join(src, name)); err != nil {
+				return fmt.Errorf("the files to install are not complete in %s: %w", src, err)
+			}
+			continue
+		}
 		b, err := s.ReadFile(filepath.Join(src, name))
 		if err != nil {
-			return nil, fmt.Errorf("the files to install are not complete in %s: %w", src, err)
+			return fmt.Errorf("the files to install are not complete in %s: %w", src, err)
 		}
-		if want, ok := pinned[name]; ok {
-			sum := sha256.Sum256(b)
-			if got := hex.EncodeToString(sum[:]); got != want {
-				return nil, fmt.Errorf("%s has SHA-256 %s, want %s: only the unchanged sing-box %s is installed",
-					filepath.Join(src, name), got, want, singbox.CoreVersion)
-			}
+		sum := sha256.Sum256(b)
+		if got := hex.EncodeToString(sum[:]); got != want {
+			return fmt.Errorf("%s has SHA-256 %s, want %s: only the unchanged sing-box %s is installed",
+				filepath.Join(src, name), got, want, singbox.CoreVersion)
 		}
-		files[name] = b
 	}
-	return files, nil
+	return nil
 }
 
 // stopOld is step 3 of install, the stop of prepare and the first step of uninstall (spec 4.3). A helper that has the pipe
@@ -522,7 +533,11 @@ func uninstall(o Options, s Sys, say sayFunc) error {
 	say("%s is removed", o.DataDir)
 	if o.UserDataDir != "" {
 		if err := s.RemoveAll(o.UserDataDir); err != nil {
-			return fmt.Errorf("the settings folder of the user: %w", err)
+			var pe *fs.PathError
+			if errors.As(err, &pe) {
+				err = pe.Err // the path is the user's: it stays out of the line
+			}
+			return fmt.Errorf("the window's settings folder: %v", err)
 		}
 		say("the settings folder of the user is removed")
 	}
