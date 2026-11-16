@@ -234,6 +234,11 @@ describe('the texts of the end', () => {
     expect(vpsErrorText('ssh_unreachable', 'timeout', false)).toMatch(
       /^Не удалось подключиться к серверу: проверьте адрес; порт SSH может быть закрыт/
     )
+    // a provider that blocks the hosting's addresses is the common cause for novices
+    expect(vpsErrorText('ssh_unreachable', 'timeout', false)).toMatch(/провайдер может блокировать адреса этого хостинга/)
+    setLang('en')
+    expect(vpsErrorText('ssh_unreachable', 'timeout', false)).toMatch(/provider may be blocking this host's addresses/)
+    setLang('ru')
     expect(vpsErrorText('no_admin', 'sudo_tty', false)).toMatch(/^У этого пользователя на сервере нет прав администратора/)
     expect(vpsErrorText('os_unsupported', 'debian 11', false)).toMatch(/^Система сервера не подходит: нужна Debian 12\+ или Ubuntu 22\.04\+/)
     expect(vpsErrorText('download_failed', undefined, false)).toBe('Сервер не смог скачать sing-box: проверьте его доступ в интернет')

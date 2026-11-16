@@ -469,7 +469,7 @@ export const en: Record<Key, string> = {
   'vps.error.bad_input.password': 'Check the password',
   'vps.error.bad_input.passphrase': 'Check the key passphrase',
   'vps.error.ssh_unreachable':
-    "Couldn't connect to the server. Check the address; the SSH port may be closed. If you've just rented the server, wait a few minutes",
+    "Couldn't connect to the server. Check the address; the SSH port may be closed. If you've just rented the server, wait a few minutes. If the address is right, your internet provider may be blocking this host's addresses — a VPS from another host would help",
   'vps.error.ssh_auth': 'Wrong username or password',
   'vps.error.ssh_auth.key': "The server didn't accept the username or the key",
   'vps.error.ssh_auth.no_password':
