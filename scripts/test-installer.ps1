@@ -466,7 +466,9 @@ try {
 
     $script:step = 'uninstall'
     Write-Host '== 4. silent uninstall without /PURGE'
-    # the values the window writes for its autostart
+    # the values the window writes for its autostart; a fresh account (a new runner image) may have
+    # neither key yet
+    if (-not (Test-Path -LiteralPath $runKey)) { New-Item -Path $runKey -Force | Out-Null }
     New-ItemProperty -Path $runKey -Name $runName -Value "`"$product\SplitLane.exe`" --hidden" -PropertyType String -Force | Out-Null
     if (-not (Test-Path -LiteralPath $approvedKey)) { New-Item -Path $approvedKey -Force | Out-Null }
     New-ItemProperty -Path $approvedKey -Name $runName -Value ([byte[]](2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) -PropertyType Binary -Force | Out-Null
