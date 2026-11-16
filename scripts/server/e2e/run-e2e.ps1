@@ -107,6 +107,21 @@ function Wait-Server([string]$name) {
     $state
 }
 
+# A text without the addresses it may carry, as the Go test's maskPublic does: anything that looks like
+# a link or a URL becomes <link>, and a public IPv4 address (dotted, or dashed as in an sslip.io name)
+# becomes <ip>; loopback and private ones stay. The kit takes this PC's exit address for its links.
+function Get-Masked([string]$text) {
+    if (-not $text) { return $text }
+    $text = [regex]::Replace($text, '[A-Za-z][A-Za-z0-9+.-]*://\S*', '<link>')
+    [regex]::Replace($text, '\b\d{1,3}[.-]\d{1,3}[.-]\d{1,3}[.-]\d{1,3}\b', {
+            param($m)
+            $o = @($m.Value -split '[.-]' | ForEach-Object { [int]$_ })
+            $private = ($o[0] -eq 127) -or ($o[0] -eq 10) -or ($o[0] -eq 172 -and $o[1] -ge 16 -and $o[1] -le 31) -or
+                ($o[0] -eq 192 -and $o[1] -eq 168)
+            if ($private -and ($o | Where-Object { $_ -gt 255 }).Count -eq 0) { $m.Value } else { '<ip>' }
+        })
+}
+
 # The links as "scheme:port ...", nothing secret.
 function Get-LinkText([string]$links) {
     $parts = foreach ($l in ($links -split "`n")) {
@@ -162,11 +177,20 @@ function Invoke-Smoke([string]$exe, [int]$port, [string]$password, [bool]$sub) {
     [Array]::Clear($bytes, 0, $bytes.Length)
     $final = $null
     $leak = $false
+    $notJson = 0
     while ($null -ne ($line = $proc.StandardOutput.ReadLine())) {
         if ($line.Contains($password)) { $leak = $true }
-        $o = $line | ConvertFrom-Json
-        if ($o.PSObject.Properties['step']) {
-            Write-Host ('  {0} {1}: {2}' -f $o.step, $o.state, $o.detail)
+        # A line that is not JSON is counted, never shown: it could carry an address or a secret.
+        try {
+            $o = $line | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            $notJson++
+            continue
+        }
+        if ($null -eq $o) {
+            $notJson++
+        } elseif ($o.PSObject.Properties['step']) {
+            Write-Host (Get-Masked ('  {0} {1}: {2}' -f $o.step, $o.state, $o.detail))
         } else {
             $final = $o
         }
@@ -176,9 +200,10 @@ function Invoke-Smoke([string]$exe, [int]$port, [string]$password, [bool]$sub) {
     $took = [int]((Get-Date) - $start).TotalSeconds
     $code = $proc.ExitCode
     if ($stderr.Result) { Write-Host "  stderr: $($stderr.Result.Length) characters (want none)" }
+    if ($notJson) { Write-Host "  $notJson lines of stdout were not JSON (not shown)" }
     if ($leak) { return 'the password is in the output of server-setup' }
     if (-not $final) { return "no final line (exit code $code)" }
-    if ($final.PSObject.Properties['failed']) { return "failed $($final.failed.code) $($final.failed.detail) (exit code $code)" }
+    if ($final.PSObject.Properties['failed']) { return (Get-Masked "failed $($final.failed.code) $($final.failed.detail) (exit code $code)") }
     $done = $final.done
     $links = Get-LinkText $done.links
     $warnings = @($done.warnings)
@@ -191,6 +216,7 @@ function Invoke-Smoke([string]$exe, [int]$port, [string]$password, [bool]$sub) {
     if ($links -notmatch '\bvless:\d+' -or $links -notmatch '\bhysteria2:\d+') { return "links $links" }
     if ($null -ne $done.subscription -or $warnings -notcontains $want) { return "subscription $subText, warnings $($warnings -join ', '), want null and $want" }
     if ($stderr.Result) { return 'server-setup wrote to stderr' }
+    if ($notJson) { return "$notJson lines of stdout were not JSON" }
     ''
 }
 
@@ -300,7 +326,7 @@ try {
         }
     }
 } catch {
-    $failed += "$_"
+    $failed += (Get-Masked "$_")
 } finally {
     if ($Keep) {
         Write-Host "== kept: the containers (label $label), the network $network, the images splitlane-e2e:*, $tmp"
