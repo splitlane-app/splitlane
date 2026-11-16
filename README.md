@@ -38,6 +38,8 @@ This is a beta.
 
 The installer is in English or Russian, following the language of Windows.
 
+Which files will be signed, by whom and how: [Code signing policy](CODE_SIGNING_POLICY.md).
+
 Installing over an older version works the same way: the installer first stops the service of the old version and turns the exit node of the Tailscale app back on, if it used one. Your settings and the Tailscale login are kept. Silent install: `SplitLane-Setup-<version>.exe /S` (the window doesn't start; a non-zero exit code means the installation failed).
 
 winget: coming soon.
@@ -195,7 +197,7 @@ The service (`scripts\build-helper.ps1 -Version <x.y.z>`, which you can also run
 
 SplitLane is licensed under GPL-3.0-or-later (see [LICENSE](LICENSE)). It ships the unmodified sing-box core and other third-party components under their own licenses, listed with links to their source code in [THIRD-PARTY.md](THIRD-PARTY.md) (in Russian). SplitLane is not affiliated with sing-box or Tailscale.
 
-Security issues: see [SECURITY.md](SECURITY.md). Other problems and questions: [GitHub issues](https://github.com/splitlane-app/splitlane/issues).
+Code signing: see the [Code signing policy](CODE_SIGNING_POLICY.md). Security issues: see [SECURITY.md](SECURITY.md). Other problems and questions: [GitHub issues](https://github.com/splitlane-app/splitlane/issues).
 
 ## Development
 

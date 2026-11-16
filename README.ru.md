@@ -38,6 +38,8 @@ SplitLane — приложение для Windows, которое делит т�
 
 Установщик говорит по-русски или по-английски, как Windows.
 
+Какие файлы будут подписаны, кем и как: [Политика подписи (Code signing policy)](CODE_SIGNING_POLICY.md).
+
 Установка поверх прежней версии идёт так же: установщик сначала останавливает службу прежней версии и включает обратно exit node приложения Tailscale, если он был выбран. Настройки и вход в Tailscale остаются. Тихая установка: `SplitLane-Setup-<версия>.exe /S` (окно не запускается; ненулевой код выхода означает, что установка не удалась).
 
 winget: скоро.
@@ -195,7 +197,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-installer.ps1 
 
 SplitLane распространяется под лицензией GPL-3.0-or-later (файл [LICENSE](LICENSE)). Вместе с ним поставляются неизменённое ядро sing-box и другие сторонние компоненты под своими лицензиями; они перечислены со ссылками на исходный код в [THIRD-PARTY.md](THIRD-PARTY.md). SplitLane не связан с проектами sing-box и Tailscale.
 
-Уязвимости: см. [SECURITY.md](SECURITY.md). Другие проблемы и вопросы: [GitHub issues](https://github.com/splitlane-app/splitlane/issues).
+Подпись кода: см. [Политику подписи (Code signing policy)](CODE_SIGNING_POLICY.md). Уязвимости: см. [SECURITY.md](SECURITY.md). Другие проблемы и вопросы: [GitHub issues](https://github.com/splitlane-app/splitlane/issues).
 
 ## Разработка
 
