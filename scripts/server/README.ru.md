@@ -11,10 +11,12 @@
 
   | Протокол | Порт | Имя в SplitLane |
   |---|---|---|
-  | VLESS + Reality, `xtls-rprx-vision` | 443/tcp | `SplitLane-VLESS-Reality` |
-  | Hysteria2, самоподписанный сертификат | 443/udp | `SplitLane-Hysteria2` |
-  | Shadowsocks 2022, `2022-blake3-aes-128-gcm` | 8388/tcp и udp | `SplitLane-SS2022` |
+  | VLESS + Reality, `xtls-rprx-vision` | 443/tcp | `<address> VLESS` |
+  | Hysteria2, самоподписанный сертификат | 443/udp | `<address> Hysteria2` |
+  | Shadowsocks 2022, `2022-blake3-aes-128-gcm` | 8388/tcp и udp | `<address> SS2022` |
   | WireGuard | 51820/udp | файл `splitlane-wg.conf` |
+
+  `<address>` — адрес, который стоит в ссылках (из `--host`), поэтому серверы, настроенные скриптом, называются в SplitLane по-разному.
 
   Там, где провайдеры фильтруют трафик с помощью DPI (Россия, Иран, Китай), обычно проходят VLESS + Reality и Hysteria2; см. [Если что-то не работает](#если-что-то-не-работает).
 
@@ -79,9 +81,9 @@ sudo bash ~/install-singbox-server.sh --subscription                        # н
 Ссылки, текст файла WireGuard и, с `--subscription`, адрес подписки. Например, со всеми четырьмя входами (секреты здесь вырезаны):
 
 ```text
-vless://…@192.0.2.10:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=…&sid=…&type=tcp&headerType=none#SplitLane-VLESS-Reality
-hysteria2://…@192.0.2.10:443?sni=192-0-2-10.sslip.io&insecure=1#SplitLane-Hysteria2
-ss://2022-blake3-aes-128-gcm:…@192.0.2.10:8388#SplitLane-SS2022
+vless://…@192.0.2.10:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=…&sid=…&type=tcp&headerType=none#192.0.2.10%20VLESS
+hysteria2://…@192.0.2.10:443?sni=192-0-2-10.sslip.io&insecure=1#192.0.2.10%20Hysteria2
+ss://2022-blake3-aes-128-gcm:…@192.0.2.10:8388#192.0.2.10%20SS2022
 https://192-0-2-10.sslip.io:8443/…/sub
 ```
 

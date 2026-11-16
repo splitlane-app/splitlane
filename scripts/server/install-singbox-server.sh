@@ -1011,9 +1011,9 @@ write_client_files() {
 	local out=$ROOT$P_OUT
 	VLESS_LINK="vless://${ST[UUID]}@$HOST_URI:$VLESS_PORT?encryption=none&flow=xtls-rprx-vision&security=reality"
 	VLESS_LINK+="&sni=$REALITY_SNI&fp=chrome&pbk=${ST[REALITY_PUBLIC_KEY]}&sid=${ST[SHORT_ID]}&type=tcp&headerType=none"
-	VLESS_LINK+="#SplitLane-VLESS-Reality"
-	HY2_LINK="hysteria2://${ST[HY2_PASSWORD]}@$HOST_URI:$HY2_PORT?sni=${ST[HY2_CERT_NAME]}&insecure=1#SplitLane-Hysteria2"
-	SS_LINK="ss://$SS_METHOD:$(pct "${ST[SS_PASSWORD]}")@$HOST_URI:$SS_PORT#SplitLane-SS2022"
+	VLESS_LINK+="#$HOST%20VLESS"
+	HY2_LINK="hysteria2://${ST[HY2_PASSWORD]}@$HOST_URI:$HY2_PORT?sni=${ST[HY2_CERT_NAME]}&insecure=1#$HOST%20Hysteria2"
+	SS_LINK="ss://$SS_METHOD:$(pct "${ST[SS_PASSWORD]}")@$HOST_URI:$SS_PORT#$HOST%20SS2022"
 	WG_CONF="[Interface]
 PrivateKey = ${ST[WG_CLIENT_PRIVATE_KEY]}
 Address = $(join_list "${WG_CLIENT_ADDRESSES[@]}")

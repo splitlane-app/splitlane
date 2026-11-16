@@ -11,10 +11,12 @@
 
   | Protocol | Port | Name in SplitLane |
   |---|---|---|
-  | VLESS + Reality, `xtls-rprx-vision` | 443/tcp | `SplitLane-VLESS-Reality` |
-  | Hysteria2, self-signed certificate | 443/udp | `SplitLane-Hysteria2` |
-  | Shadowsocks 2022, `2022-blake3-aes-128-gcm` | 8388/tcp and udp | `SplitLane-SS2022` |
+  | VLESS + Reality, `xtls-rprx-vision` | 443/tcp | `<address> VLESS` |
+  | Hysteria2, self-signed certificate | 443/udp | `<address> Hysteria2` |
+  | Shadowsocks 2022, `2022-blake3-aes-128-gcm` | 8388/tcp and udp | `<address> SS2022` |
   | WireGuard | 51820/udp | the file `splitlane-wg.conf` |
+
+  `<address>` is the address the links use (the one from `--host`), so servers set up by the script have different names in SplitLane.
 
   Where providers filter traffic by DPI (Russia, Iran, China), VLESS + Reality and Hysteria2 are the ones that usually get through; see [If something doesn't work](#if-something-doesnt-work).
 
@@ -79,9 +81,9 @@ sudo bash ~/install-singbox-server.sh --subscription                  # on the V
 The share links, the text of the WireGuard file and, with `--subscription`, the subscription address. For example, with all four ways in (the secrets are cut here):
 
 ```text
-vless://…@192.0.2.10:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=…&sid=…&type=tcp&headerType=none#SplitLane-VLESS-Reality
-hysteria2://…@192.0.2.10:443?sni=192-0-2-10.sslip.io&insecure=1#SplitLane-Hysteria2
-ss://2022-blake3-aes-128-gcm:…@192.0.2.10:8388#SplitLane-SS2022
+vless://…@192.0.2.10:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=…&sid=…&type=tcp&headerType=none#192.0.2.10%20VLESS
+hysteria2://…@192.0.2.10:443?sni=192-0-2-10.sslip.io&insecure=1#192.0.2.10%20Hysteria2
+ss://2022-blake3-aes-128-gcm:…@192.0.2.10:8388#192.0.2.10%20SS2022
 https://192-0-2-10.sslip.io:8443/…/sub
 ```
 
