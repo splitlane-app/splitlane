@@ -133,7 +133,7 @@ Then choose a server in the list and turn split routing on.
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\server\e2e\run-e2e.ps1
 ```
 
-`-Images debian:12,ubuntu:24.04` picks the systems, `-NoSmoke` skips the run of the built helper, `-Keep` leaves the containers for a look inside. For each system the script starts fresh containers (sshd on `127.0.0.1` only) and runs `helper/internal/serversetup/e2e_test.go` (`go test -tags e2e`), which sets the servers up over SSH as SplitLane does:
+`-Images debian:12,ubuntu:24.04` picks the systems, `-NoSmoke` skips the run of the built helper, `-SmokeOnly` makes only that run (on `-SmokeImage`), `-Keep` leaves the containers for a look inside. Before each system it checks that the PC has at least `-MinFreeMB` (2048) MB of memory free, and stops there if not: Docker Desktop's VM grows by a few GB per system, so on a PC short of memory run one system at a time and restart Docker Desktop in between. For each system the script starts fresh containers (sshd on `127.0.0.1` only) and runs `helper/internal/serversetup/e2e_test.go` (`go test -tags e2e`), which sets the servers up over SSH as SplitLane does:
 
 - root with a password; a second run gives the same links; the service, the state and the fail2ban jail are checked, and a wrong password tried from another container is counted by the jail (`fail2ban-client status sshd`);
 - a user with sudo and a password; the same user with a key (`no_admin`: sudo wants the password);

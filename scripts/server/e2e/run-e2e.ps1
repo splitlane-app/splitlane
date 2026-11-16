@@ -15,7 +15,9 @@
 #
 # ASCII only: Windows PowerShell 5.1 reads a script without BOM in the ANSI code page.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\server\e2e\run-e2e.ps1
-#          [-Images debian:12,ubuntu:24.04] [-SmokeImage debian:12] [-NoSmoke] [-Parallel 5] [-MinFreeMB 2048] [-Keep]
+#          [-Images debian:12,ubuntu:24.04] [-SmokeImage debian:12] [-NoSmoke | -SmokeOnly] [-Parallel 5]
+#          [-MinFreeMB 2048] [-Keep]
+# -SmokeOnly skips the Go test and makes only the smoke run, on -SmokeImage.
 # Before each system and before the smoke run it checks the free memory of the PC and stops there when
 # less than -MinFreeMB is left (the systems before it keep their results).
 # Needs: Docker Desktop (Linux containers), Go, ssh-keygen (the OpenSSH client of Windows).
@@ -24,6 +26,7 @@ param(
     [string[]]$Images = @('debian:12', 'ubuntu:22.04', 'ubuntu:24.04', 'debian:13', 'ubuntu:26.04'),
     [string]$SmokeImage = 'debian:12',
     [switch]$NoSmoke,
+    [switch]$SmokeOnly,
     [int]$Parallel = 5,
     [int]$BasePort = 22100,
     [int]$MinFreeMB = 2048,
@@ -34,6 +37,10 @@ $ProgressPreference = 'SilentlyContinue'
 
 # -File passes "-Images a,b" as one string.
 $Images = @($Images | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($SmokeOnly) {
+    $Images = @()
+    $NoSmoke = $false
+}
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $label = 'splitlane-e2e=1'
 $network = 'splitlane-e2e'
@@ -220,9 +227,11 @@ try {
     $roles = @(@{ role = 'root'; user = 'root' }, @{ role = 'sudo'; user = 'kit' }, @{ role = 'busy'; user = 'root' }, @{ role = 'preinstalled'; user = 'root' })
     $clientPort = $BasePort + 90
     $client = @{ name = 'client'; scenario = 'client'; host = '127.0.0.1'; port = $clientPort; user = 'root'; password = $rootPw }
-    Start-Server 'splitlane-e2e-client' $Images[0] $clientPort $rootPw $kitPw $kitKey
-    $state = Wait-Server 'splitlane-e2e-client'
-    Write-Host "== splitlane-e2e-client ($($Images[0])) on 127.0.0.1:${clientPort}: systemd $state, ACME hosts at 127.0.0.1"
+    if ($Images.Count -gt 0) {
+        Start-Server 'splitlane-e2e-client' $Images[0] $clientPort $rootPw $kitPw $kitKey
+        $state = Wait-Server 'splitlane-e2e-client'
+        Write-Host "== splitlane-e2e-client ($($Images[0])) on 127.0.0.1:${clientPort}: systemd $state, ACME hosts at 127.0.0.1"
+    }
 
     # One system at a time, so that Docker never holds more than a few servers: root (and key) on one
     # fresh server, sudo, busy and preinstalled on one each. Their containers go when the test is over.
