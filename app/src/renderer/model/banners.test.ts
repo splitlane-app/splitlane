@@ -135,12 +135,17 @@ describe('bannerFor and the name of the server', () => {
     expect(bannerFor(ready, proxy('wireguard', 'switch_check_failed'))?.detail).toBe(
       t('banner.proxyMaybeBlocked', { protocol: 'WireGuard' })
     )
-    expect(bannerFor(ready, proxy('vless', 'tunnel_not_proven'))?.detail).toBe('Проверьте, что сервер работает и его порты открыты')
+    expect(bannerFor(ready, proxy('vless', 'tunnel_not_proven'))?.detail).toBe(
+      'Проверьте, что сервер работает и его порты открыты. Если сервер работает, ваш провайдер может блокировать сам его адрес — тогда поможет VPS у другого хостинга'
+    )
     expect(bannerFor(ready, proxy('hysteria2', 'switch_check_failed'))?.detail).toBe(t('banner.proxyCheckServer'))
     // other reasons, and the Tailscale connector, get no hint
     expect(bannerFor(ready, proxy('shadowsocks', 'config_invalid'))?.detail).toBeUndefined()
     expect(bannerFor(ready, state('error', {}, { code: 'tunnel_not_proven', params: {} }))?.detail).toBeUndefined()
     setLang('en')
+    expect(bannerFor(ready, proxy('vless', 'tunnel_not_proven'))?.detail).toBe(
+      "Check that the server is running and its ports are open. If it is, your provider may be blocking the server's address itself — a VPS from another host would help"
+    )
     expect(bannerFor(ready, proxy('shadowsocks', 'tunnel_not_proven'))?.detail).toBe(
       'If the server is running, your provider may be blocking Shadowsocks. Try VLESS + Reality or Hysteria2'
     )

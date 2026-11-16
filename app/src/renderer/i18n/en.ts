@@ -132,7 +132,7 @@ export const en: Record<Key, string> = {
   // under a failed tunnel check of a server: {protocol} is its name, such as Shadowsocks
   'banner.proxyMaybeBlocked':
     'If the server is running, your provider may be blocking {protocol}. Try VLESS + Reality or Hysteria2',
-  'banner.proxyCheckServer': 'Check that the server is running and its ports are open',
+  'banner.proxyCheckServer': "Check that the server is running and its ports are open. If it is, your provider may be blocking the server's address itself — a VPS from another host would help",
   'banner.allDirect': '“All direct” is on: every program bypasses the VPN',
   'banner.restarting': 'The service is restarting…',
   'banner.unresponsive': 'The service is not responding',

@@ -128,7 +128,7 @@ export const ru = {
   'banner.errorUnknown': 'Не удалось включить',
   // under a failed tunnel check of a server: {protocol} is its name, such as Shadowsocks
   'banner.proxyMaybeBlocked': 'Если сервер работает, провайдер может блокировать {protocol}. Попробуйте VLESS + Reality или Hysteria2',
-  'banner.proxyCheckServer': 'Проверьте, что сервер работает и его порты открыты',
+  'banner.proxyCheckServer': 'Проверьте, что сервер работает и его порты открыты. Если сервер работает, ваш провайдер может блокировать сам его адрес — тогда поможет VPS у другого хостинга',
   'banner.allDirect': 'Включён режим «всё напрямую»: все программы идут без VPN',
   'banner.restarting': 'Служебный процесс перезапускается…',
   'banner.unresponsive': 'Служебный процесс не отвечает',
