@@ -9,3 +9,5 @@ go.sum text eol=lf
 *.sha256 text eol=lf
 # Shell scripts run on Linux (scripts/server); a CRLF copy breaks bash there.
 *.sh text eol=lf
+# Docker builds the e2e test servers on Linux (scripts/server/e2e; its entry.sh is under *.sh above).
+Dockerfile text eol=lf

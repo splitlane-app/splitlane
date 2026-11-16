@@ -124,3 +124,22 @@ Then choose a server in the list and turn split routing on.
 - The subscription address doesn't open: Caddy may still be getting its certificate, or port 80 isn't reachable from the internet; see `journalctl -u caddy -n 50`.
 - No connection at all: check that the ports are open in the firewall of your provider.
 - Only Shadowsocks or WireGuard fails (SplitLane says it couldn't make sure the tunnel works and turns split routing off), while VLESS + Reality or Hysteria2 to the same server works: your internet provider probably blocks that protocol. Some providers (in Russia, Iran, China) recognize Shadowsocks and WireGuard by DPI and cut them: in SplitLane's own check in Russia, both were cut after the first packets, while VLESS + Reality and Hysteria2 got through. Use those two there.
+
+## End-to-end check (for developers)
+
+`e2e/` checks SplitLane's **Your own VPS** against real servers in containers: Debian 12 and 13, Ubuntu 22.04, 24.04 and 26.04 with systemd and sshd (`e2e/Dockerfile`). Run it only locally, on Windows with Docker Desktop (Linux containers), Go and the OpenSSH client of Windows (`ssh-keygen`), and not while the PC's network is being checked:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\server\e2e\run-e2e.ps1
+```
+
+`-Images debian:12,ubuntu:24.04` picks the systems, `-NoSmoke` skips the run of the built helper, `-Keep` leaves the containers for a look inside. For each system the script starts fresh containers (sshd on `127.0.0.1` only) and runs `helper/internal/serversetup/e2e_test.go` (`go test -tags e2e`), which sets the servers up over SSH as SplitLane does:
+
+- root with a password; a second run gives the same links; the service, the state and the fail2ban jail are checked, and a wrong password tried from another container is counted by the jail (`fail2ban-client status sshd`);
+- a user with sudo and a password; the same user with a key (`no_admin`: sudo wants the password);
+- 443/tcp and 443/udp already taken (`nc`): VLESS + Reality on 2053, Hysteria2 on 4443;
+- a server where the kit ran before without the new options: all four ways in stay, and the state gets no `PROTOCOLS`.
+
+Then it builds `splitlane-helper.exe` into a temporary folder and runs `server-setup` once with the request on stdin, as the window does. At the end it removes the containers, the network and its images; the last line is `E2E-OK` or `E2E-FAILED`.
+
+Inside the containers `api.ipify.org` answers with the public address of your PC (or of the VPN it goes out through), so the links and the subscription name carry that address. That's why every container sends the hosts of Let's Encrypt's ACME API to `127.0.0.1` (no certificate is ever requested) and the Go test only pretends to download the subscription; the one run of the helper tries the subscription address for real for 90 seconds and ends with `sub_unreachable`. The kit itself downloads sing-box from GitHub and packages from the distribution, as on a real VPS. The passwords are made up at each run and the key of the test user is generated in a temporary folder.
