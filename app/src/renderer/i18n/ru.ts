@@ -475,6 +475,9 @@ export const ru = {
     'Для sudo этому пользователю нужен пароль, а при входе по ключу его нет: войдите по паролю или как root',
   'vps.error.os_unsupported':
     'Система сервера не подходит: нужна Debian 12+ или Ubuntu 22.04+. Систему можно переустановить в панели хостинга',
+  // {detail}: what did not fit, from the helper or the kit, in English (debian 11, armv7l, systemd…)
+  'vps.error.os_unsupported.detail':
+    'Система сервера не подходит: нужна Debian 12+ или Ubuntu 22.04+. Систему можно переустановить в панели хостинга. Подробности: {detail}',
   'vps.error.download_failed': 'Сервер не смог скачать sing-box: проверьте его доступ в интернет',
   'vps.error.ports_busy': 'На сервере заняты все подходящие порты',
   // {detail}: the kit's own message, in English

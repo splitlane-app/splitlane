@@ -572,6 +572,7 @@ test('a setup goes on while the window is hidden; its progress and result are th
     expect(items().slice(0, 2)).toEqual(['Подключение к серверуготово', 'Проверка системыидёт'])
     await v.answer({ kind: 'failed', code: 'os_unsupported', detail: 'debian 11' })
     expect(screen.getByRole('alert').textContent).toMatch(/^Система сервера не подходит/)
+    expect(screen.getByRole('alert').textContent).toContain('Подробности: debian 11')
     // the retry brings the form back without the password: it went with the hide
     fireEvent.click(screen.getByRole('button', { name: 'Попробовать снова' }))
     expect(address().value).toBe('203.0.113.10')

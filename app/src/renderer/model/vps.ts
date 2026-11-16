@@ -205,6 +205,9 @@ export function vpsErrorText(code: string, detail: string | undefined, useKey: b
     case 'kit_failed':
       if (detail === 'spawn') return t('vps.error.kit_failed.spawn')
       return detail === undefined || detail.trim() === '' ? t('vps.error.kit_failed.plain') : t('vps.error.kit_failed', { detail })
+    case 'os_unsupported':
+      // what did not fit (the system, the processor, systemd) follows the general text
+      return detail === undefined || detail.trim() === '' ? t('vps.error.os_unsupported') : t('vps.error.os_unsupported.detail', { detail })
     case 'add_failed': {
       const reason = addReason(detail)
       return reason === null ? t('vps.error.add_failed.plain') : t('vps.error.add_failed', { reason })

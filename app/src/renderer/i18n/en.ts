@@ -483,6 +483,9 @@ export const en: Record<Key, string> = {
     "This user's sudo needs a password, and a key login has none: log in with the password or as root",
   'vps.error.os_unsupported':
     "The server's system isn't supported: it needs Debian 12+ or Ubuntu 22.04+. You can reinstall the system in your hosting control panel",
+  // {detail}: what did not fit, from the helper or the kit (debian 11, armv7l, systemd…)
+  'vps.error.os_unsupported.detail':
+    "The server's system isn't supported: it needs Debian 12+ or Ubuntu 22.04+. You can reinstall the system in your hosting control panel. Details: {detail}",
   'vps.error.download_failed': "The server couldn't download sing-box. Check its internet access",
   'vps.error.ports_busy': 'All the suitable ports on the server are taken',
   // {detail}: the kit's own message, in English

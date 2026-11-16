@@ -274,6 +274,14 @@ describe('the texts of the end', () => {
     expect(vpsErrorText('kit_failed', 'spawn', false)).toBe(
       'Не удалось запустить настройку на этом компьютере. Переустановите SplitLane'
     )
+    // the system that does not fit: its detail follows the text; none, or a blank one, keeps the text alone
+    expect(vpsErrorText('os_unsupported', 'debian 11', false)).toBe(
+      'Система сервера не подходит: нужна Debian 12+ или Ubuntu 22.04+. Систему можно переустановить в панели хостинга. Подробности: debian 11'
+    )
+    expect(vpsErrorText('os_unsupported', undefined, false)).toBe(
+      'Система сервера не подходит: нужна Debian 12+ или Ubuntu 22.04+. Систему можно переустановить в панели хостинга'
+    )
+    expect(vpsErrorText('os_unsupported', ' ', false)).toBe(vpsErrorText('os_unsupported', undefined, false))
     // the helper did not take the result: the reason of its code
     expect(vpsErrorText('add_failed', 'too_many', false)).toBe(
       'Сервер настроен, но SplitLane не смог его добавить. Слишком много серверов или подписок: можно до 500 серверов и 20 подписок'
@@ -294,6 +302,12 @@ describe('the texts of the end', () => {
       "The server is set up, but SplitLane couldn't add it. Too many servers or subscriptions: the limit is 500 servers and 20 subscriptions"
     )
     expect(vpsErrorText('kit_failed', 'mktemp: no space', false)).toBe('The installation failed: mktemp: no space')
+    expect(vpsErrorText('os_unsupported', 'armv7l', false)).toBe(
+      "The server's system isn't supported: it needs Debian 12+ or Ubuntu 22.04+. You can reinstall the system in your hosting control panel. Details: armv7l"
+    )
+    expect(vpsErrorText('os_unsupported', undefined, false)).toBe(
+      "The server's system isn't supported: it needs Debian 12+ or Ubuntu 22.04+. You can reinstall the system in your hosting control panel"
+    )
     expect(vpsErrorText('no_admin', 'sudo_needs_password', true)).toBe(
       "This user's sudo needs a password, and a key login has none: log in with the password or as root"
     )
