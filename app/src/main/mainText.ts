@@ -6,6 +6,8 @@ export interface MainText {
   settings: string
   checkUpdates: string
   enable: string
+  /** «Включить» greyed out while a server setup of «Свой VPS» runs: a Windows menu shows no tooltip, so the label says why. */
+  enableAfterSetup: string
   disable: string
   quit: string
   programsFilter: string
@@ -31,6 +33,7 @@ export const MAIN_TEXT: Record<Lang, MainText> = {
     settings: 'Настройки…',
     checkUpdates: 'Проверить обновления',
     enable: 'Включить',
+    enableAfterSetup: 'Включить — дождитесь конца настройки сервера',
     disable: 'Выключить',
     quit: 'Выход',
     programsFilter: 'Программы',
@@ -53,6 +56,7 @@ export const MAIN_TEXT: Record<Lang, MainText> = {
     settings: 'Settings…',
     checkUpdates: 'Check for updates',
     enable: 'Turn on',
+    enableAfterSetup: 'Turn on — wait for the server setup to finish',
     disable: 'Turn off',
     quit: 'Quit',
     programsFilter: 'Programs',

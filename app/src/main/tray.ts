@@ -58,7 +58,9 @@ export class AppTray {
   private readonly tray: Tray
   private readonly images = new Map<TrayIcon, NativeImage>()
   private icon: TrayIcon = 'off'
-  private toggle: 'enable' | 'disable' | null | undefined = undefined
+  /** The toggle and whether it waits for a server setup, as the menu shows them; undefined: to be built. */
+  private shown: string | undefined = undefined
+  private setupRunning = false
   private lang: Lang
 
   constructor(
@@ -76,7 +78,13 @@ export class AppTray {
   setLanguage(lang: Lang, link: LinkStatus, state: HelperState | null): void {
     if (lang === this.lang) return
     this.lang = lang
-    this.toggle = undefined
+    this.shown = undefined
+    this.update(link, state)
+  }
+
+  /** A server setup of «Свой VPS» began or ended: «Включить» waits for it, greyed out and saying why. */
+  setSetupRunning(running: boolean, link: LinkStatus, state: HelperState | null): void {
+    this.setupRunning = running
     this.update(link, state)
   }
 
@@ -87,19 +95,20 @@ export class AppTray {
       this.icon = icon
       this.tray.setImage(this.image(icon))
     }
-    const { toggle } = trayMenuModel(link, state)
-    if (toggle === this.toggle) return
-    this.toggle = toggle
+    const { toggle, waitSetup } = trayMenuModel(link, state, this.setupRunning)
+    const shown = `${toggle}:${waitSetup}`
+    if (shown === this.shown) return
+    this.shown = shown
     const text = mainText(this.lang)
     this.tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: text.open, click: () => this.actions.open() },
         { label: text.settings, click: () => this.actions.settings() },
         {
-          label: toggle === 'disable' ? text.disable : text.enable,
-          enabled: toggle !== null,
+          label: toggle === 'disable' ? text.disable : waitSetup ? text.enableAfterSetup : text.enable,
+          enabled: toggle !== null && !waitSetup,
           click: () => {
-            if (toggle !== null) this.actions.toggle(toggle)
+            if (toggle !== null && !waitSetup) this.actions.toggle(toggle)
           }
         },
         { label: text.checkUpdates, click: () => this.actions.checkUpdates() },

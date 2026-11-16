@@ -1,7 +1,8 @@
 import { describe, expect, test, vi } from 'vitest'
-import type { VpsEvent } from '../shared/ipc'
+import { SETUP_RUNNING, type VpsEvent } from '../shared/ipc'
 import { HelperCallError } from './rpc'
 import type { ConfHandle } from './confFile'
+import { runEnable } from './ipc'
 import { VpsSetup, type VpsChild, type VpsDeps } from './vpsSetup'
 
 const SRV_A = '0123456789abcdef'
@@ -468,6 +469,30 @@ describe('cancel, busy, phase', () => {
     t.c.close(1)
     await p
     expect(await t.vs.setup({ ...req, address: 'bad address' })).toMatchObject({ code: 'bad_input' })
+  })
+
+  test('running() is true from the setup to its end, and says so on each change; the enable waits meanwhile', async () => {
+    const changes: boolean[] = []
+    const t = setup({ busyChanged: (b) => changes.push(b) })
+    const enable = { call: vi.fn(async (_m: string): Promise<unknown> => ({})) }
+    expect(t.vs.running()).toBe(false)
+    const p = t.vs.setup({ ...req })
+    await t.started(p)
+    expect(t.vs.running()).toBe(true)
+    expect(changes).toEqual([true])
+    expect(await runEnable(enable, () => t.vs.running())).toEqual({ ok: false, error: SETUP_RUNNING })
+    expect(enable.call).not.toHaveBeenCalled()
+    t.c.line({ failed: { code: 'ssh_auth' } })
+    t.c.close(1)
+    await p
+    expect(t.vs.running()).toBe(false)
+    expect(changes).toEqual([true, false])
+    expect(await runEnable(enable, () => t.vs.running())).toEqual({ ok: true })
+    expect(enable.call.mock.calls.map(([m]) => m)).toEqual(['routing.enable'])
+    // a refusal before any process is a short run too
+    t.deps.phase = () => 'on'
+    expect(await t.vs.setup({ ...req })).toEqual({ kind: 'failed', code: 'routing_on' })
+    expect(changes).toEqual([true, false, true, false])
   })
 
   test('only off and error start a setup; others are routing_on without a process', async () => {

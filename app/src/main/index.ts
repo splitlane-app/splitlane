@@ -4,7 +4,7 @@ import { access, copyFile, mkdir, open, readFile, readdir, rm, stat, writeFile }
 import { dirname, join, win32 } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, Notification, shell } from 'electron'
 import { resolveLanguage, type Lang } from '../shared/i18n'
-import { IPC, type InstallState, type Snapshot } from '../shared/ipc'
+import { IPC, isSetupRunning, type InstallState, type Snapshot } from '../shared/ipc'
 import type { Dropped } from '../shared/programs'
 import { PIPE_NAME, type HelperError, type HelperState } from '../shared/protocol'
 import { DEFAULT_SETTINGS, rememberExitNode, type WindowSettings } from '../shared/settings'
@@ -14,7 +14,7 @@ import { AutoEnable } from './autoEnable'
 import { Games, type GamesFs } from './games'
 import { IconCache, type IconFs } from './icons'
 import { addConfFile } from './confFile'
-import { exportPath, mergePrograms, registerIpc, runCommand, toHelperError } from './ipc'
+import { exportPath, mergePrograms, registerIpc, runCommand, runEnable, toHelperError } from './ipc'
 import { HelperLink, SHUTDOWN_TIMEOUT_MS } from './link'
 import { APP_USER_MODEL_ID, loginItemSettings, startupLoginItem } from './loginItem'
 import { VpsSetup, type VpsChild } from './vpsSetup'
@@ -177,10 +177,11 @@ const link = new HelperLink({
 })
 
 const autoEnable = new AutoEnable({
+  // not while a server setup runs (runEnable): its failed attempt is like any other
   enable: async () => {
-    const r = await runCommand(link, { method: 'routing.enable' })
+    const r = await runEnable(link, () => vps.running())
     if (!r.ok) {
-      log(`auto-enable: routing.enable: ${r.error.code}`)
+      log(`auto-enable: routing.enable: ${isSetupRunning(r.error) ? 'a server setup is running' : r.error.code}`)
       throw new Error(r.error.code)
     }
   },
@@ -607,7 +608,8 @@ const vps = new VpsSetup({
     const t = setTimeout(fn, ms)
     return () => clearTimeout(t)
   },
-  log
+  log,
+  busyChanged: (busy) => tray?.setSetupRunning(busy, link.status(), link.state())
 })
 
 async function saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError }> {
@@ -735,6 +737,7 @@ async function main(): Promise<void> {
     vpsForgetKey: async () => vps.forgetKey(),
     vpsSetup: (req) => vps.setup(req),
     vpsCancel: () => vps.cancel(),
+    vpsBusy: () => vps.running(),
     // in development the setup screen works with dist\helper, so the window counts as installed
     appInfo: async () => ({
       version: app.getVersion(),
@@ -775,8 +778,9 @@ async function main(): Promise<void> {
     },
     toggle: (to) => {
       autoEnable.stop()
-      void runCommand(link, { method: to === 'enable' ? 'routing.enable' : 'routing.disable' }).then((r) => {
-        if (!r.ok) log(`tray: ${to}: ${r.error.code}`)
+      const call = to === 'enable' ? runEnable(link, () => vps.running()) : runCommand(link, { method: 'routing.disable' })
+      void call.then((r) => {
+        if (!r.ok) log(`tray: ${to}: ${isSetupRunning(r.error) ? 'a server setup is running' : r.error.code}`)
       })
     },
     checkUpdates: checkUpdatesFromTray,

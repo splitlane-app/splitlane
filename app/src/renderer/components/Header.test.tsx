@@ -1,5 +1,9 @@
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
+import { SETUP_RUNNING } from '../../shared/ipc'
+import { setLang } from '../i18n/t'
+import { commandErrorText } from '../model/proxy'
+import { newRun, runEnd } from '../model/vps'
 import { fakeBridge, proxyServer, proxyState, renderWith, servicesFor, snap, state } from '../testing'
 import { Header } from './Header'
 
@@ -120,4 +124,39 @@ test('the pill of the proxy: «<server> · <protocol>», up only while routing i
   expect(pill().dataset.tone).toBe('warn')
   act(() => services.store.getState().setSnapshot(at(proxyState([a], null, [], { phase: 'off' }))))
   expect(pill().textContent).toBe('сервер не выбран')
+})
+
+test('while a server setup runs the toggle cannot turn split routing on, and says why', async () => {
+  const { bridge, commands } = fakeBridge()
+  const services = servicesFor(bridge, snap({ phase: 'off' }))
+  services.store.getState().setVps(() => newRun(0, false))
+  renderWith(<Header />, services)
+  const toggle = screen.getByRole('switch') as HTMLButtonElement
+  expect(toggle.disabled).toBe(true)
+  expect(toggle.title).toBe('Дождитесь конца настройки сервера')
+  // the end of the setup gives it back
+  act(() => services.store.getState().setVps((r) => (r === null ? r : runEnd(r, { kind: 'cancelled' }, 1))))
+  expect(toggle.disabled).toBe(false)
+  expect(toggle.title).toBe('')
+  await act(async () => {
+    fireEvent.click(toggle)
+  })
+  expect(commands).toEqual([{ method: 'routing.enable' }])
+})
+
+test('an enable the main process refuses for a running setup is told by its notice (a page that reloaded meanwhile)', async () => {
+  const { bridge } = fakeBridge({}, { ok: false, error: SETUP_RUNNING })
+  const services = servicesFor(bridge, snap({ phase: 'off' }))
+  renderWith(<Header />, services)
+  await act(async () => {
+    fireEvent.click(screen.getByRole('switch'))
+  })
+  expect(services.store.getState().notice).toBe('Дождитесь конца настройки сервера')
+  setLang('en')
+  expect(commandErrorText({ method: 'routing.enable' }, SETUP_RUNNING)).toBe('Wait for the server setup to finish')
+  // another busy of the helper keeps its own text
+  expect(commandErrorText({ method: 'routing.enable' }, { code: 'busy', message: 'busy' })).toBe(
+    'The service is busy. Try again in a few seconds'
+  )
+  setLang('ru')
 })

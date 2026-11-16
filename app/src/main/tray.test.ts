@@ -58,3 +58,24 @@ test('the tray menu is built in the language and rebuilt when the language chang
   tray.setLanguage('en', link, null)
   expect(labels(menus.at(-1) ?? [])[0]).toBe('Open')
 })
+
+test('while a server setup runs the enable is greyed out and says why; the end brings it back', () => {
+  const ready: LinkStatus = { kind: 'ready', hello: { protocol: 3, helper: 'x', core: 'y' } }
+  const off = { phase: 'off', reason: null, allDirect: false } as unknown as HelperState
+  const tray = new AppTray(actions, 'ru')
+  tray.update(ready, off)
+  const toggleItem = (): Item | undefined => (menus.at(-1) ?? []).find((i) => i.label?.startsWith('Включить'))
+  expect(toggleItem()).toMatchObject({ label: 'Включить', enabled: true })
+  tray.setSetupRunning(true, ready, off)
+  expect(toggleItem()).toMatchObject({ label: 'Включить — дождитесь конца настройки сервера', enabled: false })
+  // a new state or language keeps it until the setup ends
+  tray.update(ready, off)
+  expect(toggleItem()?.enabled).toBe(false)
+  tray.setLanguage('en', ready, off)
+  expect((menus.at(-1) ?? []).find((i) => i.label?.startsWith('Turn on'))).toMatchObject({
+    label: 'Turn on — wait for the server setup to finish',
+    enabled: false
+  })
+  tray.setSetupRunning(false, ready, off)
+  expect((menus.at(-1) ?? []).find((i) => i.label?.startsWith('Turn on'))).toMatchObject({ label: 'Turn on', enabled: true })
+})

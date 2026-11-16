@@ -32,14 +32,27 @@ type Target = VpsField | 'submit' | 'cancel' | 'retry' | 'result'
 /**
  * One setup: its run goes into the store (it outlives the panel, which may go and come back meanwhile), its progress
  * comes from onVpsEvent while it runs, and an end that no panel shows is told by a notice. The request carries the
- * secrets: it goes to the main process and nowhere else.
+ * secrets: it goes to the main process at once, and only the way in (`useKey`) is kept for the wait (this function is
+ * not async, so nothing holds the request while the setup runs).
  */
-export async function runVpsSetup({ bridge, store }: Services, req: VpsRequest): Promise<VpsOutcome> {
-  store.getState().setVps(() => newRun(Date.now(), req.useKey))
+export function runVpsSetup(services: Services, req: VpsRequest): Promise<VpsOutcome> {
+  const { bridge, store } = services
+  const { useKey } = req
+  store.getState().setVps(() => newRun(Date.now(), useKey))
   const off = bridge.onVpsEvent((e) => store.getState().setVps((r) => (r === null ? r : runEvent(r, e))))
+  let call: Promise<VpsOutcome>
+  try {
+    call = bridge.vpsSetup(req)
+  } catch (e) {
+    call = Promise.reject(e)
+  }
+  return followVpsSetup(services, call, useKey, off)
+}
+
+async function followVpsSetup({ store }: Services, call: Promise<VpsOutcome>, useKey: boolean, off: () => void): Promise<VpsOutcome> {
   let outcome: VpsOutcome
   try {
-    outcome = await bridge.vpsSetup(req)
+    outcome = await call
   } catch {
     outcome = { kind: 'failed', code: 'kit_failed' }
   } finally {
@@ -47,7 +60,7 @@ export async function runVpsSetup({ bridge, store }: Services, req: VpsRequest):
   }
   store.getState().setVps((r) => (r === null ? r : runEnd(r, outcome, Date.now())))
   if (store.getState().vpsViews === 0) {
-    store.getState().showNotice(vpsNotice(outcome, req.useKey))
+    store.getState().showNotice(vpsNotice(outcome, useKey))
     store.getState().setVps(() => null)
   }
   return outcome
@@ -110,7 +123,8 @@ function TextField({
  * of the setup with «Отменить», then its result or its error with «Попробовать снова», which brings the form back
  * as it was. «Настроить» waits for split routing to be off. The password and the passphrase live in this component's
  * state only, never in the store or the settings; leaving the screen drops them with the component and makes the main
- * process forget the key (spec 3, ruling 18). `showList` («Подключение»): the list of servers under the result.
+ * process forget the key (spec 3, ruling 18), and so does a hidden window (closed to the tray or minimized, ruling 21),
+ * while a setup that runs goes on. `showList` («Подключение»): the list of servers under the result.
  */
 export function VpsPanel({ showList = false }: { showList?: boolean }): React.JSX.Element | null {
   const services = useServices()
@@ -140,6 +154,19 @@ export function VpsPanel({ showList = false }: { showList?: boolean }): React.JS
       bridge.vpsForgetKey().catch(() => {})
     }
   }, [bridge, store])
+
+  // a hidden window counts as leaving for the secrets (ruling 21): the form drops them, the main process the key; the
+  // address and the login stay, and so does a setup that runs (its request went to the main process already)
+  useEffect(() => {
+    const onVisibility = (): void => {
+      if (!document.hidden) return
+      setForm((f) => (f.password === '' && f.passphrase === '' && f.keyName === null ? f : { ...f, password: '', passphrase: '', keyName: null }))
+      setKeyError(null)
+      bridge.vpsForgetKey().catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [bridge])
 
   // a control asked for the focus once it is on screen (the one asked for, or «Настроить» when it is not there)
   useEffect(() => {
@@ -191,7 +218,11 @@ export function VpsPanel({ showList = false }: { showList?: boolean }): React.JS
     } catch {
       r = { error: 'not_text' }
     }
-    if (!mounted.current) return
+    if (!mounted.current) {
+      // the screen went while the dialog was open: the key it took must not stay in the main process (ruling 22)
+      if (r !== null && !('error' in r)) bridge.vpsForgetKey().catch(() => {})
+      return
+    }
     setPicking(false)
     if (r === null) return // the dialog was closed: the key in force, if any, stays
     if ('error' in r) {

@@ -28,10 +28,13 @@ export function Header(): React.JSX.Element {
   const lastExitNode = useApp((s) => s.snapshot?.settings.lastExitNode ?? null)
   const linkReady = useApp((s) => s.snapshot?.link.kind === 'ready')
   const search = useApp((s) => s.search)
+  const setupRunning = useApp((s) => s.vps !== null && s.vps.outcome === null)
   const { setSearch, openAdd, showConnection } = services.store.getState()
 
   const phase = state?.phase ?? null
   const on = phase === 'starting' || isLivePhase(phase)
+  // a tunnel through the server being set up would cut the setup («Свой VPS»): the enable waits for its end
+  const waitSetup = setupRunning && (phase === 'off' || phase === 'error')
   const toggle = (): void => {
     if (phase === null) return
     void sendCommand(
@@ -47,7 +50,8 @@ export function Header(): React.JSX.Element {
         <>
           <Toggle
             on={on}
-            disabled={!linkReady || phase === 'stopping'}
+            disabled={!linkReady || phase === 'stopping' || waitSetup}
+            title={waitSetup ? t('vps.enableBlocked') : undefined}
             label={t('header.routing')}
             caption={t(CAPTION[state.phase])}
             onToggle={toggle}

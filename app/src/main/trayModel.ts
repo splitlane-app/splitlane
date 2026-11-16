@@ -25,19 +25,27 @@ export function trayIconFor(link: LinkStatus, state: HelperState | null, previou
   }
 }
 
-export function trayMenuModel(link: LinkStatus, state: HelperState | null): { toggle: 'enable' | 'disable' | null } {
-  if (link.kind !== 'ready' || !state) return { toggle: null }
+/**
+ * The toggle of the tray menu: enable in off and error, disable while routing runs. While a server setup of «Свой VPS»
+ * runs the enable waits for it (`waitSetup`: greyed out, saying why); the disable never does.
+ */
+export function trayMenuModel(
+  link: LinkStatus,
+  state: HelperState | null,
+  setupRunning = false
+): { toggle: 'enable' | 'disable' | null; waitSetup: boolean } {
+  if (link.kind !== 'ready' || !state) return { toggle: null, waitSetup: false }
   switch (state.phase) {
     case 'off':
     case 'error':
-      return { toggle: 'enable' }
+      return { toggle: 'enable', waitSetup: setupRunning }
     case 'starting':
     case 'on':
     case 'degraded':
     case 'blocked':
-      return { toggle: 'disable' }
+      return { toggle: 'disable', waitSetup: false }
     default:
-      return { toggle: null }
+      return { toggle: null, waitSetup: false }
   }
 }
 

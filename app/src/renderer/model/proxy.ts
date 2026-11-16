@@ -1,4 +1,4 @@
-import type { Command, ProxyOutcome } from '../../shared/ipc'
+import { isSetupRunning, type Command, type ProxyOutcome } from '../../shared/ipc'
 import {
   PROXY_REJECT_CODES,
   type HelperError,
@@ -99,8 +99,12 @@ export function proxyErrorText(error: HelperError, req: ProxyRequest): string {
   return errorText(error)
 }
 
-/** The notice of a failed command: proxy.remove and proxy.select say apply_failed of the list of servers. */
+/**
+ * The notice of a failed command: proxy.remove and proxy.select say apply_failed of the list of servers; an enable
+ * the window refused while a server setup runs says to wait for it.
+ */
 export function commandErrorText(c: Command, error: HelperError): string {
+  if (c.method === 'routing.enable' && isSetupRunning(error)) return t('vps.enableBlocked')
   return (c.method === 'proxy.remove' || c.method === 'proxy.select') && error.code === 'apply_failed'
     ? t('proxy.applyFailed')
     : errorText(error)

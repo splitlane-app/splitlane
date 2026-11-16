@@ -14,9 +14,18 @@ const STATE: Record<StepView, Key> = {
   cancelled: 'vps.state.cancelled'
 }
 
+/** What a screen reader hears: the step that failed, else the one running; nothing between steps. */
+function liveText(run: VpsRun): string {
+  const failed = VPS_STEPS.find((s) => stepView(run.steps[s]) === 'failed')
+  if (failed !== undefined) return t('vps.live.failed', { step: t(`vps.step.${failed}`) })
+  const running = VPS_STEPS.find((s) => stepView(run.steps[s]) === 'running')
+  return running === undefined ? '' : t('vps.live.running', { step: t(`vps.step.${running}`) })
+}
+
 /**
  * The six steps of a setup (spec 6), each with its state, and the time since «Настроить», which stops at the end.
- * Once the setup is over a step it never reached says nothing (it is not waiting any more).
+ * Once the setup is over a step it never reached says nothing (it is not waiting any more). A hidden polite line tells
+ * a screen reader the step running or failed (the list itself is not live: the time changes every second).
  */
 export function VpsProgress({ run }: { run: VpsRun }): React.JSX.Element {
   const ended = run.endedAt !== null
@@ -31,6 +40,9 @@ export function VpsProgress({ run }: { run: VpsRun }): React.JSX.Element {
 
   return (
     <div className={styles.progress}>
+      <div className={styles.live} aria-live="polite" aria-atomic="true">
+        {liveText(run)}
+      </div>
       <ol className={styles.steps} aria-label={t('vps.progress')}>
         {VPS_STEPS.map((step) => {
           const view = stepView(run.steps[step])

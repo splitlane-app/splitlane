@@ -100,13 +100,13 @@ If you rent a VPS (a virtual server) with Debian 12+ or Ubuntu 22.04+, SplitLane
 
 The settings of SSH (password logins, the port) don't change. On a server where the kit already runs, a new setup keeps its keys and ports: SplitLane adds the same servers and selects the first one.
 
-**The password and the key** are used once, for this setup, and never saved. They are only in the memory of the window while its screen is open, and they reach the setup process through its standard input, not its command line; leaving the screen wipes them. To change something on the server later, run the setup again.
+**The password and the key** are used once, for this setup, and never saved. They are only in the memory of the window while its screen is open, and they reach the setup process through its standard input, not its command line; the window drops them when you leave the screen or close (hide) the window, and a setup already running goes on. To change something on the server later, run the setup again.
 
 **The server's host key isn't verified.** On the first connection to a freshly rented VPS there is nothing to compare its SSH host key with, so SplitLane doesn't check it. The known risk: someone who intercepts the connection at the very moment of the setup could learn the password. If that matters to you, sign in with a key, or change the server's password after the setup.
 
 **If something goes wrong,** the window says what happened and offers **Try again** with the same details. If the connection breaks in the middle of the installation, run the setup again: it continues where it stopped.
 
-**fail2ban.** After the setup, fail2ban bans an address for 10 minutes after 5 failed SSH logins from it within 10 minutes. If that happens to you (say, after mistyping the password a few times), wait 10 minutes, or sign in from another address or through your hosting provider's web console and run `sudo fail2ban-client unban <your address>`; `sudo fail2ban-client status sshd` lists the banned addresses.
+**fail2ban.** After the setup, fail2ban bans an address for 10 minutes after 5 failed SSH logins from it within 10 minutes. If that happens to you (say, after mistyping the password a few times), wait 10 minutes, or sign in from another address or through your hosting provider's web console and run `sudo fail2ban-client unban <your address>`; `sudo fail2ban-client status sshd` lists the banned addresses. The addresses connected over SSH during the setup (this PC's among them) are exempt from the ban, as the kit writes them to `ignoreip`, so a ban mostly concerns a new address.
 
 **Limits.**
 

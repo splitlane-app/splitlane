@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { IPC, type Command, type ProxyOutcome, type Snapshot, type VpsOutcome } from '../shared/ipc'
+import { IPC, isSetupRunning, SETUP_RUNNING, type Command, type ProxyOutcome, type Snapshot, type VpsOutcome } from '../shared/ipc'
 import type { AppRule } from '../shared/protocol'
 import type { UpdateState } from '../shared/update'
 import {
@@ -7,6 +7,7 @@ import {
   mergePrograms,
   registerIpc,
   runCommand,
+  runEnable,
   validateCommand,
   validateDetailKey,
   validateExePath,
@@ -307,6 +308,7 @@ function ipcHarness() {
     vpsForgetKey: vi.fn(async () => {}),
     vpsSetup: vi.fn(async (_x: unknown): Promise<VpsOutcome> => ({ kind: 'cancelled' })),
     vpsCancel: vi.fn(async () => {}),
+    vpsBusy: vi.fn(() => false),
     appInfo: vi.fn(async () => ({ version: '0.2.0', installed: true })),
     setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, language: 'system' as const, lastExitNode: null, notifications: true, notifiedVersion: null, ...p })),
     installedPrograms: vi.fn(async () => []),
@@ -546,4 +548,30 @@ test('checkUpdates and installUpdate answer before the operation ends', async ()
   await expect(h.invoke(IPC.installUpdate)).resolves.toBeUndefined()
   await Promise.resolve()
   expect(h.d.log).toHaveBeenCalledWith('ipc: installUpdate: boom')
+})
+
+test('routing.enable waits for a server setup: the page, the tray and the auto-enable get the same refusal', async () => {
+  // runEnable is what the tray and the auto-enable call
+  const link = fakeLink()
+  let running = true
+  expect(await runEnable(link, () => running)).toEqual({ ok: false, error: SETUP_RUNNING })
+  expect(isSetupRunning(SETUP_RUNNING)).toBe(true)
+  expect(isSetupRunning({ code: 'busy', message: 'another download' })).toBe(false)
+  expect(link.call).not.toHaveBeenCalled()
+  running = false
+  expect(await runEnable(link, () => running)).toEqual({ ok: true })
+  expect(link.call.mock.calls.map(([m]) => m)).toEqual(['routing.enable'])
+
+  // the page's command: refused while the setup runs; the disable and other commands go through
+  const h = ipcHarness()
+  h.d.vpsBusy.mockReturnValue(true)
+  expect(await h.invoke(IPC.command, { method: 'routing.enable' })).toEqual({ ok: false, error: SETUP_RUNNING })
+  expect(h.d.userCommand).toHaveBeenCalledTimes(1)
+  expect(h.d.log).toHaveBeenCalledWith('ipc: routing.enable refused: a server setup is running')
+  expect(await h.invoke(IPC.command, { method: 'routing.disable' })).toEqual({ ok: true })
+  expect(await h.invoke(IPC.command, { method: 'routing.allDirect', on: true })).toEqual({ ok: true })
+  expect(h.link.call.mock.calls.map(([m]) => m)).toEqual(['routing.disable', 'routing.allDirect'])
+  h.d.vpsBusy.mockReturnValue(false)
+  expect(await h.invoke(IPC.command, { method: 'routing.enable' })).toEqual({ ok: true })
+  expect(h.link.call.mock.calls.at(-1)?.[0]).toBe('routing.enable')
 })

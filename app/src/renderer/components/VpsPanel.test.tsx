@@ -118,7 +118,7 @@ test('the checks of the form show under their fields, and nothing is sent until 
   const addressError = screen.getByText('Это не похоже на адрес сервера. Пример: 203.0.113.10, vps.example.com или vps.example.com:2222')
   expect(address().getAttribute('aria-invalid')).toBe('true')
   expect(address().getAttribute('aria-describedby')).toContain(addressError.id)
-  const userError = screen.getByText('Логин — до 32 строчных латинских букв, цифр, «_» и «-», в начале — буква')
+  const userError = screen.getByText('Логин — до 32 строчных латинских букв, цифр, «_» и «-», в начале — буква или «_»')
   expect(login().getAttribute('aria-describedby')).toContain(userError.id)
   expect(screen.getByText('Введите пароль')).toBeTruthy()
   // the first field to fix has the focus
@@ -264,7 +264,7 @@ test('the result without a subscription says why the phone cannot connect; the w
   for (const [warning, part] of [
     ['sub_unreachable', 'подписка на сервере не ответила вовремя'],
     ['sub_port80_busy', 'порт 80 на сервере занят другой программой'],
-    ['sub_skipped', 'не удалось поставить службу подписки (Caddy)']
+    ['sub_skipped', 'не удалось поставить или запустить Caddy для подписки']
   ] as const) {
     const v = vpsBridge()
     const listed = proxyState([proxyServer('0123456789abcdef', 'a')], null, [], { phase: 'off' })
@@ -512,4 +512,103 @@ test('the form in English', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Set up' }))
   expect(screen.getByText('Enter the server address')).toBeTruthy()
   expect(screen.getByText('Enter the password')).toBeTruthy()
+})
+
+/** The window goes to the tray (or is minimized): the page is hidden. */
+function setHidden(hidden: boolean): void {
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+  act(() => {
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+}
+
+test('a hidden window drops the password, the passphrase and the key, as leaving the screen does (ruling 21)', async () => {
+  const v = vpsBridge({ vpsPickKey: async () => ({ name: 'id_ed25519' }) })
+  renderWith(<VpsPanel />, servicesFor(v.bridge, off()))
+  try {
+    type(address(), '203.0.113.10')
+    type(login(), 'deploy')
+    type(password(), SECRET)
+    fireEvent.click(screen.getByRole('radio', { name: 'Файл ключа' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл ключа…' }))
+    })
+    type(passphrase(), PHRASE)
+    // shown again without a hide in between: nothing goes
+    setHidden(false)
+    expect(v.vpsForgetKey).not.toHaveBeenCalled()
+    expect(screen.getByText('Выбран файл id_ed25519')).toBeTruthy()
+
+    setHidden(true)
+    expect(v.vpsForgetKey).toHaveBeenCalledTimes(1)
+    setHidden(false)
+    expect(screen.queryByText('Выбран файл id_ed25519')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Выбрать файл ключа…' })).toBeTruthy()
+    expect(passphrase().value).toBe('')
+    fireEvent.click(screen.getByRole('radio', { name: 'Пароль' }))
+    expect(password().value).toBe('')
+    // what is no secret stays
+    expect(address().value).toBe('203.0.113.10')
+    expect(login().value).toBe('deploy')
+  } finally {
+    setHidden(false)
+  }
+})
+
+test('a setup goes on while the window is hidden; its progress and result are there when it is back', async () => {
+  const v = vpsBridge()
+  renderWith(<VpsPanel />, servicesFor(v.bridge, off()))
+  try {
+    start()
+    await v.emit({ step: 'connect', state: 'start' })
+    setHidden(true)
+    expect(v.vpsForgetKey).toHaveBeenCalledTimes(1)
+    expect(v.vpsCancel).not.toHaveBeenCalled()
+    await v.emit({ step: 'connect', state: 'done' }, { step: 'system', state: 'start' })
+    setHidden(false)
+    expect(items().slice(0, 2)).toEqual(['Подключение к серверуготово', 'Проверка системыидёт'])
+    await v.answer({ kind: 'failed', code: 'os_unsupported', detail: 'debian 11' })
+    expect(screen.getByRole('alert').textContent).toMatch(/^Система сервера не подходит/)
+    // the retry brings the form back without the password: it went with the hide
+    fireEvent.click(screen.getByRole('button', { name: 'Попробовать снова' }))
+    expect(address().value).toBe('203.0.113.10')
+    expect(password().value).toBe('')
+  } finally {
+    setHidden(false)
+  }
+})
+
+test('a key picked after the panel went is forgotten at once (ruling 22)', async () => {
+  let answer: (r: { name: string }) => void = () => {}
+  const v = vpsBridge({ vpsPickKey: () => new Promise((r) => (answer = r)) })
+  const view = renderWith(<VpsPanel />, servicesFor(v.bridge, off()))
+  fireEvent.click(screen.getByRole('radio', { name: 'Файл ключа' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл ключа…' }))
+  view.unmount()
+  expect(v.vpsForgetKey).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    answer({ name: 'id_ed25519' })
+  })
+  expect(v.vpsForgetKey).toHaveBeenCalledTimes(2)
+})
+
+test('a polite live line says the step running or failed, not the time', async () => {
+  vi.useFakeTimers()
+  const v = vpsBridge()
+  renderWith(<VpsPanel />, servicesFor(v.bridge, off()))
+  start()
+  const live = (): Element => document.querySelector('[aria-live="polite"]')!
+  expect(live().textContent).toBe('')
+  await v.emit({ step: 'connect', state: 'start' })
+  expect(live().textContent).toBe('Идёт: Подключение к серверу')
+  await act(async () => {
+    vi.advanceTimersByTime(5_000)
+  })
+  expect(live().textContent).toBe('Идёт: Подключение к серверу')
+  await v.emit({ step: 'connect', state: 'done' }, { step: 'system', state: 'start' })
+  expect(live().textContent).toBe('Идёт: Проверка системы')
+  await v.emit({ step: 'system', state: 'failed', detail: 'os_unsupported' })
+  expect(live().textContent).toBe('Ошибка: Проверка системы')
+  // it is not shown: the list says the same to the eye
+  expect(live().className).toMatch(/live/)
 })

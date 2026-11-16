@@ -2,6 +2,8 @@ import {
   IPC,
   LINK_CLOSED,
   MAX_DROPPED,
+  SETUP_RUNNING,
+  isSetupRunning,
   type AppInfo,
   type Command,
   type CommandResult,
@@ -259,6 +261,16 @@ export async function runCommand(link: Pick<LinkCalls, 'call'>, c: Command): Pro
   }
 }
 
+/**
+ * routing.enable, unless a server setup of «Свой VPS» runs: then the window's own refusal, without a call (the tunnel
+ * through the server being set up would cut the setup's SSH). The page, the tray and the auto-enable all go through
+ * here. Never throws.
+ */
+export async function runEnable(link: Pick<LinkCalls, 'call'>, setupRunning: () => boolean): Promise<CommandResult> {
+  if (setupRunning()) return { ok: false, error: { ...SETUP_RUNNING } }
+  return runCommand(link, { method: 'routing.enable' })
+}
+
 // ---- proxy.add and proxy.refresh ----
 
 /** A download inside proxy.add or proxy.refresh takes up to 20 s on the helper's side. */
@@ -360,6 +372,8 @@ export interface IpcDeps {
   vpsForgetKey(): Promise<void>
   vpsSetup(req: unknown): Promise<VpsOutcome>
   vpsCancel(): Promise<void>
+  /** A server setup runs: routing.enable is refused meanwhile (runEnable). */
+  vpsBusy(): boolean
   appInfo(): Promise<AppInfo>
   setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings>
   installedPrograms(): Promise<Program[]>
@@ -397,6 +411,11 @@ export function registerIpc(d: IpcDeps): void {
       return { ok: false, error: { code: 'bad_request', message: errText(e) } } satisfies CommandResult
     }
     if (c.method.startsWith('routing.')) d.userCommand()
+    if (c.method === 'routing.enable') {
+      const r = await runEnable(d.link, d.vpsBusy)
+      if (!r.ok && isSetupRunning(r.error)) d.log('ipc: routing.enable refused: a server setup is running')
+      return r
+    }
     return runCommand(d.link, c)
   })
   on(IPC.setActivityDetail, async (x) => {

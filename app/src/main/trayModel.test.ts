@@ -46,6 +46,14 @@ describe('trayModel', () => {
     expect(trayIconFor(ready, st('starting', 'core_crashed'), 'off')).toBe('off')
   })
 
+  it('trayMenuModel holds the enable back while a server setup runs; the disable stays', () => {
+    expect(trayMenuModel(ready, st('off'), true)).toEqual({ toggle: 'enable', waitSetup: true })
+    expect(trayMenuModel(ready, st('error', 'core_crashed'), true)).toEqual({ toggle: 'enable', waitSetup: true })
+    expect(trayMenuModel(ready, st('off'), false)).toEqual({ toggle: 'enable', waitSetup: false })
+    expect(trayMenuModel(ready, st('on'), true)).toEqual({ toggle: 'disable', waitSetup: false })
+    expect(trayMenuModel(ready, st('off'))).toEqual({ toggle: 'enable', waitSetup: false })
+  })
+
   it('trayMenuModel offers enable in off and error, disable in live phases', () => {
     expect(trayMenuModel(ready, st('off')).toggle).toBe('enable')
     expect(trayMenuModel(ready, st('error', 'core_crashed')).toggle).toBe('enable')

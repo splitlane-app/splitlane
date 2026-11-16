@@ -407,7 +407,7 @@ export const ru = {
   'vps.check.addressEmpty': 'Введите адрес сервера',
   'vps.check.address': 'Это не похоже на адрес сервера. Пример: 203.0.113.10, vps.example.com или vps.example.com:2222',
   'vps.check.userEmpty': 'Введите логин',
-  'vps.check.user': 'Логин — до 32 строчных латинских букв, цифр, «_» и «-», в начале — буква',
+  'vps.check.user': 'Логин — до 32 строчных латинских букв, цифр, «_» и «-», в начале — буква или «_»',
   'vps.check.passwordEmpty': 'Введите пароль',
   'vps.check.passwordLong': 'Пароль длиннее 1024 знаков',
   'vps.check.key': 'Выберите файл ключа',
@@ -431,6 +431,9 @@ export const ru = {
   'vps.state.failed': 'ошибка',
   'vps.state.cancelled': 'отменено',
   'vps.elapsed': 'Прошло: {time}',
+  // the polite live line of a screen reader: the step running, or the one that failed (never the time)
+  'vps.live.running': 'Идёт: {step}',
+  'vps.live.failed': 'Ошибка: {step}',
   'vps.cancel': 'Отменить',
   'vps.cancelling': 'Отменяю…',
   'vps.retry': 'Попробовать снова',
@@ -442,7 +445,7 @@ export const ru = {
   'vps.warn.sub_port80_busy':
     'Телефон подключить не получилось: порт 80 на сервере занят другой программой, а он нужен для сертификата подписки. Этот компьютер подключится и без неё',
   'vps.warn.sub_skipped':
-    'Телефон подключить не получилось: на сервере не удалось поставить службу подписки (Caddy). В Ubuntu 22.04 её нет, в Ubuntu 24.04 и Debian 12 есть. Этот компьютер подключится и без неё',
+    'Телефон подключить не получилось: на сервере не удалось поставить или запустить Caddy для подписки (например, в Ubuntu 22.04 его нет в пакетах). Этот компьютер подключится и без неё',
   // the codes of the setup (spec 8) and of the window; a detail that changes the text follows the code
   'vps.error.bad_input': 'Проверьте адрес сервера и логин',
   'vps.error.bad_input.key': 'Выберите файл ключа ещё раз',
@@ -461,6 +464,8 @@ export const ru = {
   'vps.error.password_expired':
     'Хостинг требует сменить пароль при первом входе: войдите один раз через его консоль или по SSH, смените пароль и запустите настройку снова',
   'vps.error.no_admin': 'У этого пользователя на сервере нет прав администратора. Войдите как root или как пользователь с sudo',
+  'vps.error.no_admin.sudo_needs_password':
+    'Для sudo этому пользователю нужен пароль, а при входе по ключу его нет: войдите по паролю или как root',
   'vps.error.os_unsupported':
     'Система сервера не подходит: нужна Debian 12+ или Ubuntu 22.04+. Систему можно переустановить в панели хостинга',
   'vps.error.download_failed': 'Сервер не смог скачать sing-box: проверьте его доступ в интернет',
@@ -479,6 +484,8 @@ export const ru = {
   'vps.error.add_failed': 'Сервер настроен, но SplitLane не смог его добавить. {reason}',
   'vps.error.add_failed.plain': 'Сервер настроен, но SplitLane не смог его добавить. Попробуйте снова',
   'vps.error.unknown': 'Настроить сервер не удалось (код {code})',
+  // routing.enable while a setup runs: the notice of a refused enable, and the title of the held toggle
+  'vps.enableBlocked': 'Дождитесь конца настройки сервера',
 
   // the names of the languages: each in its own language, the same in both dictionaries
   'language.ru': 'Русский',

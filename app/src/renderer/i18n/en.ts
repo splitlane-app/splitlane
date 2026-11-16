@@ -416,7 +416,7 @@ export const en: Record<Key, string> = {
   'vps.check.address':
     "This doesn't look like a server address. For example: 203.0.113.10, vps.example.com or vps.example.com:2222",
   'vps.check.userEmpty': 'Enter the username',
-  'vps.check.user': 'A username has up to 32 lowercase Latin letters, digits, “_” and “-”, and starts with a letter',
+  'vps.check.user': 'A username has up to 32 lowercase Latin letters, digits, “_” and “-”, and starts with a letter or “_”',
   'vps.check.passwordEmpty': 'Enter the password',
   'vps.check.passwordLong': 'The password is longer than 1024 characters',
   'vps.check.key': 'Choose a key file',
@@ -440,6 +440,9 @@ export const en: Record<Key, string> = {
   'vps.state.failed': 'error',
   'vps.state.cancelled': 'canceled',
   'vps.elapsed': 'Elapsed: {time}',
+  // the polite live line of a screen reader: the step running, or the one that failed (never the time)
+  'vps.live.running': 'In progress: {step}',
+  'vps.live.failed': 'Error: {step}',
   'vps.cancel': 'Cancel',
   'vps.cancelling': 'Canceling…',
   'vps.retry': 'Try again',
@@ -451,7 +454,7 @@ export const en: Record<Key, string> = {
   'vps.warn.sub_port80_busy':
     "Couldn't connect a phone: another program uses port 80 on the server, and the subscription needs it for its certificate. This PC can connect without it",
   'vps.warn.sub_skipped':
-    "Couldn't connect a phone: the subscription service (Caddy) couldn't be installed on the server. Ubuntu 22.04 doesn't have it; Ubuntu 24.04 and Debian 12 do. This PC can connect without it",
+    "Couldn't connect a phone: Caddy for the subscription couldn't be installed or started on the server (for example, Ubuntu 22.04 has no package for it). This PC can connect without it",
   // the codes of the setup (spec 8) and of the window; a detail that changes the text follows the code
   'vps.error.bad_input': 'Check the server address and the username',
   'vps.error.bad_input.key': 'Choose the key file again',
@@ -469,6 +472,8 @@ export const en: Record<Key, string> = {
   'vps.error.password_expired':
     'Your hosting provider requires a new password at the first login. Log in once through its console or over SSH, change the password, then run the setup again',
   'vps.error.no_admin': 'This user has no administrator rights on the server. Log in as root or as a user with sudo',
+  'vps.error.no_admin.sudo_needs_password':
+    "This user's sudo needs a password, and a key login has none: log in with the password or as root",
   'vps.error.os_unsupported':
     "The server's system isn't supported: it needs Debian 12+ or Ubuntu 22.04+. You can reinstall the system in your hosting control panel",
   'vps.error.download_failed': "The server couldn't download sing-box. Check its internet access",
@@ -487,6 +492,8 @@ export const en: Record<Key, string> = {
   'vps.error.add_failed': "The server is set up, but SplitLane couldn't add it. {reason}",
   'vps.error.add_failed.plain': "The server is set up, but SplitLane couldn't add it. Try again",
   'vps.error.unknown': "Couldn't set up the server (code {code})",
+  // routing.enable while a setup runs: the notice of a refused enable, and the title of the held toggle
+  'vps.enableBlocked': 'Wait for the server setup to finish',
 
   // the names of the languages: each in its own language, the same in both dictionaries
   'language.ru': 'Русский',

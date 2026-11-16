@@ -71,6 +71,16 @@ export type VpsOutcome =
 
 export const LINK_CLOSED: HelperError = { code: 'internal', message: 'link closed' }
 
+/**
+ * The window's refusal of routing.enable while a server setup of «Свой VPS» runs (from the page, the tray or the
+ * auto-enable): a tunnel through the server being set up would cut the setup's SSH. Told apart by its message.
+ */
+export const SETUP_RUNNING: HelperError = { code: 'busy', message: 'a server setup is running' }
+
+export function isSetupRunning(e: HelperError): boolean {
+  return e.code === SETUP_RUNNING.code && e.message === SETUP_RUNNING.message
+}
+
 /** At most this many files of one Explorer drop go to the main process. */
 export const MAX_DROPPED = 100
 

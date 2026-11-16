@@ -255,6 +255,11 @@ describe('the texts of the end', () => {
     expect(vpsErrorText('ssh_key', 'passphrase', true)).toBe('Этот файл ключа не подходит: пароль ключа не введён или неверен')
     expect(vpsErrorText('ssh_key', 'format', true)).toBe('Этот файл ключа не подходит: это не закрытый ключ OpenSSH или PEM')
     expect(vpsErrorText('ssh_key', 'other', true)).toBe('Этот файл ключа не подходит')
+    // sudo wants a password and the login by a key has none
+    expect(vpsErrorText('no_admin', 'sudo_needs_password', true)).toBe(
+      'Для sudo этому пользователю нужен пароль, а при входе по ключу его нет: войдите по паролю или как root'
+    )
+    expect(vpsErrorText('no_admin', 'sudo_denied', false)).toMatch(/^У этого пользователя на сервере нет прав администратора/)
     // the login by a key is refused as a key
     expect(vpsErrorText('ssh_auth', undefined, true)).toBe('Сервер не принял логин или ключ')
     // a refused request says which part
@@ -289,6 +294,9 @@ describe('the texts of the end', () => {
       "The server is set up, but SplitLane couldn't add it. Too many servers or subscriptions: the limit is 500 servers and 20 subscriptions"
     )
     expect(vpsErrorText('kit_failed', 'mktemp: no space', false)).toBe('The installation failed: mktemp: no space')
+    expect(vpsErrorText('no_admin', 'sudo_needs_password', true)).toBe(
+      "This user's sudo needs a password, and a key login has none: log in with the password or as root"
+    )
   })
 
   it('the warnings: one line for the phone (its first reason), one for the protection', () => {
@@ -299,13 +307,18 @@ describe('the texts of the end', () => {
       expect(line, w).toMatch(/^Телефон подключить не получилось: /)
     }
     expect(warningTexts(['sub_port80_busy'])[0]).toContain('порт 80')
-    expect(warningTexts(['sub_skipped'])[0]).toContain('Ubuntu 22.04')
+    expect(warningTexts(['sub_skipped'])[0]).toBe(
+      'Телефон подключить не получилось: на сервере не удалось поставить или запустить Caddy для подписки (например, в Ubuntu 22.04 его нет в пакетах). Этот компьютер подключится и без неё'
+    )
     const both = warningTexts(['sub_skipped', 'harden_failed', 'sub_unreachable', 'new_warning'])
     expect(both).toHaveLength(2)
     expect(both[0]).toMatch(/^Защиту сервера/)
     expect(both[1]).toBe(warningTexts(['sub_skipped'])[0])
     setLang('en')
     expect(warningTexts(['sub_unreachable'])[0]).toMatch(/^Couldn't connect a phone: /)
+    expect(warningTexts(['sub_skipped'])[0]).toBe(
+      "Couldn't connect a phone: Caddy for the subscription couldn't be installed or started on the server (for example, Ubuntu 22.04 has no package for it). This PC can connect without it"
+    )
   })
 
   it('the notice of an end that no screen showed', () => {

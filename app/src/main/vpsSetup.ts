@@ -39,6 +39,8 @@ export interface VpsDeps {
   /** Runs `fn` after `ms`; the result cancels it. */
   setTimer(fn: () => void, ms: number): () => void
   log(message: string): void
+  /** A setup began or ended (running()): the tray holds its «Включить» back meanwhile. */
+  busyChanged?(busy: boolean): void
 }
 
 type Obj = Record<string, unknown>
@@ -134,9 +136,14 @@ export class VpsSetup {
 
   // ---- the setup ----
 
+  /** A setup runs, from its request to its outcome: split routing is not turned on meanwhile (runEnable). */
+  running(): boolean {
+    return this.busy
+  }
+
   async setup(x: unknown): Promise<VpsOutcome> {
     if (this.busy) return { kind: 'failed', code: 'busy' }
-    this.busy = true
+    this.setBusy(true)
     this.cancelled = false
     try {
       const out = await this.run(x)
@@ -147,7 +154,16 @@ export class VpsSetup {
       this.child = null
       this.stopKill?.()
       this.stopKill = null
-      this.busy = false
+      this.setBusy(false)
+    }
+  }
+
+  private setBusy(busy: boolean): void {
+    this.busy = busy
+    try {
+      this.d.busyChanged?.(busy)
+    } catch {
+      // the tray's update must not break the setup
     }
   }
 

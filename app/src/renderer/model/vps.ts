@@ -176,6 +176,7 @@ export const VPS_ERROR_CODES = [
 
 const DETAIL_KEYS: Partial<Record<string, readonly string[]>> = {
   bad_input: ['key', 'password', 'passphrase'],
+  no_admin: ['sudo_needs_password'],
   ssh_key: ['ppk', 'passphrase', 'format']
 }
 
