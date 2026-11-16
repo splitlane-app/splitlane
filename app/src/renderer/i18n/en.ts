@@ -313,6 +313,8 @@ export const en: Record<Key, string> = {
   'connect.step.enable': 'Turn on split routing',
   'connect.loginHint': 'The login page opens in your browser',
   'connect.loginButton': 'Log in to Tailscale',
+  // routing runs on a server of the proxy list: the helper starts no login meanwhile
+  'connect.loginBlocked': 'You can log in to Tailscale when split routing is off',
   'connect.waitLogin':
     'The login page is open in your browser. Log in there, and this window will continue automatically',
   'connect.openAgain': 'Open the link again',

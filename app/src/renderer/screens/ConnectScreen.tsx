@@ -8,12 +8,14 @@ import { LanguageSelect } from '../components/LanguageSelect'
 import { MethodTiles } from '../components/MethodTiles'
 import { ProxyPanel } from '../components/ProxyPanel'
 import { ScreenFrame } from '../components/ScreenFrame'
+import { TailscaleLogin } from '../components/TailscaleLogin'
 import { Toggle } from '../components/Toggle'
 import { UpdateBanner } from '../components/UpdateBanner'
 import { useUpdateActions } from '../components/useUpdateActions'
 import type { Key } from '../i18n/ru'
 import { t } from '../i18n/t'
 import {
+  isLoginStep,
   methodOf,
   proxyStep,
   routingLive,
@@ -84,40 +86,14 @@ function EnableStep({ state, busy, onEnable }: { state: HelperState; busy: boole
  */
 export function ConnectScreen(): React.JSX.Element | null {
   const services = useServices()
-  const { bridge, store } = services
+  const { bridge } = services
   const state = useApp((s) => s.snapshot?.state ?? null)
   const connectedOnce = useApp((s) => s.snapshot?.settings.connectedOnce ?? false)
   const lastExitNode = useApp((s) => s.snapshot?.settings.lastExitNode ?? null)
-  const loginRequested = useApp((s) => s.loginRequested)
   const [busy, setBusy] = useState(false)
   const [method, setMethod] = useState<ConnectMethod>(() => (state === null ? 'tailscale' : methodOf(state)))
   const recorded = useRef(false)
-  const authUrl = state?.tailscale.authUrl ?? null
   const phase = state?.phase ?? null
-
-  const openLogin = (url: string): void => {
-    const failed = (): void => store.getState().showNotice(t('connect.openFailed'))
-    bridge
-      .openLogin(url)
-      .then((ok) => {
-        if (!ok) failed()
-      })
-      .catch(failed)
-  }
-
-  // the link of a login this page sent goes to the browser by itself, once; any other link (the one the helper
-  // keeps after a logout) waits for «Открыть ссылку снова». The request is taken from the store, so a second run
-  // of the effect does not open it twice.
-  useEffect(() => {
-    if (authUrl === null || !loginRequested || !store.getState().takeLoginRequest()) return
-    const failed = (): void => store.getState().showNotice(t('connect.openFailed'))
-    bridge
-      .openLogin(authUrl)
-      .then((ok) => {
-        if (!ok) failed()
-      })
-      .catch(failed)
-  }, [authUrl, loginRequested, bridge, store])
 
   // the first time routing is on, the screen has done its job
   useEffect(() => {
@@ -157,34 +133,7 @@ export function ConnectScreen(): React.JSX.Element | null {
           {proxy === 'enable' && enable}
         </>
       )}
-      {method === 'tailscale' && step === 'login' && (
-        <div className={styles.section}>
-          <p className={styles.lead}>{t('connect.loginHint')}</p>
-          <button
-            type="button"
-            className={`${styles.button} ${styles.primary}`}
-            disabled={busy}
-            onClick={() => void run({ method: 'tailscale.login' })}
-          >
-            {t('connect.loginButton')}
-          </button>
-        </div>
-      )}
-      {method === 'tailscale' && step === 'waitLogin' && authUrl !== null && (
-        <div className={styles.section}>
-          <p className={styles.status} role="status">
-            {t('connect.waitLogin')}
-          </p>
-          <button type="button" className={styles.button} onClick={() => openLogin(authUrl)}>
-            {t('connect.openAgain')}
-          </button>
-        </div>
-      )}
-      {method === 'tailscale' && step === 'approval' && (
-        <p className={styles.status} role="status">
-          {t('connect.approval')}
-        </p>
-      )}
+      {method === 'tailscale' && isLoginStep(step) && <TailscaleLogin state={state} step={step} />}
       {method === 'tailscale' && (step === 'exitNode' || step === 'enable') && (
         <div className={styles.section}>
           <p className={styles.lead}>{t('connect.exitNodeHint')}</p>
@@ -200,7 +149,8 @@ export function ConnectScreen(): React.JSX.Element | null {
 /**
  * «Подключение» (spec 9.5, 9.6, stage 3 spec 6), opened from the connection pill: the tiles of the methods, opened on
  * the connector in force, and the part of the chosen one. Tailscale: the device, the exit node and its change, logout
- * (only while routing is off). A key or a file: the add, the servers with their choice and removal, the
+ * (only while routing is off); before the login (a user of the proxy list), the login as on «Подключите VPN». A key
+ * or a file: the add, the servers with their choice and removal, the
  * subscriptions with their refresh and removal. Switching the connector is choosing a server or an exit node. Then
  * the settings of the window, «Язык» among them.
  */
@@ -254,6 +204,7 @@ export function ConnectionScreen(): React.JSX.Element | null {
     })
   }
   const live = routingLive(state.phase)
+  const step = tailscaleStep(state)
   const updateLine = update === null ? null : updateStatusLine(update)
   const updateActions = update === null ? [] : updateStatusActions(update)
 
@@ -261,7 +212,10 @@ export function ConnectionScreen(): React.JSX.Element | null {
     <ScreenFrame title={t('connection.title')} wide onBack={back}>
       <Banner />
       <MethodTiles value={method} onChange={setMethod} compact />
-      {method === 'tailscale' ? (
+      {method === 'tailscale' && isLoginStep(step) ? (
+        // a user of the proxy list who has not logged in to Tailscale yet logs in here
+        <TailscaleLogin state={state} step={step} />
+      ) : method === 'tailscale' ? (
         <>
           <div className={styles.row}>
             <span className={styles.label}>{t('connection.device')}</span>

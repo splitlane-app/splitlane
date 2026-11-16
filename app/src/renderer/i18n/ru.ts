@@ -308,6 +308,8 @@ export const ru = {
   'connect.step.enable': 'Включите деление',
   'connect.loginHint': 'Откроется страница входа в браузере',
   'connect.loginButton': 'Войти в Tailscale',
+  // routing runs on a server of the proxy list: the helper starts no login meanwhile
+  'connect.loginBlocked': 'Войти в Tailscale можно, когда деление выключено',
   'connect.waitLogin': 'Страница входа открыта в браузере. Войдите там, и окно продолжит само',
   'connect.openAgain': 'Открыть ссылку снова',
   'connect.openFailed': 'Не удалось открыть ссылку входа',

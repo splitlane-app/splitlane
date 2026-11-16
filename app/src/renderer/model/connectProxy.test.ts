@@ -7,6 +7,7 @@ import { bannerFor } from './banners'
 import {
   connectStep,
   exitNodeInForce,
+  isLoginStep,
   laneServerName,
   methodOf,
   proxyStep,
@@ -123,6 +124,31 @@ test('tailscaleStep: as connectStep for Tailscale; with the proxy in force the e
   expect(tailscaleStep(proxyState([A], A.id, [], { phase: 'off', tailscale: login }))).toBe('login')
   const waiting = { ...login, authUrl: 'https://login.tailscale.com/a/x' }
   expect(tailscaleStep(proxyState([A], A.id, [], { phase: 'off', tailscale: waiting }))).toBe('waitLogin')
+})
+
+test('tailscaleStep with the proxy in force does not take the phase of its routing for the node', () => {
+  // routing runs on a server; the setup core does not run beside it, so the node is stopped
+  const never = { ...state().tailscale, backend: 'stopped' as const, selectedExitNode: null, exitNodes: [], path: null }
+  for (const phase of ['off', 'starting', 'on', 'degraded', 'blocked', 'stopping', 'error'] as const) {
+    expect(tailscaleStep(proxyState([A], A.id, [], { phase, tailscale: never })), phase).toBe('login')
+    // logged in before: the exit nodes are known, the node is chosen again
+    const known = { ...never, exitNodes: [{ id: '100.64.0.2', name: 'node-a', online: true }] }
+    expect(tailscaleStep(proxyState([A], A.id, [], { phase, tailscale: known })), phase).toBe('exitNode')
+    expect(tailscaleStep(proxyState([A], A.id, [], { phase, tailscale: { ...known, selectedExitNode: '100.64.0.2' } })), phase).toBe(
+      'exitNode'
+    )
+  }
+  // the reason of a failed enable on the server says nothing of the node
+  const failed = proxyState([A], A.id, [], { phase: 'error', reason: { code: 'tunnel_not_proven', params: {} }, tailscale: never })
+  expect(tailscaleStep(failed)).toBe('login')
+})
+
+test('isLoginStep: the login, the wait for the browser and the approval', () => {
+  expect((['login', 'waitLogin', 'approval', 'exitNode', 'server', 'enable'] as const).filter(isLoginStep)).toEqual([
+    'login',
+    'waitLogin',
+    'approval'
+  ])
 })
 
 test('proxyStep: add with an empty list, server until one is in force, then enable', () => {

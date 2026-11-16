@@ -52,12 +52,23 @@ export function methodOf(state: HelperState): ConnectMethod {
 }
 
 /**
- * The step of the Tailscale tile whatever the connector: while the proxy is in force it is left only by choosing an
- * exit node (tailscale.setExitNode makes the connector Tailscale), so the last step is that choice, not the enable.
+ * The step of the Tailscale tile whatever the connector. While the proxy is in force the phase is that of routing on
+ * a server, not of the Tailscale node: the setup core never runs beside the main core, so the backend is `stopped`
+ * then, and the step is read as in off (never logged in, with no exit node known, is still the login). The tile is
+ * left only by choosing an exit node (tailscale.setExitNode makes the connector Tailscale), so its last step is that
+ * choice, not the enable.
  */
 export function tailscaleStep(state: HelperState): ConnectStep {
-  const step = connectStep({ ...state, connector: 'tailscale' })
-  return step === 'enable' && state.connector !== 'tailscale' ? 'exitNode' : step
+  if (state.connector === 'tailscale') return connectStep(state)
+  const step = connectStep({ ...state, connector: 'tailscale', phase: 'off' })
+  return step === 'enable' ? 'exitNode' : step
+}
+
+/** The steps of the Tailscale login, before the exit node: the login, the wait for the browser, the approval. */
+export type LoginStep = Extract<ConnectStep, 'login' | 'waitLogin' | 'approval'>
+
+export function isLoginStep(step: ConnectStep): step is LoginStep {
+  return step === 'login' || step === 'waitLogin' || step === 'approval'
 }
 
 /** The steps of a key or a file: add one (the list is empty), choose a server (none in force), turn splitting on. */
@@ -95,16 +106,22 @@ export function routingLive(phase: Phase): boolean {
 }
 
 /**
- * Whether the connect screen is due: first run, no exit node, or the Tailscale login is gone while routing is off.
- * For the proxy, after the first run, only an empty list: with servers but none selected the window stays where it is,
- * and the pill («сервер не выбран») and the no_server banner point to «Подключение».
+ * Whether the connect screen is due: first run, no exit node, or the Tailscale login is gone while routing is off (the
+ * node says so, or an enable was refused with not_logged_in: after a logout the backend is only `stopped` once the
+ * setup core has ended). For the proxy, after the first run, only an empty list: with servers but none selected the
+ * window stays where it is, and the pill («сервер не выбран») and the no_server banner point to «Подключение».
  */
 function needsConnect(s: Snapshot, state: HelperState): boolean {
   if (!s.settings.connectedOnce) return true
   if (state.connector === 'proxy') return state.proxy.servers.length === 0
   const { authUrl, backend, selectedExitNode } = state.tailscale
   if (selectedExitNode === null) return true
-  const loginGone = authUrl !== null || backend === 'needs_login' || backend === 'needs_approval' || backend === 'expired'
+  const loginGone =
+    authUrl !== null ||
+    backend === 'needs_login' ||
+    backend === 'needs_approval' ||
+    backend === 'expired' ||
+    state.reason?.code === 'not_logged_in'
   return (state.phase === 'off' || state.phase === 'error') && loginGone
 }
 

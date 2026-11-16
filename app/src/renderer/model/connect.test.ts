@@ -96,6 +96,15 @@ test('screenFor returns to connect after logout and an expired login', () => {
   // while routing is live the board stays (its banner offers «Выключить деление и войти»)
   expect(screenFor(off({ backend: 'expired' }, 'degraded'), 'board')).toBe('board')
   expect(screenFor(off({ backend: 'running' }), 'board')).toBe('board')
+  // after a logout the setup core ends and the backend is only stopped: an enable refused with not_logged_in says it
+  const refused = (phase: HelperState['phase']): Snapshot =>
+    withSettings(
+      snap({ phase, reason: { code: 'not_logged_in', params: {} }, tailscale: { ...t0, backend: 'stopped', exitNodes: [] } }),
+      true
+    )
+  expect(screenFor(refused('error'), 'board')).toBe('connect')
+  expect(screenFor(refused('off'), 'connection')).toBe('connect')
+  expect(screenFor(withSettings(snap({ phase: 'error', reason: { code: 'no_default_route', params: {} } }), true), 'board')).toBe('board')
 })
 
 const A = { id: '100.64.0.2', name: 'node-a', online: true }

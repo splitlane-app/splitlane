@@ -164,6 +164,85 @@ test('«Подключение» opens on the part of the connector in force and
   expect(screen.getByRole('switch', { name: 'Запускать при входе в Windows' })).toBeTruthy()
 })
 
+// a user of the proxy list who has never logged in to Tailscale: the node is stopped, no exit node is known
+const neverLoggedIn = { ...state().tailscale, backend: 'stopped' as const, selectedExitNode: null, exitNodes: [], path: null }
+
+test('«Подключение»: a user of the proxy list logs in to Tailscale there, then chooses an exit node', async () => {
+  const openLogin = vi.fn(async () => true)
+  const { bridge, commands } = fakeBridge({ openLogin })
+  const services = servicesFor(bridge, at(proxyState([A], A.id, [], { phase: 'off', tailscale: neverLoggedIn }), true))
+  services.store.getState().showConnection(true)
+  renderWith(<App />, services)
+  fireEvent.click(tile(/^Tailscale/))
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Подключение')
+  expect(screen.getByText('Откроется страница входа в браузере')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Выйти из Tailscale' })).toBeNull()
+  expect(screen.queryByText('Устройство в сети Tailscale')).toBeNull()
+  expect(screen.queryByRole('radiogroup', { name: 'Exit node' })).toBeNull()
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Войти в Tailscale' }))
+  })
+  expect(commands).toEqual([{ method: 'tailscale.login' }])
+
+  // the setup core gives the link of this login: it opens by itself, once, and again on the button
+  const link = 'https://login.tailscale.com/a/made-up'
+  const waiting = { ...neverLoggedIn, backend: 'needs_login' as const, authUrl: link }
+  act(() => services.store.getState().setSnapshot(at(proxyState([A], A.id, [], { phase: 'off', tailscale: waiting }), true)))
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Подключение')
+  expect(openLogin).toHaveBeenCalledTimes(1)
+  expect(openLogin).toHaveBeenLastCalledWith(link)
+  expect(screen.getByText(/Страница входа открыта в браузере/)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Открыть ссылку снова' }))
+  expect(openLogin).toHaveBeenCalledTimes(2)
+
+  const approval = { ...neverLoggedIn, backend: 'needs_approval' as const }
+  act(() => services.store.getState().setSnapshot(at(proxyState([A], A.id, [], { phase: 'off', tailscale: approval }), true)))
+  expect(screen.getByText(/ждёт одобрения администратором/)).toBeTruthy()
+
+  // logged in: the device, the exit nodes and «Выйти», as for a Tailscale user; choosing a node switches
+  const node = { id: '100.64.0.2', name: 'node-a', online: true }
+  const loggedIn = { ...neverLoggedIn, backend: 'running' as const, exitNodes: [node] }
+  act(() => services.store.getState().setSnapshot(at(proxyState([A], A.id, [], { phase: 'off', tailscale: loggedIn }), true)))
+  expect(screen.queryByRole('button', { name: 'Войти в Tailscale' })).toBeNull()
+  expect(screen.getByText('Устройство в сети Tailscale')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Выйти из Tailscale' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('radio', { name: 'node-a' }))
+  await vi.waitFor(() => expect(commands.at(-1)).toEqual({ method: 'tailscale.setExitNode', id: '100.64.0.2' }))
+})
+
+test('while routing runs on a server the Tailscale login waits for it to be off, on both screens', () => {
+  for (const phase of ['on', 'degraded', 'starting', 'stopping'] as const) {
+    for (const ui of [<ConnectionScreen key="c" />, <ConnectScreen key="w" />]) {
+      const { bridge } = fakeBridge()
+      renderWith(ui, servicesFor(bridge, at(proxyState([A], A.id, [], { phase, tailscale: neverLoggedIn }), true)))
+      fireEvent.click(tile(/^Tailscale/))
+      expect(screen.getByText('Войти в Tailscale можно, когда деление выключено'), phase).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Войти в Tailscale' }), phase).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Выйти из Tailscale' }), phase).toBeNull()
+      cleanup()
+    }
+  }
+  // the same in English
+  setLang('en')
+  const { bridge } = fakeBridge()
+  renderWith(
+    <ConnectionScreen />,
+    servicesFor(bridge, { ...at(proxyState([A], A.id, [], { phase: 'on', tailscale: neverLoggedIn }), true), language: 'en' })
+  )
+  fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Connection methods' })).getByRole('radio', { name: /^Tailscale/ }))
+  expect(screen.getByText('You can log in to Tailscale when split routing is off')).toBeTruthy()
+})
+
+test('a user of the proxy list logged in to Tailscale before sees the exit nodes and «Выйти» while routing runs on a server', () => {
+  const { bridge } = fakeBridge()
+  const known = { ...neverLoggedIn, exitNodes: [{ id: '100.64.0.2', name: 'node-a', online: true }] }
+  renderWith(<ConnectionScreen />, servicesFor(bridge, at(proxyState([A], A.id, [], { phase: 'on', tailscale: known }), true)))
+  fireEvent.click(tile(/^Tailscale/))
+  expect(screen.getByRole('radiogroup', { name: 'Exit node' })).toBeTruthy()
+  expect((screen.getByRole('button', { name: 'Выйти из Tailscale' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.queryByText('Войти в Tailscale можно, когда деление выключено')).toBeNull()
+})
+
 const subItem = (): HTMLElement => screen.getByText('sub.example.com', { selector: 'strong' }).closest('li') as HTMLElement
 
 test('a subscription shows its servers, its last update and its last error', () => {
