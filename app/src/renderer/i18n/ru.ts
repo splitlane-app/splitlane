@@ -201,7 +201,7 @@ export const ru = {
   'reason.other_core': 'уже запущена другая программа на сетевом ядре sing-box',
   'reason.not_logged_in': 'вход в Tailscale не выполнен',
   'reason.no_exit_node': 'exit node не выбран',
-  'reason.no_server': 'сервер не выбран, выберите его в разделе «Подключение»',
+  'reason.no_server': 'сервер не выбран — выберите его в разделе «Подключение»',
   'reason.system_dns_override':
     'Tailscale подменяет DNS для всех имён (переопределение DNS глобальными серверами имён в его консоли), с этим деление не включается',
   'reason.config_invalid': 'настройки ядра не прошли проверку (ошибка SplitLane, сохраните журнал)',
@@ -229,13 +229,13 @@ export const ru = {
   'error.internal': 'Нет связи со служебным процессом или внутренняя ошибка',
   'error.unknown_server': 'Такого сервера или подписки уже нет в списке',
   // the codes of proxy.add and proxy.refresh: they also say why a line of a text was not taken («Строка 3: …»)
-  'error.too_many': 'Слишком много серверов или подписок: можно до 500 серверов и 20 подписок',
+  'error.too_many': 'Слишком много серверов или подписок: можно до {servers} серверов и {subscriptions} подписок',
   'error.empty_subscription': 'В подписке нет ни одного сервера, который SplitLane может использовать',
   'error.fetch_blocked_address': 'Адрес подписки ведёт в местную сеть — такие адреса запрещены',
   'error.fetch_not_https': 'Адрес подписки должен начинаться с https://',
   'error.fetch_too_many_redirects': 'Сервер подписки перенаправляет слишком много раз',
-  'error.fetch_too_large': 'Подписка больше 1 МБ',
-  'error.fetch_timeout': 'Сервер подписки не ответил за 20 секунд',
+  'error.fetch_too_large': 'Подписка больше {mb} МБ',
+  'error.fetch_timeout': 'Сервер подписки не ответил за {seconds} секунд',
   'error.fetch_http_status': 'Сервер подписки ответил ошибкой. Проверьте адрес',
   'error.fetch_failed': 'Не удалось загрузить подписку. Проверьте адрес и подключение к сети',
   'error.unsupported_protocol': 'Этот протокол SplitLane пока не поддерживает',
@@ -245,7 +245,7 @@ export const ru = {
   'error.bad_wireguard': 'Настройки WireGuard повреждены или записаны с ошибкой',
   'error.amneziawg': 'Файлы AmneziaWG пока не поддерживаются',
   'error.plugin': 'Ссылки Shadowsocks с плагином пока не поддерживаются',
-  'error.too_long': 'Текст или файл больше 64 КБ',
+  'error.too_long': 'Текст или файл больше {kb} КБ',
 
   // rule rejection reasons (error.rules[].reason)
   'reject.too_broad': 'Слишком много: корень диска, папка Windows или Program Files целиком',
@@ -349,6 +349,8 @@ export const ru = {
   'proxy.existing': 'Уже были в списке: {n}',
   'proxy.line': 'Строка {n}: {reason}',
   'proxy.rejectedMore': 'И ещё отклонено строк: {n}',
+  // the notice of an answer that came after its screen was left: the numbers only, never a line
+  'proxy.rejectedCount': 'Отклонено строк: {n}',
   'proxy.unknownLine': 'Строка не распознана',
   'proxy.servers': 'Серверы',
   // where a server came from; a server of a subscription shows the name of the subscription

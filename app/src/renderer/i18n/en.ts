@@ -233,13 +233,13 @@ export const en: Record<Key, string> = {
   'error.internal': 'No connection to the service, or an internal error',
   'error.unknown_server': 'This server or subscription is no longer in the list',
   // the codes of proxy.add and proxy.refresh: they also say why a line of a text was not taken ("Line 3: …")
-  'error.too_many': 'Too many servers or subscriptions: the limit is 500 servers and 20 subscriptions',
+  'error.too_many': 'Too many servers or subscriptions: the limit is {servers} servers and {subscriptions} subscriptions',
   'error.empty_subscription': 'The subscription has no servers that SplitLane can use',
   'error.fetch_blocked_address': "The subscription address points to a local network, and such addresses aren't allowed",
   'error.fetch_not_https': 'The subscription address must start with https://',
   'error.fetch_too_many_redirects': 'The subscription server redirects too many times',
-  'error.fetch_too_large': 'The subscription is larger than 1 MB',
-  'error.fetch_timeout': "The subscription server didn't answer within 20 seconds",
+  'error.fetch_too_large': 'The subscription is larger than {mb} MB',
+  'error.fetch_timeout': "The subscription server didn't answer within {seconds} seconds",
   'error.fetch_http_status': 'The subscription server answered with an error. Check the address',
   'error.fetch_failed': "Couldn't download the subscription. Check the address and your network connection",
   'error.unsupported_protocol': "SplitLane doesn't support this protocol yet",
@@ -249,7 +249,7 @@ export const en: Record<Key, string> = {
   'error.bad_wireguard': 'The WireGuard configuration is damaged or has a mistake',
   'error.amneziawg': "AmneziaWG files aren't supported yet",
   'error.plugin': "Shadowsocks links with a plugin aren't supported yet",
-  'error.too_long': 'The text or file is larger than 64 KB',
+  'error.too_long': 'The text or file is larger than {kb} KB',
 
   // rule rejection reasons (error.rules[].reason)
   'reject.too_broad': 'Too broad: a drive root, the Windows folder or all of Program Files',
@@ -355,6 +355,8 @@ export const en: Record<Key, string> = {
   'proxy.existing': 'Already in the list: {n}',
   'proxy.line': 'Line {n}: {reason}',
   'proxy.rejectedMore': 'More lines rejected: {n}',
+  // the notice of an answer that came after its screen was left: the numbers only, never a line
+  'proxy.rejectedCount': 'Lines rejected: {n}',
   'proxy.unknownLine': 'The line was not recognized',
   'proxy.servers': 'Servers',
   // where a server came from; a server of a subscription shows the name of the subscription

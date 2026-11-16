@@ -22,7 +22,10 @@ function setup(s: HelperState, removable = false, answer?: Parameters<typeof fak
 
 test('each server shows its name, protocol and source; the one in force is checked', () => {
   setup(proxyState([A, B, C], B.id, [SUB], { phase: 'off' }))
-  const group = screen.getByRole('radiogroup', { name: 'Серверы' })
+  // a fieldset named by its legend: the native radios group by their name
+  const group = screen.getByRole('group', { name: 'Серверы' })
+  expect(group.tagName).toBe('FIELDSET')
+  expect(screen.queryByRole('radiogroup')).toBeNull()
   const labels = within(group)
     .getAllByRole('radio')
     .map((r) => r.closest('label')?.textContent)
@@ -51,7 +54,7 @@ test('off routing: a choice is sent at once; the one in force sends nothing', as
 
 test('live routing: quick changes send only the last one after the pause, and the note says it restarts', async () => {
   const { commands } = setup(proxyState([A, B, C], A.id, [], { phase: 'on' }))
-  const group = screen.getByRole('radiogroup')
+  const group = screen.getByRole('group', { name: 'Серверы' })
   const note = screen.getByText('Смена сервера ненадолго перезапускает деление')
   expect(group.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   vi.useFakeTimers()

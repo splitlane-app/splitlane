@@ -2,7 +2,7 @@ import { create, type StoreApi, type UseBoundStore } from 'zustand'
 import type { CommandResult, Snapshot, SplitLaneBridge } from '../../shared/ipc'
 import type { Activity, HelperError, HelperState, Phase } from '../../shared/protocol'
 import type { Key } from '../i18n/ru'
-import { isKey, setLang, t } from '../i18n/t'
+import { isKey, LIMIT_PARAMS, setLang, t } from '../i18n/t'
 import { ruleName } from '../model/board'
 import { layoutOf, type Layout } from '../model/layout'
 import { LayoutQueue, type LayoutOp } from './layoutQueue'
@@ -67,9 +67,12 @@ export interface AppStoreDeps {
   newId?: () => string
 }
 
-/** The text of a code from the helper; an unknown code (a newer helper) gets the fallback. */
+/**
+ * The text of a code from the helper, with the numbers of the limits; an unknown code (a newer helper) gets the
+ * fallback.
+ */
 function text(key: string, fallback: Key): string {
-  return isKey(key) ? t(key) : t(fallback)
+  return isKey(key) ? t(key, LIMIT_PARAMS) : t(fallback)
 }
 
 /** The notice of a failed command: the text of its error code. */

@@ -202,6 +202,11 @@ export interface Activity {
   detail?: ActivityDetail
 }
 
+/**
+ * The helper's limits. The proxy ones mirror helper/internal/store/servers.go (MaxServers, MaxSubscriptions) and
+ * helper/internal/connector/model.go (MaxTextLen, MaxSubscriptionLen) and fetch.go (FetchTimeout); the texts that
+ * name them take the numbers from here.
+ */
 export const LIMITS = {
   maxApps: 500,
   maxNameBytes: 256,
@@ -209,6 +214,8 @@ export const LIMITS = {
   maxProxyTextBytes: 64 * 1024,
   maxServers: 500,
   maxSubscriptions: 20,
+  maxSubscriptionBytes: 1024 * 1024,
+  fetchTimeoutSeconds: 20,
   maxRejections: 50
 } as const
 

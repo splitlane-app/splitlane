@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { ProxyOutcome, Snapshot } from '../../shared/ipc'
 import type { ProxyAddResult } from '../../shared/protocol'
+import { DEFAULT_SETTINGS } from '../../shared/settings'
 import { setLang } from '../i18n/t'
 import { fakeBridge, proxyServer, proxyState, renderWith, servicesFor, snap } from '../testing'
 import { ProxyPanel } from './ProxyPanel'
@@ -44,7 +45,8 @@ const field = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: 'С
 test('the key field: Add waits for a text, says it is adding, then shows the summary and clears the field', async () => {
   const d = deferred()
   const proxyAdd = vi.fn((_text: string) => d.call())
-  const { bridge } = fakeBridge({ proxyAdd })
+  const setSettings = vi.fn(async () => DEFAULT_SETTINGS)
+  const { bridge, commands } = fakeBridge({ proxyAdd, setSettings })
   const services = servicesFor(bridge, withState())
   renderWith(<ProxyPanel mode="key" />, services)
 
@@ -89,6 +91,96 @@ test('the key field: Add waits for a text, says it is adding, then shows the sum
   expect(field().readOnly).toBe(false)
   expect(add().textContent).toBe('Добавить')
   expect(services.store.getState().notice).toBeNull()
+  // the text went only to proxyAdd: no setting, no command and no notice ever carried any of it
+  expect(proxyAdd).toHaveBeenCalledTimes(1)
+  expect(JSON.stringify(setSettings.mock.calls)).not.toContain('made-up')
+  expect(JSON.stringify(commands)).not.toContain('made-up')
+  expect(JSON.stringify(services.store.getState())).not.toContain('made-up')
+})
+
+test('an answer that comes after the panel went is a notice with the numbers only', async () => {
+  const d = deferred()
+  const { bridge } = fakeBridge({ proxyAdd: () => d.call() })
+  const services = servicesFor(bridge, withState())
+  const view = renderWith(<ProxyPanel mode="key" />, services)
+  fireEvent.change(field(), { target: { value: TEXT } })
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+  view.unmount()
+  await d.answer(
+    result({ added: [A.id, B.id], existing: 1, rejected: [{ line: 3, code: 'unsupported_transport' }], rejectedMore: 2 })
+  )
+  const notice = services.store.getState().notice
+  expect(notice).toBe('Добавлено серверов: 2 · Отклонено строк: 3')
+  expect(notice).not.toMatch(/made-up|Строка|транспорт/)
+
+  // a failure: its text
+  const failed = deferred()
+  const again = servicesFor(fakeBridge({ proxyAddFile: () => failed.call() }).bridge, withState())
+  const fileView = renderWith(<ProxyPanel mode="file" />, again)
+  fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл .conf…' }))
+  fileView.unmount()
+  await failed.answer({ kind: 'failed', error: { code: 'internal', message: 'file unreadable' } })
+  expect(again.store.getState().notice).toBe('Нет связи со служебным процессом или внутренняя ошибка')
+
+  // a closed dialog: nothing
+  const closed = deferred()
+  const third = servicesFor(fakeBridge({ proxyAddFile: () => closed.call() }).bridge, withState())
+  const thirdView = renderWith(<ProxyPanel mode="file" />, third)
+  fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл .conf…' }))
+  thirdView.unmount()
+  await closed.answer({ kind: 'cancelled' })
+  expect(third.store.getState().notice).toBeNull()
+})
+
+test('focus lost while it ran goes back to the field or the file button; focus moved elsewhere stays', async () => {
+  const d = deferred()
+  const { bridge } = fakeBridge({ proxyAdd: () => d.call(), proxyAddFile: () => d.call() })
+  const services = servicesFor(bridge, withState())
+  const view = renderWith(<ProxyPanel mode="key" />, services)
+  fireEvent.change(field(), { target: { value: 'not a link' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+  // the button is disabled while it runs, and the browser drops its focus: the page has it
+  expect(document.activeElement).toBe(document.body)
+  await d.answer(result({ rejected: [{ line: 1, code: 'bad_link' }] }))
+  expect(document.activeElement).toBe(field())
+
+  // the user went on to something else meanwhile: it keeps the focus
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+  const elsewhere = document.createElement('button')
+  document.body.append(elsewhere)
+  elsewhere.focus()
+  await d.answer(result({ rejected: [{ line: 1, code: 'bad_link' }] }))
+  expect(document.activeElement).toBe(elsewhere)
+  elsewhere.remove()
+  view.unmount()
+
+  renderWith(<ProxyPanel mode="file" />, services)
+  const choose = screen.getByRole('button', { name: 'Выбрать файл .conf…' })
+  fireEvent.click(choose)
+  expect(document.activeElement).toBe(document.body)
+  await d.answer({ kind: 'cancelled' })
+  expect(document.activeElement).toBe(choose)
+})
+
+test('busy for links or a file is the general text; for a subscription address, another download', async () => {
+  const busy: ProxyOutcome = { kind: 'failed', error: { code: 'busy', message: 'busy' } }
+  const { bridge } = fakeBridge({ proxyAdd: async () => busy, proxyAddFile: async () => busy })
+  renderWith(<ProxyPanel mode="key" />, servicesFor(bridge, withState()))
+  const send = async (text: string): Promise<string | null> => {
+    fireEvent.change(field(), { target: { value: text } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+    })
+    return screen.getByRole('alert').textContent
+  }
+  expect(await send(TEXT)).toBe('Служебный процесс занят. Повторите через несколько секунд')
+  expect(await send('https://sub.example.com/list')).toBe('Уже идёт загрузка подписки')
+  cleanup()
+  renderWith(<ProxyPanel mode="file" />, servicesFor(bridge, withState()))
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать файл .conf…' }))
+  })
+  expect(screen.getByRole('alert').textContent).toBe('Служебный процесс занят. Повторите через несколько секунд')
 })
 
 test('a text with nothing taken stays in the field, and an unknown code reads as a line not recognised', async () => {
@@ -170,9 +262,9 @@ test('the server list is under the panel once there are servers', () => {
   const { bridge } = fakeBridge()
   const services = servicesFor(bridge, withState())
   renderWith(<ProxyPanel mode="key" />, services)
-  expect(screen.queryByRole('radiogroup')).toBeNull()
+  expect(screen.queryByRole('group', { name: 'Серверы' })).toBeNull()
   act(() => services.store.getState().setSnapshot(withState(proxyState([A, B], A.id, [], { phase: 'off' }))))
-  const group = screen.getByRole('radiogroup', { name: 'Серверы' })
+  const group = screen.getByRole('group', { name: 'Серверы' })
   expect(within(group).getAllByRole('radio')).toHaveLength(2)
   // no remove buttons unless asked for
   expect(screen.queryByRole('button', { name: /^Удалить/ })).toBeNull()

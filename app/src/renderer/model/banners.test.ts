@@ -108,3 +108,20 @@ describe('bannerFor', () => {
     expect(bannerFor(ready, state('on'))).toBeNull()
   })
 })
+
+describe('bannerFor and the name of the server', () => {
+  it('names the exit node remembered while the list is empty, as the lane does', () => {
+    const s = state('degraded', {}, { code: 'vpn_unreachable', params: {} })
+    s.tailscale.exitNodes = []
+    expect(bannerFor(ready, s)?.title).toBe(t('banner.degradedUnnamed'))
+    expect(bannerFor(ready, s, { id: 'n1', name: 'node-a' })?.title).toBe(t('banner.degraded', { name: 'node-a' }))
+    // a name remembered for another node is not used
+    expect(bannerFor(ready, s, { id: 'n9', name: 'other' })?.title).toBe(t('banner.degradedUnnamed'))
+  })
+
+  it('says how to leave no_server', () => {
+    expect(bannerFor(ready, state('error', {}, { code: 'no_server', params: {} }))?.title).toBe(
+      'Не удалось включить: сервер не выбран — выберите его в разделе «Подключение»'
+    )
+  })
+})

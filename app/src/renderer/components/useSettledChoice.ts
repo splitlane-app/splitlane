@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useMounted } from './useMounted'
 
 /** How long a live choice waits for the next one before it is sent. */
 export const CHOICE_SETTLE_MS = 500
@@ -18,7 +19,7 @@ export function useSettledChoice(
   const [pending, setPending] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const waiting = useRef<string | null>(null)
-  const mounted = useRef(true)
+  const mounted = useMounted()
   const sendNow = (id: string): void => {
     const answered = (): void => {
       if (mounted.current) setPending((p) => (p === id ? null : p))
@@ -27,16 +28,16 @@ export function useSettledChoice(
   }
   const sendRef = useRef(sendNow)
   sendRef.current = sendNow
-  useEffect(() => {
-    mounted.current = true
-    return () => {
-      mounted.current = false
+  // leaving the screen applies the choice still waiting
+  useEffect(
+    () => () => {
       if (timer.current !== null && waiting.current !== null) {
         clearTimeout(timer.current)
         sendRef.current(waiting.current)
       }
-    }
-  }, [])
+    },
+    []
+  )
   const choose = (id: string): void => {
     if (timer.current !== null) clearTimeout(timer.current)
     timer.current = null

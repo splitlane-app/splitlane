@@ -118,3 +118,15 @@ test('a failed banner command shows the notice', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }))
   expect(screen.queryByText('Служебный процесс занят. Повторите через несколько секунд')).toBeNull()
 })
+
+test('the degraded banner names the same server as the lane: the exit node remembered while the list is empty', () => {
+  const base = snap({ phase: 'degraded', reason: { code: 'vpn_unreachable', params: {} } })
+  const st = base.state!
+  const s: Snapshot = {
+    ...base,
+    state: { ...st, tailscale: { ...st.tailscale, exitNodes: [] } },
+    settings: { ...base.settings, lastExitNode: { id: '100.64.0.2', name: 'node-a' } }
+  }
+  renderWith(<Banner />, servicesFor(fakeBridge().bridge, s))
+  expect(screen.getByText(/^VPN-сервер node-a недоступен/)).toBeTruthy()
+})

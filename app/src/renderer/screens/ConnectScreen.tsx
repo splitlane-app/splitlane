@@ -8,7 +8,6 @@ import { LanguageSelect } from '../components/LanguageSelect'
 import { MethodTiles } from '../components/MethodTiles'
 import { ProxyPanel } from '../components/ProxyPanel'
 import { ScreenFrame } from '../components/ScreenFrame'
-import { Subscriptions } from '../components/Subscriptions'
 import { Toggle } from '../components/Toggle'
 import { UpdateBanner } from '../components/UpdateBanner'
 import { useUpdateActions } from '../components/useUpdateActions'
@@ -286,10 +285,7 @@ export function ConnectionScreen(): React.JSX.Element | null {
           {live && <p className={styles.lead}>{t('connection.logoutBlocked')}</p>}
         </>
       ) : (
-        <>
-          <ProxyPanel key={method} mode={method} removable />
-          <Subscriptions state={state} />
-        </>
+        <ProxyPanel key={method} mode={method} manage />
       )}
       <div className={styles.section} role="group" aria-label={t('connection.settings')}>
         <Toggle

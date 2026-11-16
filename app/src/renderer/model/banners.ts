@@ -1,4 +1,5 @@
 import type { HelperState } from '../../shared/protocol'
+import type { LastExitNode } from '../../shared/settings'
 import type { LinkStatus } from '../../shared/status'
 import { t } from '../i18n/t'
 import { laneServerName } from './connect'
@@ -26,7 +27,8 @@ export interface Banner {
   actions: BannerAction[]
 }
 
-export function bannerFor(link: LinkStatus, state: HelperState | null): Banner | null {
+/** The banner of the link and the state; `last` is the last name seen for the exit node, as the lane uses it. */
+export function bannerFor(link: LinkStatus, state: HelperState | null, last: LastExitNode | null = null): Banner | null {
   if (link.kind === 'restarting') return { tone: 'warn', title: t('banner.restarting'), actions: [] }
   if (link.kind === 'unresponsive') return { tone: 'error', title: t('banner.unresponsive'), actions: ['retryLink'] }
   if (link.kind !== 'ready' || state === null) return null
@@ -47,7 +49,7 @@ export function bannerFor(link: LinkStatus, state: HelperState | null): Banner |
         return { tone: 'warn', title: t('banner.loginAgain'), actions: ['loginAgain'] }
       }
       // the server of either connector, by name when the window knows it
-      const name = laneServerName(state, null)
+      const name = laneServerName(state, last)
       return {
         tone: 'warn',
         title: name === null ? t('banner.degradedUnnamed') : t('banner.degraded', { name }),

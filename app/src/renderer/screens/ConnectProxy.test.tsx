@@ -5,6 +5,7 @@ import type { HelperState, Subscription } from '../../shared/protocol'
 import { DEFAULT_SETTINGS } from '../../shared/settings'
 import { setLang } from '../i18n/t'
 import { fakeBridge, proxyServer, proxyState, renderWith, servicesFor, snap, state } from '../testing'
+import { App } from '../App'
 import { ConnectionScreen, ConnectScreen } from './ConnectScreen'
 
 afterEach(() => {
@@ -144,7 +145,7 @@ test('«Подключение» opens on the part of the connector in force and
   renderWith(<ConnectionScreen />, servicesFor(bridge, at(proxyState([A, B], A.id, [SUB], { phase: 'off' }), true)))
   expect(checkedTile()).toBe('Ключ или подписка')
   expect(screen.getByRole('textbox', { name: 'Ссылки или адрес подписки' })).toBeTruthy()
-  expect(screen.getByRole('radiogroup', { name: 'Серверы' })).toBeTruthy()
+  expect(screen.getByRole('group', { name: 'Серверы' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Удалить edge-a.example.com' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'Подписки' })).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Выйти из Tailscale' })).toBeNull()
@@ -298,4 +299,155 @@ test('«Подключение» in English', () => {
   expect(screen.getByText('You can remove the selected server when split routing is off')).toBeTruthy()
   expect(within(subItem()).getByText('Servers: 2')).toBeTruthy()
   expect(within(subItem()).getByRole('button', { name: 'Refresh' })).toBeTruthy()
+})
+
+test('a removed server hands the focus to the next row, else the legend, else the add field', async () => {
+  const C = proxyServer('00000000000000c0', 'home', { protocol: 'wireguard', source: 'file' })
+  const { bridge, commands } = fakeBridge()
+  const services = servicesFor(bridge, at(proxyState([A, B, C], null, [SUB], { phase: 'off' }), true))
+  renderWith(<ConnectionScreen />, services)
+  const removeOf = (name: string): HTMLElement => screen.getByRole('button', { name: `Удалить ${name}` })
+  const press = async (name: string): Promise<void> => {
+    const b = removeOf(name)
+    b.focus()
+    await act(async () => {
+      fireEvent.click(b)
+    })
+  }
+  const show = (servers: (typeof A)[]): void =>
+    act(() => services.store.getState().setSnapshot(at(proxyState(servers, null, [SUB], { phase: 'off' }), true)))
+
+  await press('edge-a.example.com')
+  expect(commands.at(-1)).toEqual({ method: 'proxy.remove', id: A.id })
+  // the button keeps the focus until its row goes
+  expect(document.activeElement).toBe(removeOf('edge-a.example.com'))
+  show([B, C])
+  expect(document.activeElement).toBe(removeOf('edge-b.example.com'))
+
+  await press('home')
+  show([B])
+  expect(document.activeElement?.tagName).toBe('LEGEND')
+  expect(document.activeElement?.textContent).toBe('Серверы')
+
+  await press('edge-b.example.com')
+  show([])
+  expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Ссылки или адрес подписки' }))
+})
+
+test('a removed subscription hands the focus to the next one, else the heading, else the add field', async () => {
+  const S2: Subscription = { ...SUB, id: 'sub-ffffffffffffffff', name: 'other.example.com' }
+  const S3: Subscription = { ...SUB, id: 'sub-eeeeeeeeeeeeeeee', name: 'third.example.com' }
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, at(proxyState([A], null, [SUB, S2, S3], { phase: 'off' }), true))
+  renderWith(<ConnectionScreen />, services)
+  const item = (name: string): HTMLElement => screen.getByText(name, { selector: 'strong' }).closest('li') as HTMLElement
+  const removeSub = async (name: string): Promise<void> => {
+    fireEvent.click(within(item(name)).getByRole('button', { name: 'Удалить' }))
+    await act(async () => {
+      fireEvent.click(within(item(name)).getByRole('button', { name: 'Удалить' }))
+    })
+  }
+  const show = (subs: Subscription[]): void =>
+    act(() => services.store.getState().setSnapshot(at(proxyState([A], null, subs, { phase: 'off' }), true)))
+
+  await removeSub('sub.example.com')
+  show([S2, S3])
+  expect(document.activeElement).toBe(within(item('other.example.com')).getByRole('button', { name: 'Обновить' }))
+
+  await removeSub('third.example.com')
+  show([S2])
+  expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Подписки' }))
+
+  await removeSub('other.example.com')
+  show([])
+  expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Ссылки или адрес подписки' }))
+})
+
+test('after a refresh the focus goes back to «Обновить»; the kept error is not said twice', async () => {
+  let answer: (o: ProxyOutcome) => void = () => {}
+  const { bridge } = fakeBridge({ proxyRefresh: () => new Promise<ProxyOutcome>((r) => (answer = r)) })
+  const failed = { ...SUB, error: 'fetch_timeout' }
+  renderWith(<ConnectionScreen />, servicesFor(bridge, at(proxyState([A, B], A.id, [failed], { phase: 'off' }), true)))
+  const refresh = (): HTMLElement => within(subItem()).getByRole('button', { name: /^(Обновить|Обновляю…)$/ })
+  const kept = 'Последнее обновление не удалось: Сервер подписки не ответил за 20 секунд'
+  expect(within(subItem()).getByText(kept)).toBeTruthy()
+
+  fireEvent.click(refresh())
+  expect(document.activeElement).toBe(document.body)
+  await act(async () => {
+    answer({ kind: 'failed', error: { code: 'fetch_timeout', message: 'timeout' } })
+  })
+  expect(document.activeElement).toBe(refresh())
+  expect(within(subItem()).getByRole('alert').textContent).toBe('Сервер подписки не ответил за 20 секунд')
+  expect(within(subItem()).queryByText(kept)).toBeNull()
+
+  // another reason now: both lines, each its own
+  fireEvent.click(refresh())
+  await act(async () => {
+    answer({ kind: 'failed', error: { code: 'fetch_http_status', message: 'HTTP 500' } })
+  })
+  expect(within(subItem()).getByRole('alert').textContent).toBe('Сервер подписки ответил ошибкой. Проверьте адрес')
+  expect(within(subItem()).getByText(kept)).toBeTruthy()
+})
+
+test('busy while routing stops on the subscription of the selected server is the general text', async () => {
+  const busy: ProxyOutcome = { kind: 'failed', error: { code: 'busy', message: 'busy' } }
+  const { bridge } = fakeBridge({ proxyRefresh: async () => busy })
+  const S2: Subscription = { ...SUB, id: 'sub-ffffffffffffffff', name: 'other.example.com' }
+  renderWith(<ConnectionScreen />, servicesFor(bridge, at(proxyState([A, B], B.id, [SUB, S2], { phase: 'stopping' }), true)))
+  const item = (name: string): HTMLElement => screen.getByText(name, { selector: 'strong' }).closest('li') as HTMLElement
+  await act(async () => {
+    fireEvent.click(within(item('sub.example.com')).getByRole('button', { name: 'Обновить' }))
+  })
+  expect(within(item('sub.example.com')).getByRole('alert').textContent).toBe(
+    'Служебный процесс занят. Повторите через несколько секунд'
+  )
+  // another subscription: the helper is busy with a download
+  await act(async () => {
+    fireEvent.click(within(item('other.example.com')).getByRole('button', { name: 'Обновить' }))
+  })
+  expect(within(item('other.example.com')).getByRole('alert').textContent).toBe('Уже идёт загрузка подписки')
+})
+
+test('after the first run «Подключение» stays when the selected server goes, by a removal or a refresh', () => {
+  const { bridge } = fakeBridge()
+  const services = servicesFor(bridge, at(proxyState([A, B], A.id, [SUB], { phase: 'off' }), true))
+  services.store.getState().showConnection(true)
+  renderWith(<App />, services)
+  const title = (): string | null => screen.getByRole('heading', { level: 1 }).textContent
+  expect(title()).toBe('Подключение')
+  // the selected server removed: no selection, the list still has a server
+  act(() => services.store.getState().setSnapshot(at(proxyState([B], null, [SUB], { phase: 'off' }), true)))
+  expect(title()).toBe('Подключение')
+  expect(screen.getByRole('group', { name: 'Серверы' })).toBeTruthy()
+  // a refresh replaced the servers of the subscription, the selected one with them
+  const C = proxyServer('00000000000000c0', 'edge-c.example.com', { source: SUB.id })
+  act(() => services.store.getState().setSnapshot(at(proxyState([C], null, [SUB], { phase: 'off' }), true)))
+  expect(title()).toBe('Подключение')
+  // the board says what is missing
+  act(() => services.store.getState().showConnection(false))
+  expect(screen.getByRole('button', { name: 'сервер не выбран' })).toBeTruthy()
+  // no server at all: the connect screen
+  act(() => services.store.getState().setSnapshot(at(proxyState([], null, [], { phase: 'off' }), true)))
+  expect(title()).toBe('Подключите VPN')
+})
+
+test('an add answered after the connect screen went is told by a notice with the numbers', async () => {
+  let answer: (o: ProxyOutcome) => void = () => {}
+  const { bridge } = fakeBridge({ proxyAdd: () => new Promise<ProxyOutcome>((r) => (answer = r)) })
+  const services = servicesFor(bridge, at(proxyState([], null, [], { phase: 'off' }), true))
+  renderWith(<App />, services)
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Подключите VPN')
+  fireEvent.change(screen.getByRole('textbox', { name: 'Ссылки или адрес подписки' }), {
+    target: { value: 'vless://00000000-0000-4000-8000-000000000001@edge-a.example.com:443#made-up' }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить' }))
+  // the state of the add comes before its answer: the server is selected and the board takes over
+  act(() => services.store.getState().setSnapshot(at(proxyState([A], A.id, [], { phase: 'off' }), true)))
+  expect(screen.getByRole('region', { name: 'Через VPN' })).toBeTruthy()
+  await act(async () => {
+    answer({ kind: 'done', result: { added: [A.id], existing: 0, rejected: [], rejectedMore: 0 } })
+  })
+  expect(services.store.getState().notice).toBe('Добавлено серверов: 1')
+  expect(screen.getByText('Добавлено серверов: 1')).toBeTruthy()
 })

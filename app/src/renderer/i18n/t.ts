@@ -1,4 +1,5 @@
 import type { Lang } from '../../shared/i18n'
+import { LIMITS } from '../../shared/protocol'
 import { en } from './en'
 import { ru, type Key } from './ru'
 
@@ -19,6 +20,18 @@ export function currentLang(): Lang {
 export function isKey(key: string): key is Key {
   return Object.hasOwn(ru, key)
 }
+
+/**
+ * The numbers the texts of the helper's limits name (`error.too_many`, `error.too_long`, …), from the shared limits;
+ * every text of a code gets them, the ones without such a placeholder ignore them.
+ */
+export const LIMIT_PARAMS = {
+  servers: LIMITS.maxServers,
+  subscriptions: LIMITS.maxSubscriptions,
+  kb: LIMITS.maxProxyTextBytes / 1024,
+  mb: LIMITS.maxSubscriptionBytes / (1024 * 1024),
+  seconds: LIMITS.fetchTimeoutSeconds
+} as const
 
 /** Looks a text of the current language up and fills `{name}` placeholders; a missing parameter is a programming error. */
 export function t(key: Key, params?: Record<string, string | number>): string {

@@ -95,12 +95,13 @@ export function routingLive(phase: Phase): boolean {
 }
 
 /**
- * Whether the connect screen is due: first run, no exit node (no server for the proxy), or the Tailscale login is
- * gone while routing is off.
+ * Whether the connect screen is due: first run, no exit node, or the Tailscale login is gone while routing is off.
+ * For the proxy, after the first run, only an empty list: with servers but none selected the window stays where it is,
+ * and the pill («сервер не выбран») and the no_server banner point to «Подключение».
  */
 function needsConnect(s: Snapshot, state: HelperState): boolean {
   if (!s.settings.connectedOnce) return true
-  if (state.connector === 'proxy') return selectedServer(state) === null
+  if (state.connector === 'proxy') return state.proxy.servers.length === 0
   const { authUrl, backend, selectedExitNode } = state.tailscale
   if (selectedExitNode === null) return true
   const loginGone = authUrl !== null || backend === 'needs_login' || backend === 'needs_approval' || backend === 'expired'

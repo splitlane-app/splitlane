@@ -58,10 +58,11 @@ export function Banner({ withoutOff = false }: { withoutOff?: boolean }): React.
   const services = useServices()
   const link = useApp((s) => s.snapshot?.link ?? null)
   const state = useApp((s) => s.snapshot?.state ?? null)
+  const lastExitNode = useApp((s) => s.snapshot?.settings.lastExitNode ?? null)
   const [busy, setBusy] = useState<BannerAction | null>(null)
   if (link === null) return null
   if (withoutOff && link.kind === 'ready' && state?.phase === 'off') return null
-  const banner = bannerFor(link, state)
+  const banner = bannerFor(link, state, lastExitNode)
   if (banner === null) return null
 
   const run = async (action: BannerAction): Promise<void> => {

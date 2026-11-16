@@ -55,11 +55,15 @@ test('tailscale connectStep is unchanged and never says server', () => {
 })
 
 test('screenFor with the proxy connector', () => {
-  // first run: the connect screen even with a server selected
+  // first run: the connect screen even with a server selected, and without one
   expect(screenFor(withSettings(proxyState([A], A.id), false), 'board')).toBe('connect')
-  // no server selected, or the selected one is gone from the list
-  expect(screenFor(withSettings(proxyState([A], null), true), 'board')).toBe('connect')
-  expect(screenFor(withSettings(proxyState([B], A.id), true), 'connection')).toBe('connect')
+  expect(screenFor(withSettings(proxyState([A], null), false), 'board')).toBe('connect')
+  // after it: only an empty list sends to the connect screen
+  expect(screenFor(withSettings(proxyState([], null), true), 'board')).toBe('connect')
+  expect(screenFor(withSettings(proxyState([], A.id), true), 'connection')).toBe('connect')
+  // servers but none selected, or the selected one gone: the window stays where it is (the pill and the banner say so)
+  expect(screenFor(withSettings(proxyState([A], null), true), 'board')).toBe('board')
+  expect(screenFor(withSettings(proxyState([B], A.id), true), 'connection')).toBe('connection')
   // a selected server after connectedOnce: the board, whatever the phase and the Tailscale login
   expect(screenFor(withSettings(proxyState([A], A.id), true), 'board')).toBe('board')
   expect(screenFor(withSettings(proxyState([A], A.id), true), 'connection')).toBe('connection')
