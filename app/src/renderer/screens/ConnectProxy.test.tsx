@@ -35,9 +35,9 @@ const currentStep = (): string | null | undefined =>
 test('the tiles are one radio group: the arrows, Home and End choose and move the focus; Tab enters on the chosen one', () => {
   const { bridge } = fakeBridge()
   renderWith(<ConnectScreen />, servicesFor(bridge, at(firstRun())))
-  const [ts, key, file] = within(screen.getByRole('radiogroup', { name: 'Способы подключения' })).getAllByRole('radio')
+  const [ts, key, file, vps] = within(screen.getByRole('radiogroup', { name: 'Способы подключения' })).getAllByRole('radio')
   expect(checkedTile()).toMatch(/^Tailscale/)
-  expect([ts, key, file].map((r) => r!.tabIndex)).toEqual([0, -1, -1])
+  expect([ts, key, file, vps].map((r) => r!.tabIndex)).toEqual([0, -1, -1, -1])
   // the notes say what each tile is; «скоро» is gone
   expect(screen.queryByText('скоро')).toBeNull()
   expect(key!.getAttribute('aria-describedby')).not.toBeNull()
@@ -46,21 +46,25 @@ test('the tiles are one radio group: the arrows, Home and End choose and move th
   fireEvent.keyDown(ts!, { key: 'ArrowRight' })
   expect(checkedTile()).toMatch(/^Ключ или подписка/)
   expect(document.activeElement).toBe(key)
-  expect([ts, key, file].map((r) => r!.tabIndex)).toEqual([-1, 0, -1])
+  expect([ts, key, file, vps].map((r) => r!.tabIndex)).toEqual([-1, 0, -1, -1])
   expect(steps()).toEqual(['1Добавьте ключ или подписку', '2Выберите сервер', '3Включите деление'])
 
   fireEvent.keyDown(key!, { key: 'ArrowDown' })
   expect(checkedTile()).toMatch(/^Файл настроек/)
   expect(steps()[0]).toBe('1Выберите файл настроек')
   fireEvent.keyDown(file!, { key: 'ArrowRight' })
+  expect(checkedTile()).toMatch(/^Свой VPS/)
+  fireEvent.keyDown(vps!, { key: 'ArrowRight' })
   expect(checkedTile()).toMatch(/^Tailscale/)
   expect(document.activeElement).toBe(ts)
   fireEvent.keyDown(ts!, { key: 'ArrowLeft' })
-  expect(checkedTile()).toMatch(/^Файл настроек/)
-  fireEvent.keyDown(file!, { key: 'Home' })
+  expect(checkedTile()).toMatch(/^Свой VPS/)
+  fireEvent.keyDown(vps!, { key: 'Home' })
   expect(checkedTile()).toMatch(/^Tailscale/)
   expect(steps()).toEqual(['1Войдите в Tailscale', '2Выберите exit node', '3Включите деление'])
   fireEvent.keyDown(ts!, { key: 'End' })
+  expect(checkedTile()).toMatch(/^Свой VPS/)
+  fireEvent.keyDown(vps!, { key: 'ArrowUp' })
   expect(checkedTile()).toMatch(/^Файл настроек/)
   fireEvent.click(tile(/Ключ или подписка/))
   expect(checkedTile()).toMatch(/^Ключ или подписка/)
@@ -387,7 +391,8 @@ test('«Подключение» in English', () => {
   expect(within(screen.getByRole('radiogroup', { name: 'Connection methods' })).getAllByRole('radio').map((r) => r.textContent)).toEqual([
     'Tailscale',
     'Key or subscription',
-    'Configuration file'
+    'Configuration file',
+    'Your own VPS'
   ])
   expect(screen.getByRole('radio', { name: /edge-b\.example\.comTrojan · sub\.example\.com/ })).toBeTruthy()
   expect(screen.getByText('Changing the server briefly restarts split routing')).toBeTruthy()

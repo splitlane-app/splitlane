@@ -8,7 +8,7 @@ This policy covers SplitLane 0.3.0 and later versions until it is changed. Chang
 
 ### In short
 
-SplitLane has no telemetry, no accounts of its own and no servers of its own. It doesn't collect your data and has nowhere to send it. The only requests that leave your PC are the ones described below, and they go to GitHub, Tailscale, the services named here and the VPN servers and subscription addresses you add.
+SplitLane has no telemetry, no accounts of its own and no servers of its own. It doesn't collect your data and has nowhere to send it. The only requests that leave your PC are the ones described below, and they go to GitHub, Tailscale, the services named here, the VPN servers and subscription addresses you add, and the VPS you set up with **Your own VPS**.
 
 ### What leaves your PC and why
 
@@ -33,12 +33,18 @@ If the Tailscale app is installed, the service also runs its `tailscale` command
 
 **6. Subscriptions.** When you add a subscription address or click **Refresh**, the service downloads the subscription from the address you gave: a `GET` request over https only, with the header `User-Agent: SplitLane/<version>`, at most 1 MB, 20 seconds and 5 redirects. Addresses in local networks (loopback, private and link-local addresses, Tailscale's `100.64.0.0/10`) are refused, after each redirect too, without connecting to them. While split routing is on, the download goes through the VPN lane. The server of the subscription sees the address the request comes from, the version of SplitLane, the time and the subscription address itself, which often holds a token. SplitLane doesn't refresh subscriptions on its own.
 
+**7. Your own VPS.** When you click **Set up**, SplitLane's setup process (`splitlane-helper.exe server-setup`, which runs as you, without administrator rights) connects over SSH to the server you entered, signs in with the username and the password or key you gave, and runs commands there: it reads `/etc/os-release` and the architecture, checks the rights (`sudo`), uploads SplitLane's server kit (a shell script) to a temporary file, runs it and deletes it. On the server, the kit downloads sing-box from GitHub and packages from the mirrors of its distribution, asks `api.ipify.org` for the server's public address, and Caddy gets a certificate from Let's Encrypt. Then the setup process checks the new subscription address over HTTPS (for up to 90 seconds), and the service adds it like any subscription (see 6). The address is an `sslip.io` name, so DNS lookups of it go to the name servers of sslip.io.
+
+The password, the key and its passphrase are used for this setup only. The window reads the key file (at most 16 KB) and keeps its path to itself; the credentials reach the setup process through its standard input, not its command line, are never written to disk, logs or diagnostics archives and never reach the service. The window forgets them when you leave its screen. SplitLane doesn't verify the server's SSH host key at the first connection (a freshly rented server has nothing to compare it with): someone who intercepts the connection at that very moment could learn the password. Signing in with a key avoids this.
+
 ### What is stored on your PC
 
 - `%ProgramData%\SplitLane` (only administrators and SYSTEM can open it): the state of the embedded node, including its key; the settings of the service (your pinned programs and their paths, the main lane, the way you connect, the selected exit node or server, the list of exit nodes and the device name); `servers.json`, the servers and subscriptions you added (the links and WireGuard files with their keys and passwords, the subscription addresses); the core configuration (`core-config.json`, which also holds the keys and password of the selected server: it is written again each time split routing turns on, so the keys of a server you removed may stay in it until split routing is next turned on) and rule files; the record used to turn the exit node of the Tailscale app back on; the logs in `logs\`. Its `export\` folder, which you can read, holds diagnostics archives (the last five) and the result of the last installation.
 - `%AppData%\SplitLane`: the window settings, the icon cache of programs and Electron's working files.
 - `%TEMP%\SplitLane-update`: the installer downloaded for an update. It is deleted the next time the window starts.
 - The value `SplitLane` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, while **Start when I sign in to Windows** is on, and the Task Scheduler task `SplitLane Helper`.
+
+The SSH access to a server you set up with **Your own VPS** isn't stored: neither the username nor the password or the key. The servers and the subscription the setup adds (with the server's address in them) are kept in `servers.json` like any others.
 
 ### Logs and diagnostics
 
@@ -62,7 +68,7 @@ Questions about this policy: [GitHub issues](https://github.com/splitlane-app/sp
 
 ### Коротко
 
-У SplitLane нет телеметрии, собственных учётных записей и собственных серверов. Он не собирает ваши данные, и отправлять их ему некуда. С компьютера уходят только запросы, описанные ниже, — к GitHub, Tailscale, названным здесь сервисам и к VPN-серверам и адресам подписок, которые вы добавили.
+У SplitLane нет телеметрии, собственных учётных записей и собственных серверов. Он не собирает ваши данные, и отправлять их ему некуда. С компьютера уходят только запросы, описанные ниже, — к GitHub, Tailscale, названным здесь сервисам, к VPN-серверам и адресам подписок, которые вы добавили, и к VPS, который вы настраиваете в «Свой VPS».
 
 ### Что уходит с компьютера и зачем
 
@@ -87,12 +93,18 @@ Questions about this policy: [GitHub issues](https://github.com/splitlane-app/sp
 
 **6. Подписки.** Когда вы добавляете адрес подписки или нажимаете «Обновить», служба скачивает подписку с указанного вами адреса: запрос `GET` только по https, с заголовком `User-Agent: SplitLane/<версия>`, не больше 1 МБ, 20 секунд и 5 переадресаций. Адреса местных сетей (loopback, частные и link-local адреса, сеть Tailscale `100.64.0.0/10`) запрещены — и после каждой переадресации, — к ним служба не подключается. Пока деление включено, загрузка идёт через дорожку VPN. Сервер подписки видит адрес, с которого пришёл запрос, версию SplitLane, время и сам адрес подписки, в котором часто есть токен. Сам по себе SplitLane подписки не обновляет.
 
+**7. Свой VPS.** По кнопке «Настроить» программа настройки SplitLane (`splitlane-helper.exe server-setup`; она работает от вашего имени, без прав администратора) подключается по SSH к серверу, который вы указали, входит с вашими логином и паролем или ключом и выполняет там команды: читает `/etc/os-release` и архитектуру, проверяет права (`sudo`), загружает набор SplitLane для сервера (скрипт оболочки) во временный файл, запускает его и удаляет. На сервере набор скачивает sing-box с GitHub и пакеты с зеркал своего дистрибутива, узнаёт публичный адрес сервера у `api.ipify.org`, а Caddy получает сертификат у Let's Encrypt. Затем программа настройки проверяет новый адрес подписки по HTTPS (до 90 секунд), и служба добавляет его, как любую подписку (см. п. 6). Этот адрес — имя `sslip.io`, поэтому DNS-запросы о нём уходят к серверам имён sslip.io.
+
+Пароль, ключ и пароль ключа нужны только для этой настройки. Файл ключа читает окно (не больше 16 КБ), путь к нему никуда не уходит; учётные данные попадают в программу настройки через её стандартный ввод, а не через командную строку, никогда не записываются на диск, в журналы и архивы диагностики и не попадают в службу. Окно забывает их, когда вы уходите с его экрана. Ключ SSH сервера при первом подключении SplitLane не проверяет (у только что арендованного сервера его не с чем сверить): тот, кто перехватит соединение именно в этот момент, может узнать пароль. Вход по ключу этого риска лишён.
+
 ### Что хранится на компьютере
 
 - `%ProgramData%\SplitLane` (открыт только администраторам и SYSTEM): состояние встроенного узла, в том числе его ключ; настройки службы (закреплённые программы и их пути, основная дорожка, способ подключения, выбранный exit node или сервер, список exit node и имя устройства); `servers.json` — добавленные вами серверы и подписки (ссылки и файлы WireGuard с их ключами и паролями, адреса подписок); конфиг ядра (`core-config.json`, в нём есть и ключи и пароль выбранного сервера: файл записывается заново при каждом включении деления, поэтому ключи удалённого сервера могут оставаться в нём до следующего включения) и файлы правил; запись, по которой exit node приложения Tailscale включается обратно; журналы в `logs\`. В подкаталоге `export\`, который вам доступен для чтения, — архивы диагностики (последние пять) и итог последней установки.
 - `%AppData%\SplitLane`: настройки окна, кэш значков программ и рабочие файлы Electron.
 - `%TEMP%\SplitLane-update`: установщик, скачанный для обновления. Он удаляется при следующем запуске окна.
 - Значение `SplitLane` в `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, пока включено «Запускать при входе в Windows», и задача планировщика `SplitLane Helper`.
+
+Доступ по SSH к серверу, который вы настроили в «Свой VPS», не хранится: ни логин, ни пароль, ни ключ. Серверы и подписка, которые добавила настройка (в них есть адрес сервера), лежат в `servers.json`, как любые другие.
 
 ### Журналы и диагностика
 

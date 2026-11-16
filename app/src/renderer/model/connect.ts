@@ -43,8 +43,11 @@ export function connectStep(state: HelperState): ConnectStep {
   return 'login'
 }
 
-/** The tiles of both connect screens: Tailscale, a key or a subscription, a configuration file (spec 6). */
-export type ConnectMethod = 'tailscale' | 'key' | 'file'
+/**
+ * The tiles of both connect screens: Tailscale, a key or a subscription, a configuration file (stage 3 spec 6), and
+ * the setup of one's own VPS (stage 3 part 2 spec 6), whose servers join the proxy list as a subscription's do.
+ */
+export type ConnectMethod = 'tailscale' | 'key' | 'file' | 'vps'
 
 /** The tile a screen opens on: the one of the connector in force (a key and a file are one connector, the key first). */
 export function methodOf(state: HelperState): ConnectMethod {

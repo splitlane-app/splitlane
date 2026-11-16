@@ -310,11 +310,15 @@ export const en: Record<Key, string> = {
   'connect.keyNote': 'VLESS, Trojan, Shadowsocks and more',
   'connect.file': 'Configuration file',
   'connect.fileNote': 'a WireGuard .conf file',
+  'connect.vps': 'Your own VPS',
+  'connect.vpsNote': 'SplitLane sets up a server you rent',
   'connect.steps': 'Steps',
   'connect.step.login': 'Log in to Tailscale',
   'connect.step.exitNode': 'Choose an exit node',
   'connect.step.add': 'Add a key or subscription',
   'connect.step.file': 'Choose a configuration file',
+  'connect.step.vps': 'Enter the server details',
+  'connect.step.vpsWait': 'Wait for the setup',
   'connect.step.server': 'Choose a server',
   'connect.step.enable': 'Turn on split routing',
   'connect.loginHint': 'The login page opens in your browser',
@@ -388,6 +392,101 @@ export const en: Record<Key, string> = {
   'proxy.removeSubConfirm': 'Remove the subscription and its servers?',
   'proxy.cancel': 'Cancel',
   'proxy.subRemoveBlocked': 'You can remove the subscription of the selected server when split routing is off',
+
+  // «Свой VPS» (stage 3 part 2, spec 6): the form, the progress, the result; the texts of the codes are in model/vps.ts
+  'vps.hint':
+    'Your hosting provider emails the address, username and password after you rent the server. It needs Debian 12+ or Ubuntu 22.04+',
+  'vps.address': 'Server address',
+  'vps.addressHint': "An IP address or a name. If SSH isn't on port 22, add :port, such as 203.0.113.10:2222",
+  'vps.user': 'Username',
+  'vps.auth': 'How to sign in',
+  'vps.authPassword': 'Password',
+  'vps.authKey': 'Key file',
+  'vps.password': 'Password',
+  'vps.pickKey': 'Choose a key file…',
+  'vps.pickOtherKey': 'Choose another file…',
+  // the base name of the file only: the path stays in the main process
+  'vps.keyPicked': 'Selected: {name}',
+  'vps.passphrase': 'Key passphrase (if any)',
+  'vps.secretNote': "The password and the key are used only for this setup. SplitLane doesn't save them",
+  'vps.setUp': 'Set up',
+  'vps.routingOn': 'Turn split routing off while setting up',
+  // the checks of the form, each under its field
+  'vps.check.addressEmpty': 'Enter the server address',
+  'vps.check.address':
+    "This doesn't look like a server address. For example: 203.0.113.10, vps.example.com or vps.example.com:2222",
+  'vps.check.userEmpty': 'Enter the username',
+  'vps.check.user': 'A username has up to 32 lowercase Latin letters, digits, “_” and “-”, and starts with a letter',
+  'vps.check.passwordEmpty': 'Enter the password',
+  'vps.check.passwordLong': 'The password is longer than 1024 characters',
+  'vps.check.key': 'Choose a key file',
+  'vps.check.passphraseLong': 'The passphrase is longer than 1024 characters',
+  'vps.check.keyTooLarge': "The file is larger than 16 KB, so it isn't an SSH key",
+  'vps.check.keyNotText': "This isn't an OpenSSH key text file",
+  // the progress: the six steps, their states and the time since "Set up"
+  'vps.progress': 'Setup progress',
+  'vps.step.connect': 'Connecting to the server',
+  'vps.step.system': 'Checking the system',
+  'vps.step.install': 'Installing the VPN server',
+  'vps.step.harden': 'Securing the server',
+  'vps.step.subscription': 'Subscription for a phone',
+  'vps.step.add': 'Adding to SplitLane',
+  'vps.state.waiting': 'waiting',
+  'vps.state.running': 'in progress',
+  'vps.state.done': 'done',
+  'vps.state.skip': 'skipped',
+  // a step that ended with a warning (the protection, the subscription): the setup goes on
+  'vps.state.warn': "didn't work",
+  'vps.state.failed': 'error',
+  'vps.state.cancelled': 'canceled',
+  'vps.elapsed': 'Elapsed: {time}',
+  'vps.cancel': 'Cancel',
+  'vps.cancelling': 'Canceling…',
+  'vps.retry': 'Try again',
+  // the result; a number follows its label, so no plural forms
+  'vps.done': 'Done. Servers added: {n}',
+  'vps.warn.harden_failed': "Couldn't set up the server protection. The VPN works without it",
+  'vps.warn.sub_unreachable':
+    "Couldn't connect a phone: the subscription on the server didn't answer in time. Your hosting provider may be blocking port 80 or the subscription port. This PC can connect without it",
+  'vps.warn.sub_port80_busy':
+    "Couldn't connect a phone: another program uses port 80 on the server, and the subscription needs it for its certificate. This PC can connect without it",
+  'vps.warn.sub_skipped':
+    "Couldn't connect a phone: the subscription service (Caddy) couldn't be installed on the server. Ubuntu 22.04 doesn't have it; Ubuntu 24.04 and Debian 12 do. This PC can connect without it",
+  // the codes of the setup (spec 8) and of the window; a detail that changes the text follows the code
+  'vps.error.bad_input': 'Check the server address and the username',
+  'vps.error.bad_input.key': 'Choose the key file again',
+  'vps.error.bad_input.password': 'Check the password',
+  'vps.error.bad_input.passphrase': 'Check the key passphrase',
+  'vps.error.ssh_unreachable':
+    "Couldn't connect to the server. Check the address; the SSH port may be closed. If you've just rented the server, wait a few minutes",
+  'vps.error.ssh_auth': 'Wrong username or password',
+  'vps.error.ssh_auth.key': "The server didn't accept the username or the key",
+  'vps.error.ssh_key': "This key file can't be used",
+  'vps.error.ssh_key.ppk':
+    "This key file can't be used: it's a PuTTY key (.ppk). Open it in PuTTYgen, choose Conversions → Export OpenSSH key, save the key and choose the saved file here",
+  'vps.error.ssh_key.passphrase': "This key file can't be used: the passphrase is missing or wrong",
+  'vps.error.ssh_key.format': "This key file can't be used: it isn't an OpenSSH or PEM private key",
+  'vps.error.password_expired':
+    'Your hosting provider requires a new password at the first login. Log in once through its console or over SSH, change the password, then run the setup again',
+  'vps.error.no_admin': 'This user has no administrator rights on the server. Log in as root or as a user with sudo',
+  'vps.error.os_unsupported':
+    "The server's system isn't supported: it needs Debian 12+ or Ubuntu 22.04+. You can reinstall the system in your hosting control panel",
+  'vps.error.download_failed': "The server couldn't download sing-box. Check its internet access",
+  'vps.error.ports_busy': 'All the suitable ports on the server are taken',
+  // {detail}: the kit's own message, in English
+  'vps.error.kit_failed': 'The installation failed: {detail}',
+  'vps.error.kit_failed.plain': 'The installation failed',
+  // the window could not start splitlane-helper.exe server-setup
+  'vps.error.kit_failed.spawn': "Couldn't start the setup on this PC. Reinstall SplitLane",
+  'vps.error.timeout': 'The setup took too long (more than 10 minutes). Try again',
+  'vps.error.cancelled': 'Setup canceled',
+  'vps.error.connection_lost': 'The connection to the server was lost. Run the setup again, and it will continue where it stopped',
+  'vps.error.routing_on': 'Turn split routing off while setting up',
+  'vps.error.busy': 'A server setup is already running. Wait for it to finish',
+  // {reason}: the text of the helper's code for proxy.add or proxy.select
+  'vps.error.add_failed': "The server is set up, but SplitLane couldn't add it. {reason}",
+  'vps.error.add_failed.plain': "The server is set up, but SplitLane couldn't add it. Try again",
+  'vps.error.unknown': "Couldn't set up the server (code {code})",
 
   // the names of the languages: each in its own language, the same in both dictionaries
   'language.ru': 'Русский',

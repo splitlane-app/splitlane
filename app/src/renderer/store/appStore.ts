@@ -5,6 +5,7 @@ import type { Key } from '../i18n/ru'
 import { isKey, LIMIT_PARAMS, setLang, t } from '../i18n/t'
 import { ruleName } from '../model/board'
 import { layoutOf, type Layout } from '../model/layout'
+import type { VpsRun } from '../model/vps'
 import { LayoutQueue, type LayoutOp } from './layoutQueue'
 
 /** The points of the activity bars of a card: down + up of the last seconds. */
@@ -46,6 +47,13 @@ export interface AppState {
    * screen opens the link in the browser by itself (not the link the helper keeps after a logout).
    */
   loginRequested: boolean
+  /**
+   * The server setup of «Свой VPS» (model/vps.ts) from «Настроить» until a screen has shown its end: it outlives its
+   * panel, which may go and come back while the setup runs. No secret is in it.
+   */
+  vps: VpsRun | null
+  /** The VPS panels on screen: an end that none shows is told by a notice. */
+  vpsViews: number
   setSnapshot(s: Snapshot): void
   setActivity(a: Activity | null): void
   setSearch(search: string): void
@@ -57,6 +65,8 @@ export interface AppState {
   requestLogin(requested: boolean): void
   /** Clears loginRequested; true when it was set (the caller opens the link). */
   takeLoginRequest(): boolean
+  setVps(change: (run: VpsRun | null) => VpsRun | null): void
+  viewVps(delta: 1 | -1): void
   /** Shows the change at once and sends it; resolves when its lanes.set is answered (or dropped). */
   change(op: LayoutChange): Promise<void>
 }
@@ -170,6 +180,8 @@ export function createAppStore(deps: AppStoreDeps): UseBoundStore<StoreApi<AppSt
       notice: null,
       pending: [],
       loginRequested: false,
+      vps: null,
+      vpsViews: 0,
 
       setSnapshot(s) {
         // the texts first: whatever renders on this snapshot is in its language
@@ -213,6 +225,13 @@ export function createAppStore(deps: AppStoreDeps): UseBoundStore<StoreApi<AppSt
         if (!get().loginRequested) return false
         set({ loginRequested: false })
         return true
+      },
+      setVps(change) {
+        const vps = change(get().vps)
+        if (vps !== get().vps) set({ vps })
+      },
+      viewVps(delta) {
+        set({ vpsViews: Math.max(0, get().vpsViews + delta) })
       },
 
       async change(op) {

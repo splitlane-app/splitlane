@@ -1,0 +1,124 @@
+/* The steps of a server setup (spec 6): a mark, the name, the state; then the time. */
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--lane-bg);
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--dim);
+}
+
+.mark {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border: 1px solid currentcolor;
+  border-radius: 50%;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+}
+
+.state {
+  flex: none;
+  font-size: 12px;
+}
+
+.step[data-state='running'] {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.step[data-state='running'] .mark {
+  border-color: var(--vpn);
+  background: var(--vpn);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.step[data-state='done'] {
+  color: var(--text);
+}
+
+.step[data-state='done'] .mark {
+  border-color: var(--direct);
+  background: var(--direct);
+}
+
+.step[data-state='done'] .state {
+  color: var(--direct);
+}
+
+.step[data-state='skip'] {
+  color: var(--muted);
+}
+
+.step[data-state='warn'] {
+  color: var(--text);
+}
+
+.step[data-state='warn'] .mark {
+  border-color: var(--warn);
+  background: var(--warn);
+}
+
+.step[data-state='warn'] .state {
+  color: var(--warn);
+}
+
+.step[data-state='failed'] {
+  color: var(--text);
+}
+
+.step[data-state='failed'] .mark {
+  border-color: var(--error);
+  background: var(--error);
+}
+
+.step[data-state='failed'] .state {
+  color: var(--error);
+}
+
+.step[data-state='cancelled'] .state {
+  color: var(--muted);
+}
+
+.elapsed {
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step[data-state='running'] .mark {
+    animation: none;
+  }
+}

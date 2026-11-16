@@ -12,6 +12,7 @@ import { TailscaleLogin } from '../components/TailscaleLogin'
 import { Toggle } from '../components/Toggle'
 import { UpdateBanner } from '../components/UpdateBanner'
 import { useUpdateActions } from '../components/useUpdateActions'
+import { VpsPanel } from '../components/VpsPanel'
 import type { Key } from '../i18n/ru'
 import { t } from '../i18n/t'
 import {
@@ -25,7 +26,7 @@ import {
   type ProxyStep
 } from '../model/connect'
 import { updateBusy, updateStatusActions, updateStatusLine } from '../model/update'
-import { sendCommand, useApp, useServices } from '../services'
+import { sendCommand, useApp, useServices, type Services } from '../services'
 import styles from './screens.module.css'
 
 const TAILSCALE_STEP: Record<ConnectStep, number> = {
@@ -40,7 +41,17 @@ const PROXY_STEP: Record<ProxyStep, number> = { add: 0, server: 1, enable: 2 }
 const STEP_KEYS: Record<ConnectMethod, readonly Key[]> = {
   tailscale: ['connect.step.login', 'connect.step.exitNode', 'connect.step.enable'],
   key: ['connect.step.add', 'connect.step.server', 'connect.step.enable'],
-  file: ['connect.step.file', 'connect.step.server', 'connect.step.enable']
+  file: ['connect.step.file', 'connect.step.server', 'connect.step.enable'],
+  vps: ['connect.step.vps', 'connect.step.vpsWait', 'connect.step.enable']
+}
+
+/**
+ * The tile a screen opens on: the VPS one while a server setup runs (its progress is there), else the one of the
+ * connector in force.
+ */
+function openingMethod({ store }: Services, state: HelperState | null): ConnectMethod {
+  if (store.getState().vps?.outcome === null) return 'vps'
+  return state === null ? 'tailscale' : methodOf(state)
 }
 
 /** The three steps of a method, the current one marked. */
@@ -82,7 +93,9 @@ function EnableStep({ state, busy, onEnable }: { state: HelperState; busy: boole
 /**
  * «Подключите VPN» (spec 9.5, stage 3 spec 6): the tiles of the connection methods and the three steps of the chosen
  * one. Tailscale: log in, choose the exit node, turn splitting on. A key or a file: add one, choose a server, turn
- * splitting on. The tile opens on the connector in force. Once routing is on the first time it records `connectedOnce`.
+ * splitting on. Own VPS (part 2 spec 6): enter the server, wait for the setup (it adds and selects the first server),
+ * turn splitting on. The tile opens on the connector in force. Once routing is on the first time it records
+ * `connectedOnce`.
  */
 export function ConnectScreen(): React.JSX.Element | null {
   const services = useServices()
@@ -90,8 +103,9 @@ export function ConnectScreen(): React.JSX.Element | null {
   const state = useApp((s) => s.snapshot?.state ?? null)
   const connectedOnce = useApp((s) => s.snapshot?.settings.connectedOnce ?? false)
   const lastExitNode = useApp((s) => s.snapshot?.settings.lastExitNode ?? null)
+  const vps = useApp((s) => s.vps)
   const [busy, setBusy] = useState(false)
-  const [method, setMethod] = useState<ConnectMethod>(() => (state === null ? 'tailscale' : methodOf(state)))
+  const [method, setMethod] = useState<ConnectMethod>(() => openingMethod(services, state))
   const recorded = useRef(false)
   const phase = state?.phase ?? null
 
@@ -107,6 +121,9 @@ export function ConnectScreen(): React.JSX.Element | null {
   if (state === null) return null
   const step = tailscaleStep(state)
   const proxy = proxyStep(state)
+  const vpsDone = vps?.outcome?.kind === 'done'
+  const current =
+    method === 'tailscale' ? TAILSCALE_STEP[step] : method === 'vps' ? (vps === null ? 0 : vpsDone ? 2 : 1) : PROXY_STEP[proxy]
 
   const run = async (c: Command): Promise<void> => {
     setBusy(true)
@@ -124,13 +141,20 @@ export function ConnectScreen(): React.JSX.Element | null {
       <UpdateBanner />
       <p className={styles.lead}>{t('connect.lead')}</p>
       <MethodTiles value={method} onChange={setMethod} />
-      <Steps method={method} current={method === 'tailscale' ? TAILSCALE_STEP[step] : PROXY_STEP[proxy]} />
+      <Steps method={method} current={current} />
 
-      {method !== 'tailscale' && (
+      {(method === 'key' || method === 'file') && (
         <>
           {/* a tile of its own: the pasted text does not follow to the file tile */}
           <ProxyPanel key={method} mode={method} />
           {proxy === 'enable' && enable}
+        </>
+      )}
+      {method === 'vps' && (
+        <>
+          <VpsPanel />
+          {/* the setup selected its first server: what is left is the enable */}
+          {vpsDone && proxy === 'enable' && enable}
         </>
       )}
       {method === 'tailscale' && isLoginStep(step) && <TailscaleLogin state={state} step={step} />}
@@ -148,10 +172,11 @@ export function ConnectScreen(): React.JSX.Element | null {
 
 /**
  * «Подключение» (spec 9.5, 9.6, stage 3 spec 6), opened from the connection pill: the tiles of the methods, opened on
- * the connector in force, and the part of the chosen one. Tailscale: the device, the exit node and its change, logout
- * (only while routing is off); before the login (a user of the proxy list), the login as on «Подключите VPN». A key
- * or a file: the add, the servers with their choice and removal, the subscriptions with their refresh and removal.
- * Switching the connector is choosing a server or an exit node. Then the settings of the window, «Язык» among them.
+ * the connector in force (on own VPS while its setup runs), and the part of the chosen one. Tailscale: the device, the
+ * exit node and its change, logout (only while routing is off); before the login (a user of the proxy list), the login
+ * as on «Подключите VPN». A key or a file: the add, the servers with their choice and removal, the subscriptions with
+ * their refresh and removal. Own VPS: the setup, then the list of servers. Switching the connector is choosing a
+ * server or an exit node. Then the settings of the window, «Язык» among them.
  */
 export function ConnectionScreen(): React.JSX.Element | null {
   const services = useServices()
@@ -161,16 +186,17 @@ export function ConnectionScreen(): React.JSX.Element | null {
   const link = useApp((s) => s.snapshot?.link ?? null)
   const update = useApp((s) => s.snapshot?.update ?? null)
   const [appVersion, setAppVersion] = useState<string | null>(null)
-  const [method, setMethod] = useState<ConnectMethod>(() => (state === null ? 'tailscale' : methodOf(state)))
+  const [method, setMethod] = useState<ConnectMethod>(() => openingMethod(services, state))
   const updates = useUpdateActions()
   const back = (): void => store.getState().showConnection(false)
 
-  // Esc goes back to the lanes, unless a select or a list inside has the key (an open select closes on it) or the
-  // text of a key is being typed (going back would drop it)
+  // Esc goes back to the lanes, unless a select or a list inside has the key (an open select closes on it) or a text
+  // is being typed, the text of a key or a field of the VPS form (going back would drop it)
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
-      if (e.target instanceof Element && e.target.closest('select, textarea, [role="listbox"]') !== null) return
+      const typing = 'select, textarea, input[type="text"], input[type="password"], [role="listbox"]'
+      if (e.target instanceof Element && e.target.closest(typing) !== null) return
       store.getState().showConnection(false)
     }
     document.addEventListener('keydown', onKey)
@@ -237,6 +263,8 @@ export function ConnectionScreen(): React.JSX.Element | null {
           </div>
           {live && <p className={styles.lead}>{t('connection.logoutBlocked')}</p>}
         </>
+      ) : method === 'vps' ? (
+        <VpsPanel showList />
       ) : (
         <ProxyPanel key={method} mode={method} manage />
       )}

@@ -304,11 +304,15 @@ export const ru = {
   'connect.keyNote': 'VLESS, Trojan, Shadowsocks и другие',
   'connect.file': 'Файл настроек',
   'connect.fileNote': 'WireGuard, файл .conf',
+  'connect.vps': 'Свой VPS',
+  'connect.vpsNote': 'SplitLane сам настроит арендованный сервер',
   'connect.steps': 'Шаги',
   'connect.step.login': 'Войдите в Tailscale',
   'connect.step.exitNode': 'Выберите exit node',
   'connect.step.add': 'Добавьте ключ или подписку',
   'connect.step.file': 'Выберите файл настроек',
+  'connect.step.vps': 'Введите данные сервера',
+  'connect.step.vpsWait': 'Дождитесь настройки',
   'connect.step.server': 'Выберите сервер',
   'connect.step.enable': 'Включите деление',
   'connect.loginHint': 'Откроется страница входа в браузере',
@@ -381,6 +385,100 @@ export const ru = {
   'proxy.removeSubConfirm': 'Удалить подписку и её серверы?',
   'proxy.cancel': 'Отмена',
   'proxy.subRemoveBlocked': 'Подписку выбранного сервера можно удалить, когда деление выключено',
+
+  // «Свой VPS» (stage 3 part 2, spec 6): the form, the progress, the result; the texts of the codes are in model/vps.ts
+  'vps.hint': 'Адрес, логин и пароль хостинг присылает в письме после аренды. Нужна Debian 12+ или Ubuntu 22.04+',
+  'vps.address': 'Адрес сервера',
+  'vps.addressHint': 'IP-адрес или имя. Если SSH не на порту 22, добавьте :порт, например 203.0.113.10:2222',
+  'vps.user': 'Логин',
+  'vps.auth': 'Способ входа',
+  'vps.authPassword': 'Пароль',
+  'vps.authKey': 'Файл ключа',
+  'vps.password': 'Пароль',
+  'vps.pickKey': 'Выбрать файл ключа…',
+  'vps.pickOtherKey': 'Выбрать другой файл…',
+  // the base name of the file only: the path stays in the main process
+  'vps.keyPicked': 'Выбран файл {name}',
+  'vps.passphrase': 'Пароль ключа (если есть)',
+  'vps.secretNote': 'Пароль и ключ нужны только для этой настройки: SplitLane их не сохраняет',
+  'vps.setUp': 'Настроить',
+  'vps.routingOn': 'Выключите деление на время настройки',
+  // the checks of the form, each under its field
+  'vps.check.addressEmpty': 'Введите адрес сервера',
+  'vps.check.address': 'Это не похоже на адрес сервера. Пример: 203.0.113.10, vps.example.com или vps.example.com:2222',
+  'vps.check.userEmpty': 'Введите логин',
+  'vps.check.user': 'Логин — до 32 строчных латинских букв, цифр, «_» и «-», в начале — буква',
+  'vps.check.passwordEmpty': 'Введите пароль',
+  'vps.check.passwordLong': 'Пароль длиннее 1024 знаков',
+  'vps.check.key': 'Выберите файл ключа',
+  'vps.check.passphraseLong': 'Пароль ключа длиннее 1024 знаков',
+  'vps.check.keyTooLarge': 'Файл больше 16 КБ — это не ключ SSH',
+  'vps.check.keyNotText': 'Это не текстовый файл ключа OpenSSH',
+  // the progress: the six steps, their states and the time since «Настроить»
+  'vps.progress': 'Ход настройки',
+  'vps.step.connect': 'Подключение к серверу',
+  'vps.step.system': 'Проверка системы',
+  'vps.step.install': 'Установка VPN-сервера',
+  'vps.step.harden': 'Защита сервера',
+  'vps.step.subscription': 'Подписка для телефона',
+  'vps.step.add': 'Добавление в SplitLane',
+  'vps.state.waiting': 'ждёт',
+  'vps.state.running': 'идёт',
+  'vps.state.done': 'готово',
+  'vps.state.skip': 'пропущено',
+  // a step that ended with a warning (the protection, the subscription): the setup goes on
+  'vps.state.warn': 'не удалось',
+  'vps.state.failed': 'ошибка',
+  'vps.state.cancelled': 'отменено',
+  'vps.elapsed': 'Прошло: {time}',
+  'vps.cancel': 'Отменить',
+  'vps.cancelling': 'Отменяю…',
+  'vps.retry': 'Попробовать снова',
+  // the result; a number follows its label, so no plural forms
+  'vps.done': 'Готово. Добавлено серверов: {n}',
+  'vps.warn.harden_failed': 'Защиту сервера поставить не удалось. VPN работает и без неё',
+  'vps.warn.sub_unreachable':
+    'Телефон подключить не получилось: подписка на сервере не ответила вовремя. Возможно, хостинг закрывает порт 80 или порт подписки. Этот компьютер подключится и без неё',
+  'vps.warn.sub_port80_busy':
+    'Телефон подключить не получилось: порт 80 на сервере занят другой программой, а он нужен для сертификата подписки. Этот компьютер подключится и без неё',
+  'vps.warn.sub_skipped':
+    'Телефон подключить не получилось: на сервере не удалось поставить службу подписки (Caddy). В Ubuntu 22.04 её нет, в Ubuntu 24.04 и Debian 12 есть. Этот компьютер подключится и без неё',
+  // the codes of the setup (spec 8) and of the window; a detail that changes the text follows the code
+  'vps.error.bad_input': 'Проверьте адрес сервера и логин',
+  'vps.error.bad_input.key': 'Выберите файл ключа ещё раз',
+  'vps.error.bad_input.password': 'Проверьте пароль',
+  'vps.error.bad_input.passphrase': 'Проверьте пароль ключа',
+  'vps.error.ssh_unreachable':
+    'Не удалось подключиться к серверу: проверьте адрес; порт SSH может быть закрыт. Если сервер арендован только что, подождите несколько минут',
+  'vps.error.ssh_auth': 'Неверный логин или пароль',
+  'vps.error.ssh_auth.key': 'Сервер не принял логин или ключ',
+  'vps.error.ssh_key': 'Этот файл ключа не подходит',
+  // PuTTYgen has no Russian menus: its items are named as it shows them
+  'vps.error.ssh_key.ppk':
+    'Этот файл ключа не подходит: это ключ PuTTY (.ppk). Откройте его в PuTTYgen, выберите Conversions → Export OpenSSH key, сохраните ключ и выберите здесь сохранённый файл',
+  'vps.error.ssh_key.passphrase': 'Этот файл ключа не подходит: пароль ключа не введён или неверен',
+  'vps.error.ssh_key.format': 'Этот файл ключа не подходит: это не закрытый ключ OpenSSH или PEM',
+  'vps.error.password_expired':
+    'Хостинг требует сменить пароль при первом входе: войдите один раз через его консоль или по SSH, смените пароль и запустите настройку снова',
+  'vps.error.no_admin': 'У этого пользователя на сервере нет прав администратора. Войдите как root или как пользователь с sudo',
+  'vps.error.os_unsupported':
+    'Система сервера не подходит: нужна Debian 12+ или Ubuntu 22.04+. Систему можно переустановить в панели хостинга',
+  'vps.error.download_failed': 'Сервер не смог скачать sing-box: проверьте его доступ в интернет',
+  'vps.error.ports_busy': 'На сервере заняты все подходящие порты',
+  // {detail}: the kit's own message, in English
+  'vps.error.kit_failed': 'Установка не удалась: {detail}',
+  'vps.error.kit_failed.plain': 'Установка не удалась',
+  // the window could not start splitlane-helper.exe server-setup
+  'vps.error.kit_failed.spawn': 'Не удалось запустить настройку на этом компьютере. Переустановите SplitLane',
+  'vps.error.timeout': 'Настройка заняла слишком много времени (больше 10 минут). Попробуйте снова',
+  'vps.error.cancelled': 'Настройка отменена',
+  'vps.error.connection_lost': 'Связь с сервером прервалась; запустите настройку снова — она продолжит с того же места',
+  'vps.error.routing_on': 'Выключите деление на время настройки',
+  'vps.error.busy': 'Настройка сервера уже идёт. Дождитесь её окончания',
+  // {reason}: the text of the helper's code for proxy.add or proxy.select
+  'vps.error.add_failed': 'Сервер настроен, но SplitLane не смог его добавить. {reason}',
+  'vps.error.add_failed.plain': 'Сервер настроен, но SplitLane не смог его добавить. Попробуйте снова',
+  'vps.error.unknown': 'Настроить сервер не удалось (код {code})',
 
   // the names of the languages: each in its own language, the same in both dictionaries
   'language.ru': 'Русский',

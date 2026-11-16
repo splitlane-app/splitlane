@@ -111,7 +111,11 @@ describe('dictionary', () => {
       'connect.file': 'Configuration file',
       'proxy.refresh': 'Refresh',
       'proxy.subscriptions': 'Subscriptions',
-      'proxy.servers': 'Servers'
+      'proxy.servers': 'Servers',
+      // stage 3 part 2
+      'connect.vps': 'Your own VPS',
+      'vps.setUp': 'Set up',
+      'vps.cancel': 'Cancel'
     }
     for (const [key, text] of Object.entries(glossary)) expect(en[key as Key], key).toBe(text)
   })
@@ -122,7 +126,10 @@ describe('dictionary', () => {
       'connect.file': 'Файл настроек',
       'proxy.refresh': 'Обновить',
       'proxy.subscriptions': 'Подписки',
-      'proxy.servers': 'Серверы'
+      'proxy.servers': 'Серверы',
+      'connect.vps': 'Свой VPS',
+      'vps.setUp': 'Настроить',
+      'vps.cancel': 'Отменить'
     }
     for (const [key, text] of Object.entries(glossary)) expect(ru[key as Key], key).toBe(text)
   })

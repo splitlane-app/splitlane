@@ -2,7 +2,7 @@
 
 [Русская версия](README.ru.md)
 
-SplitLane is a Windows app for split routing by program. It puts programs on two lanes, **Via VPN** and **Direct**: programs on the VPN lane go through your VPN, everything else goes directly through your normal connection. The VPN is a Tailscale exit node or a server from a key (a share link), a subscription or a WireGuard file. It is for people who want only some programs to use the VPN, for example because some websites are slow or don't work through it. You arrange programs by dragging them from one lane to the other.
+SplitLane is a Windows app for split routing by program. It puts programs on two lanes, **Via VPN** and **Direct**: programs on the VPN lane go through your VPN, everything else goes directly through your normal connection. The VPN is a Tailscale exit node, a server from a key (a share link), a subscription or a WireGuard file, or a VPS you rent, which SplitLane sets up itself. It is for people who want only some programs to use the VPN, for example because some websites are slow or don't work through it. You arrange programs by dragging them from one lane to the other.
 
 This is a beta.
 
@@ -17,7 +17,7 @@ This is a beta.
 ## Requirements
 
 - Windows 10 or 11, x64.
-- A VPN: a Tailscale account (tailnet) with an exit node you can use, or a server of a protocol SplitLane supports (see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard)). The VPN must reach the internet from a different address than this PC.
+- A VPN: a Tailscale account (tailnet) with an exit node you can use, a server of a protocol SplitLane supports (see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard)), or a VPS with Debian 12+ or Ubuntu 22.04+ for SplitLane to set up (see [Your own VPS](#your-own-vps)). The VPN must reach the internet from a different address than this PC.
 - The Tailscale app for Windows is optional: if it is installed and uses an exit node, SplitLane turns that exit node off while split routing is on and turns it back on afterwards.
 - A Windows account with administrator rights. You install and use SplitLane under the same account: if you confirm the Windows prompt (UAC) with a different account, the installation stops.
 
@@ -45,7 +45,7 @@ winget: coming soon.
 ## First start
 
 1. If the window shows **First-time setup**, click **Install the service** and confirm the Windows prompt. The installer normally does this for you, so this screen appears only when the service needs to be repaired.
-2. On **Connect a VPN**, choose how you connect: **Tailscale**, **Key or subscription** or **Configuration file**. For a key, a subscription or a WireGuard file, see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard). For Tailscale, click **Log in to Tailscale**. SplitLane's window opens the login page in your browser: log in to the tailnet that has your exit node. This logs in SplitLane's embedded node, a new device `<PC name>-splitlane`; the Tailscale app isn't involved. If your tailnet requires device approval, approve the device in the Tailscale admin console; the window continues by itself.
+2. On **Connect a VPN**, choose how you connect: **Tailscale**, **Key or subscription**, **Configuration file** or **Your own VPS**. For a key, a subscription or a WireGuard file, see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard); for a VPS you rent, see [Your own VPS](#your-own-vps). For Tailscale, click **Log in to Tailscale**. SplitLane's window opens the login page in your browser: log in to the tailnet that has your exit node. This logs in SplitLane's embedded node, a new device `<PC name>-splitlane`; the Tailscale app isn't involved. If your tailnet requires device approval, approve the device in the Tailscale admin console; the window continues by itself.
 3. Choose an exit node or a server, then click **Turn on split routing**.
 4. Drag programs onto the lanes. You can move a card from one lane to the other, drop an `.exe` file or a shortcut from Explorer onto a lane, or click **+ Add** to pick a program that is online now, an installed program or a file. The same actions are in the context menu of a card (**Send via VPN**, **Send direct**, **Unpin**) and work from the keyboard.
 
@@ -69,7 +69,7 @@ Instead of a Tailscale exit node, the VPN lane can go through a VPN server of yo
 
 Links, WireGuard files and subscription addresses are secrets. SplitLane keeps them in `%ProgramData%\SplitLane\servers.json` (administrators only); they aren't written to the logs or put in diagnostics archives. The keys of the selected server are also in the core configuration file in the same folder, `core-config.json` (administrators only, never in diagnostics archives). SplitLane writes that file again each time split routing turns on, so after you remove a server its keys may stay there until split routing is next turned on.
 
-**Your own server.** [scripts/server](scripts/server/README.md) has a script that sets up VLESS + Reality, Hysteria2, Shadowsocks 2022 and WireGuard on a Debian or Ubuntu VPS and prints the links, the `.conf` file and, if you like, a subscription address.
+**Your own server.** **Your own VPS** sets up a rented server from the window (see [Your own VPS](#your-own-vps)). [scripts/server](scripts/server/README.md) has the script it uses, which you can also run by hand: it sets up VLESS + Reality, Hysteria2, Shadowsocks 2022 and WireGuard on a Debian or Ubuntu VPS and prints the links, the `.conf` file and, if you like, a subscription address.
 
 **Limits.**
 
@@ -79,6 +79,42 @@ Links, WireGuard files and subscription addresses are secrets. SplitLane keeps t
 - A server without UDP can't carry the UDP traffic of programs on the VPN lane (games, calls).
 - There is no latency test and no automatic choice of server; one server leads the VPN lane at a time.
 - Some internet providers recognize Shadowsocks and WireGuard by DPI and cut them (Russia, Iran, China). To SplitLane this looks like a server that doesn't answer: it says it couldn't make sure the tunnel works, turns split routing off and suggests VLESS + Reality or Hysteria2, which usually get through.
+
+## Your own VPS
+
+If you rent a VPS (a virtual server) with Debian 12+ or Ubuntu 22.04+, SplitLane can turn it into your VPN server by itself. You need only what your hosting provider emails you after you rent it: the server address, the username and the password (or an SSH key file).
+
+**Setting it up.**
+
+1. Turn split routing off if it is on. It must stay off during the setup: setting up the server the tunnel goes through would cut the connection in the middle of the installation.
+2. On **Connect a VPN** (or later on **Connection**), choose **Your own VPS**.
+3. Enter the server address (an IP address or a name; add `:port` if SSH isn't on port 22, such as `203.0.113.10:2222`), the username (usually `root`) and the password. To sign in with a key, choose **Key file**, pick an OpenSSH (or PEM) private key and enter its passphrase if it has one. Export a PuTTY key (`.ppk`) first: in PuTTYgen, **Conversions** → **Export OpenSSH key**.
+4. Click **Set up**. The window shows the steps (connecting to the server, checking the system, installing the VPN server, securing the server, the subscription for a phone, adding to SplitLane) and the time elapsed. It usually takes a few minutes; **Cancel** stops it.
+5. When it's done, the new servers are in the list and the first one (VLESS + Reality) is selected. Click **Turn on split routing**.
+
+**What it installs.** SplitLane signs in over SSH, checks the system (Debian 12+ or Ubuntu 22.04+, x86_64 or ARM64, systemd) and the rights (root, or a user with sudo), then runs the [server kit](scripts/server/README.md) built into SplitLane (always the version that came with it):
+
+- sing-box with VLESS + Reality and Hysteria2 on free ports (443, or the next free one of a short list);
+- a subscription for a phone: an `https://<address>.sslip.io:<port>/…` address served by Caddy with a Let's Encrypt certificate (SplitLane's list of subscriptions shows it by that sslip.io name);
+- light protection: fail2ban for SSH and automatic security updates.
+
+The settings of SSH (password logins, the port) don't change. On a server where the kit already runs, a new setup keeps its keys and ports: SplitLane adds the same servers and selects the first one.
+
+**The password and the key** are used once, for this setup, and never saved. They are only in the memory of the window while its screen is open, and they reach the setup process through its standard input, not its command line; leaving the screen wipes them. To change something on the server later, run the setup again.
+
+**The server's host key isn't verified.** On the first connection to a freshly rented VPS there is nothing to compare its SSH host key with, so SplitLane doesn't check it. The known risk: someone who intercepts the connection at the very moment of the setup could learn the password. If that matters to you, sign in with a key, or change the server's password after the setup.
+
+**If something goes wrong,** the window says what happened and offers **Try again** with the same details. If the connection breaks in the middle of the installation, run the setup again: it continues where it stopped.
+
+**fail2ban.** After the setup, fail2ban bans an address for 10 minutes after 5 failed SSH logins from it within 10 minutes. If that happens to you (say, after mistyping the password a few times), wait 10 minutes, or sign in from another address or through your hosting provider's web console and run `sudo fail2ban-client unban <your address>`; `sudo fail2ban-client status sshd` lists the banned addresses.
+
+**Limits.**
+
+- The server needs a public IPv4 address: an IPv6-only VPS won't do.
+- A new setup installs only VLESS + Reality and Hysteria2 (Shadowsocks and WireGuard are often cut by DPI); the [script](scripts/server/README.md) run by hand still installs any of them.
+- A phone needs port 80 and the subscription port open to the internet. If your hosting provider blocks them, or another program uses port 80, the phone can't connect, but this PC works. Ubuntu 22.04 has no Caddy package, so there is no subscription there.
+- SplitLane doesn't keep access to the server: to change something there, you run the setup again.
+- PuTTY keys (`.ppk`) aren't accepted, only OpenSSH and PEM keys.
 
 ## Updates
 
@@ -105,6 +141,7 @@ SplitLane has no telemetry and no accounts of its own. In short:
 - The window checks GitHub for updates. You can turn the automatic check off.
 - With Tailscale, the embedded Tailscale node talks to Tailscale's servers like any Tailscale device. With a key or a WireGuard file, the core connects to that server; the service downloads a subscription from the address you add, when you add or refresh it.
 - While split routing is on, the service checks both lanes with `api.ipify.org`, and website names are resolved through encrypted DNS at `1.1.1.1` over the VPN lane.
+- With **Your own VPS**, SplitLane connects to your server over SSH for the setup; the password or the key is used once and isn't saved, and the server's host key isn't verified at the first connection.
 - Settings and logs stay on your PC. A diagnostics archive leaves it only if you share it.
 
 Details, and how to delete everything: [PRIVACY.md](PRIVACY.md).
@@ -113,7 +150,7 @@ Details, and how to delete everything: [PRIVACY.md](PRIVACY.md).
 
 - The installer and the programs aren't signed. SmartScreen warns about the downloaded installer, and the update check verifies integrity, not authenticity.
 - One Windows user per PC. Split routing applies to the whole PC, so programs in other Windows sessions follow the same lanes, but only the user who installed SplitLane can control it.
-- Keys, subscriptions and WireGuard files have limits of their own: see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard).
+- Keys, subscriptions and WireGuard files have limits of their own: see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard). So does **Your own VPS**: see [Your own VPS](#your-own-vps).
 - Installation only in `%ProgramFiles%\SplitLane`.
 - The embedded node is a separate device in your tailnet with its own login expiry. When it expires, SplitLane asks you to log in again.
 - DNS is shared by both lanes. While the VPN lane works, names are resolved through it, so content delivery networks may give programs on the Direct lane servers near the VPN server. When the VPN server is unreachable or **All direct** is on, all names go to your ISP's DNS.

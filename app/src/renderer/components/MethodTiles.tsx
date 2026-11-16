@@ -4,18 +4,24 @@ import { t } from '../i18n/t'
 import type { ConnectMethod } from '../model/connect'
 import styles from './MethodTiles.module.css'
 
-const METHODS: readonly ConnectMethod[] = ['tailscale', 'key', 'file']
-const NAME: Record<ConnectMethod, Key> = { tailscale: 'connect.tailscale', key: 'connect.key', file: 'connect.file' }
+const METHODS: readonly ConnectMethod[] = ['tailscale', 'key', 'file', 'vps']
+const NAME: Record<ConnectMethod, Key> = {
+  tailscale: 'connect.tailscale',
+  key: 'connect.key',
+  file: 'connect.file',
+  vps: 'connect.vps'
+}
 const NOTE: Record<ConnectMethod, Key> = {
   tailscale: 'connect.tailscaleNote',
   key: 'connect.keyNote',
-  file: 'connect.fileNote'
+  file: 'connect.fileNote',
+  vps: 'connect.vpsNote'
 }
 
 const STEP: Partial<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
 
 /**
- * The connection methods (spec 6) as one radio group of tiles: the arrows move the choice and the focus along them,
+ * The connection methods (stage 3 spec 6, part 2 spec 6) as one radio group of tiles: the arrows move the choice and the focus along them,
  * Home and End go to the ends, Tab enters on the chosen one. Choosing a tile shows its steps; the connector changes
  * only when a server or an exit node is chosen. `compact`: the names alone («Подключение»).
  */
