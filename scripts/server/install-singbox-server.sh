@@ -9,10 +9,11 @@
 #   Hysteria2 (self-signed certificate)  443/udp
 #   Shadowsocks 2022                     8388/tcp+udp
 #   WireGuard                            51820/udp
-# It prints the share links, a WireGuard .conf and a subscription file and keeps them in
-# /root/splitlane-kit/. With --subscription, Caddy also serves the links as a subscription over
-# HTTPS. For Debian 12+ and Ubuntu 22.04+ on x86_64 or aarch64, run as root. A re-run keeps the
-# keys and the links. --help lists the options.
+# (the default ports; --vless-port, --hy2-port, --ss-port and --wg-port change them). It prints
+# the share links, a WireGuard .conf and a subscription file and keeps them in /root/splitlane-kit/.
+# With --subscription, Caddy also serves the links as a subscription over HTTPS. For Debian 12+
+# and Ubuntu 22.04+ on x86_64 or aarch64, run as root. A re-run keeps the keys and the links.
+# --help lists the options.
 #
 # https://github.com/splitlane-app/splitlane/tree/main/scripts/server
 set -euo pipefail
@@ -27,15 +28,13 @@ SINGBOX_VERSION=1.14.4
 SHA256_AMD64=699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968
 SHA256_ARM64=436441f76ee2f7fe21b5b2d426d3cb261a480455a704865789ad533e4273ec26
 
-VLESS_PORT=443 # VLESS + Reality, tcp
-HY2_PORT=443   # Hysteria2, udp
-SS_PORT=8388   # Shadowsocks 2022, tcp and udp
-WG_PORT=51820  # WireGuard, udp
-SUB_PORT=8443  # the subscription (Caddy, HTTPS), tcp
-ACME_PORT=80   # Caddy gets the certificate of the subscription over HTTP here, tcp
-# The ports as the firewall and the checks see them.
-SERVER_PORTS=("$VLESS_PORT/tcp" "$HY2_PORT/udp" "$SS_PORT/tcp" "$SS_PORT/udp" "$WG_PORT/udp")
-SUB_PORTS=("$ACME_PORT/tcp" "$SUB_PORT/tcp")
+# The default ports: VLESS + Reality (tcp), Hysteria2 (udp), Shadowsocks 2022 (tcp and udp),
+# WireGuard (udp) and the subscription (Caddy, HTTPS, tcp). The option of each is its name in
+# lower case with "--" before and "-port" after (VLESS_PORT: --vless-port); choose_ports sets them.
+PORT_KEYS=(VLESS_PORT HY2_PORT SS_PORT WG_PORT SUB_PORT)
+declare -A PORT_DEFAULT=([VLESS_PORT]=443 [HY2_PORT]=443 [SS_PORT]=8388 [WG_PORT]=51820 [SUB_PORT]=8443)
+VLESS_PORT="" HY2_PORT="" SS_PORT="" WG_PORT="" SUB_PORT=""
+ACME_PORT=80 # Caddy gets the certificate of the subscription over HTTP here, tcp
 
 # A common site that speaks TLS 1.3: Reality answers anyone who is not a client with its handshake.
 REALITY_SNI_DEFAULT=www.microsoft.com
@@ -52,8 +51,9 @@ DRY_RUN_HOST=192.0.2.10
 SERVICE=splitlane-kit
 SERVICE_USER=splitlane-kit
 
-# Where things go. A dry run puts them under its own directory (ROOT).
-P_BIN=/usr/local/bin/sing-box
+# Where things go. A dry run puts them under its own directory (ROOT). The binary is not on PATH,
+# so a sing-box of the system or of another server stays the one that the command sing-box runs.
+P_BIN=/usr/local/lib/splitlane-kit/sing-box
 P_STATE=/etc/splitlane-kit
 P_OUT=/root/splitlane-kit
 P_WWW_ROOT=/var/lib/splitlane-kit
@@ -65,11 +65,11 @@ CADDY_MARK="# Added by the SplitLane server kit; install-singbox-server.sh --uni
 CADDY_IMPORT="import $P_CADDY_SITE"
 
 # The state file keeps these values between runs. --reset forgets the generated ones; the
-# settings (from --host, --domain, --reality-sni, --subscription) and the record of the installed
-# binary stay.
+# settings (from --host, --domain, --reality-sni, the port options, --subscription) and the record
+# of the installed binary stay.
 GENERATED_KEYS=(UUID REALITY_PRIVATE_KEY REALITY_PUBLIC_KEY SHORT_ID HY2_PASSWORD HY2_CERT_NAME SS_PASSWORD
 	WG_SERVER_PRIVATE_KEY WG_SERVER_PUBLIC_KEY WG_CLIENT_PRIVATE_KEY WG_CLIENT_PUBLIC_KEY WG_PRESHARED_KEY SUB_TOKEN)
-SETTING_KEYS=(HOST DOMAIN REALITY_SNI SUBSCRIPTION BINARY)
+SETTING_KEYS=(HOST DOMAIN REALITY_SNI "${PORT_KEYS[@]}" SUBSCRIPTION BINARY)
 declare -A ST=()
 
 # ---- Helpers ---------------------------------------------------------------------------------
@@ -87,8 +87,9 @@ Usage: sudo bash install-singbox-server.sh [options]
 
 Sets up a sing-box 1.14.4 server for SplitLane on this Debian 12+ or Ubuntu 22.04+ VPS:
 VLESS + Reality (443/tcp), Hysteria2 (443/udp), Shadowsocks 2022 (8388/tcp+udp) and
-WireGuard (51820/udp). Prints the share links and keeps them, a WireGuard .conf and a
-subscription file in /root/splitlane-kit/. A re-run keeps the keys and the links.
+WireGuard (51820/udp), on these ports by default. Prints the share links and keeps them, a
+WireGuard .conf and a subscription file in /root/splitlane-kit/. A re-run keeps the keys and
+the links.
 
 Options:
   --subscription        also serve the links as a subscription over HTTPS: Caddy on port 8443,
@@ -98,14 +99,19 @@ Options:
   --host <ip-or-name>   the server address in the links (default: the public IPv4 address,
                         from api.ipify.org)
   --reality-sni <host>  the TLS 1.3 site whose handshake Reality borrows (default: www.microsoft.com)
+  --vless-port <port>   the port of VLESS + Reality, tcp (default 443)
+  --hy2-port <port>     the port of Hysteria2, udp (default 443)
+  --ss-port <port>      the port of Shadowsocks 2022, tcp and udp (default 8388)
+  --wg-port <port>      the port of WireGuard, udp (default 51820)
+  --sub-port <port>     the port of the subscription, tcp (default 8443; Caddy needs port 80 too)
   --reset               new keys, links and subscription address
   --uninstall           remove the service, sing-box, the settings and the subscription site
   --dry-run <dir>       a test: write everything under <dir> and check the config; no systemd,
                         firewall, Caddy or apt (address 192.0.2.10 unless --host is given)
   -h, --help            this help
 
---host, --domain, --reality-sni and --subscription are remembered for later runs, --reset
-included, until --uninstall. After --reset, add the new links or subscription address in
+--host, --domain, --reality-sni, the ports and --subscription are remembered for later runs,
+--reset included, until --uninstall. After --reset, add the new links or subscription address in
 SplitLane and remove the old ones there.
 EOF
 }
@@ -223,11 +229,20 @@ pct() {
 # ---- Arguments -------------------------------------------------------------------------------
 
 SUBSCRIPTION_FLAG="" DOMAIN_FLAG="" HOST_FLAG="" SNI_FLAG="" RESET=0 UNINSTALL=0 DRY_RUN=0 ROOT=""
+declare -A PORT_FLAG=()
 
 parse_args() {
+	local k
 	while (($#)); do
 		case $1 in
 		--subscription) SUBSCRIPTION_FLAG=1 ;;
+		--vless-port | --hy2-port | --ss-port | --wg-port | --sub-port)
+			need_value "$@"
+			k=${1#--}
+			k=${k%-port}
+			PORT_FLAG[${k^^}_PORT]=$2
+			shift
+			;;
 		--domain)
 			need_value "$@"
 			DOMAIN_FLAG=$2
@@ -259,7 +274,7 @@ parse_args() {
 		esac
 		shift
 	done
-	if ((UNINSTALL)) && [[ -n $SUBSCRIPTION_FLAG$DOMAIN_FLAG$HOST_FLAG$SNI_FLAG || $RESET == 1 ]]; then
+	if ((UNINSTALL)) && [[ -n $SUBSCRIPTION_FLAG$DOMAIN_FLAG$HOST_FLAG$SNI_FLAG || $RESET == 1 || ${#PORT_FLAG[@]} != 0 ]]; then
 		die "--uninstall takes no other options (except --dry-run)"
 	fi
 	if ((DRY_RUN)); then
@@ -306,24 +321,29 @@ preflight() {
 	done
 }
 
-# Ports another program already listens on. Skipped on a re-run: the kit's own server holds them.
+# Ports another program already listens on. The kit's own server (on a re-run) does not count:
+# the sockets of its process are left out.
 check_ports() {
 	command -v ss >/dev/null 2>&1 || return 0
+	local p opt pid="" lines busy=()
 	if systemctl is-active --quiet "$SERVICE"; then
-		return 0
+		pid=$(systemctl show -p MainPID --value "$SERVICE" 2>/dev/null || true)
 	fi
-	local p opt busy=()
 	for p in "${SERVER_PORTS[@]}"; do
-		opt=-lnt
+		opt=-lntp
 		if [[ $p == */udp ]]; then
-			opt=-lnu
+			opt=-lnup
 		fi
-		if [[ -n $(ss -H "$opt" "sport = :${p%/*}" 2>/dev/null) ]]; then
+		lines=$(ss -H "$opt" "sport = :${p%/*}" 2>/dev/null || true)
+		if [[ $pid =~ ^[1-9][0-9]*$ ]]; then
+			lines=$(grep -vF -- "pid=$pid," <<<"$lines" || true)
+		fi
+		if [[ -n $lines ]]; then
 			busy+=("$p")
 		fi
 	done
 	if ((${#busy[@]})); then
-		die "another program already uses ${busy[*]} (see: ss -lntup); free the ports first"
+		die "another program already uses ${busy[*]} (see: ss -lntup); free them or choose other ports with --vless-port, --hy2-port, --ss-port, --wg-port"
 	fi
 }
 
@@ -454,6 +474,48 @@ choose_settings() {
 	fi
 
 	SUBSCRIPTION=${SUBSCRIPTION_FLAG:-${ST[SUBSCRIPTION]:-0}}
+	choose_ports
+}
+
+# The ports of this run: from the option, else the remembered one, else the default. Two ways in
+# never share a port of the same kind (tcp or udp); with the subscription, Caddy's two tcp ports
+# count too.
+choose_ports() {
+	local k v from p who
+	for k in "${PORT_KEYS[@]}"; do
+		from=${k%_PORT}
+		from=--${from,,}-port
+		if [[ -n ${PORT_FLAG[$k]:-} ]]; then
+			v=${PORT_FLAG[$k]}
+		elif [[ -n ${ST[$k]:-} ]]; then
+			v=${ST[$k]} from="$ROOT$P_STATE/state: $k"
+		else
+			v=${PORT_DEFAULT[$k]}
+		fi
+		if ! [[ $v =~ ^[0-9]{1,5}$ ]] || ((10#$v < 1 || 10#$v > 65535)); then
+			die "$from must be a port number from 1 to 65535, not '$v'"
+		fi
+		printf -v "$k" '%d' "$((10#$v))"
+		if [[ -n ${PORT_FLAG[$k]:-} ]]; then
+			ST[$k]=${!k}
+		fi
+	done
+	local -a uses=("$VLESS_PORT/tcp=--vless-port" "$SS_PORT/tcp=--ss-port" "$HY2_PORT/udp=--hy2-port"
+		"$SS_PORT/udp=--ss-port" "$WG_PORT/udp=--wg-port")
+	if [[ $SUBSCRIPTION == 1 ]]; then
+		uses+=("$SUB_PORT/tcp=--sub-port" "$ACME_PORT/tcp=the certificate of the subscription")
+	fi
+	local -A user=()
+	for p in "${uses[@]}"; do
+		who=${p#*=} p=${p%%=*}
+		if [[ -n ${user[$p]:-} ]]; then
+			die "${user[$p]} and $who both need $p; give one of them another port"
+		fi
+		user[$p]=$who
+	done
+	# The ports as the firewall and the checks see them.
+	SERVER_PORTS=("$VLESS_PORT/tcp" "$HY2_PORT/udp" "$SS_PORT/tcp" "$SS_PORT/udp" "$WG_PORT/udp")
+	SUB_PORTS=("$ACME_PORT/tcp" "$SUB_PORT/tcp")
 }
 
 # ---- sing-box --------------------------------------------------------------------------------
@@ -479,7 +541,10 @@ install_singbox() {
 	# The archive also holds libcronet.so, which only the naive outbound loads; a server needs the
 	# binary alone.
 	tar -xzf "$archive" --no-same-owner -C "$TMP" "$name/sing-box" || die "could not unpack $name.tar.gz"
-	mkdir -p -- "$(dirname -- "$bin")"
+	# The service user runs the binary, so its folder must be open to all, whatever the umask (077
+	# here) made of it.
+	(umask 022 && mkdir -p -- "$(dirname -- "$bin")")
+	chmod 755 -- "$(dirname -- "$bin")"
 	install -m 0755 "$TMP/$name/sing-box" "$bin.new"
 	mv -f -- "$bin.new" "$bin"
 	version=$("$bin" version) || die "the installed sing-box does not run"
@@ -652,8 +717,8 @@ Wants=network-online.target
 
 [Service]
 # A dedicated system user, not root: WireGuard here is the core's userspace endpoint (no kernel
-# interface), so the server needs only CAP_NET_BIND_SERVICE (port 443) and CAP_NET_ADMIN (socket
-# options of the core).
+# interface), so the server needs only CAP_NET_BIND_SERVICE (ports below 1024) and CAP_NET_ADMIN
+# (socket options of the core).
 User=$SERVICE_USER
 Group=$SERVICE_USER
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
@@ -738,7 +803,8 @@ write_subscription_site() {
 $DOMAIN:$SUB_PORT {
 	tls {
 		issuer acme {
-			# Port 443 is the VLESS + Reality server, so the certificate comes over HTTP (port 80).
+			# Port 443 is the VLESS + Reality server by default (or another program), so the
+			# certificate comes over HTTP (port 80).
 			disable_tlsalpn_challenge
 		}
 	}
@@ -853,6 +919,7 @@ uninstall() {
 	if [[ -f $bin ]]; then
 		if [[ ${ST[BINARY]:-} == "$SINGBOX_VERSION:$(sha256 "$bin")" ]]; then
 			rm -f -- "$bin"
+			rmdir -- "$(dirname -- "$bin")" 2>/dev/null || true
 			say "Removed $P_BIN"
 		else
 			say "Left $P_BIN: this kit did not install it"
@@ -924,12 +991,12 @@ main() {
 		return
 	fi
 	preflight
-	if ((!DRY_RUN)); then
-		check_ports
-	fi
 	load_state
 	check_state loaded
 	choose_settings
+	if ((!DRY_RUN)); then
+		check_ports
+	fi
 	install_singbox
 	save_state
 	make_secrets
