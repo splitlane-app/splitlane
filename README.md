@@ -89,7 +89,7 @@ If you rent a VPS (a virtual server) with Debian 12+ or Ubuntu 22.04+, SplitLane
 1. Turn split routing off if it is on. It must stay off during the setup: setting up the server the tunnel goes through would cut the connection in the middle of the installation.
 2. On **Connect a VPN** (or later on **Connection**), choose **Your own VPS**.
 3. Enter the server address (an IP address or a name; add `:port` if SSH isn't on port 22, such as `203.0.113.10:2222`), the username (usually `root`) and the password. To sign in with a key, choose **Key file**, pick an OpenSSH (or PEM) private key and enter its passphrase if it has one. Export a PuTTY key (`.ppk`) first: in PuTTYgen, **Conversions** → **Export OpenSSH key**.
-4. Click **Set up**. The window shows the steps (connecting to the server, checking the system, installing the VPN server, securing the server, the subscription for a phone, adding to SplitLane) and the time elapsed. It usually takes a few minutes; **Cancel** stops it.
+4. Click **Set up**. The window shows the steps (connecting to the server, checking the system, installing the VPN server, securing the server, the subscription for a phone, adding to SplitLane) and the time elapsed. It usually takes a few minutes; **Cancel** stops it on this PC (an installation already started on the server finishes there, and running the setup again gets its servers).
 5. When it's done, the new servers are in the list and the first one (VLESS + Reality) is selected. Click **Turn on split routing**.
 
 **What it installs.** SplitLane signs in over SSH, checks the system (Debian 12+ or Ubuntu 22.04+, x86_64 or ARM64, systemd) and the rights (root, or a user with sudo), then runs the [server kit](scripts/server/README.md) built into SplitLane (always the version that came with it):
@@ -104,7 +104,7 @@ The settings of SSH (password logins, the port) don't change. On a server where 
 
 **The server's host key isn't verified.** On the first connection to a freshly rented VPS there is nothing to compare its SSH host key with, so SplitLane doesn't check it. The known risk: someone who intercepts the connection at the very moment of the setup could learn the password. If that matters to you, sign in with a key, or change the server's password after the setup.
 
-**If something goes wrong,** the window says what happened and offers **Try again** with the same details. If the connection breaks in the middle of the installation, run the setup again: it continues where it stopped.
+**If something goes wrong,** the window says what happened and offers **Try again** with the same details. If the connection breaks in the middle of the installation, run the setup again: the installation on the server finishes by itself meanwhile, and the new setup waits for it and adds the same servers.
 
 **fail2ban.** After the setup, fail2ban bans an address for 10 minutes after 5 failed SSH logins from it within 10 minutes. If that happens to you (say, after mistyping the password a few times), wait 10 minutes, or sign in from another address or through your hosting provider's web console and run `sudo fail2ban-client unban <your address>`; `sudo fail2ban-client status sshd` lists the banned addresses. The addresses connected over SSH during the setup (this PC's among them) are exempt from the ban, as the kit writes them to `ignoreip`, so a ban mostly concerns a new address.
 

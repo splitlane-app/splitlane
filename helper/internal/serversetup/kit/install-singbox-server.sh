@@ -73,6 +73,9 @@ P_WWW=$P_WWW_ROOT/www
 P_UNIT=/etc/systemd/system/$SERVICE.service
 P_CADDYFILE=/etc/caddy/Caddyfile
 P_CADDY_SITE=/etc/caddy/$SERVICE.caddy
+# One run of the kit at a time (take_lock); /run is emptied at each boot.
+P_LOCK=/run/$SERVICE.lock
+LOCK_WAIT=900 # seconds
 CADDY_MARK="# Added by the SplitLane server kit; install-singbox-server.sh --uninstall removes it."
 CADDY_IMPORT="import $P_CADDY_SITE"
 # --harden: the kit's fail2ban jail and the switch of automatic updates (written only when the
@@ -92,13 +95,16 @@ declare -A ST=()
 # ---- Helpers ---------------------------------------------------------------------------------
 
 # --json: the stdout of the caller is fd 3 and gets only JSON lines (steps, then one result or
-# error line); everything else, the output of apt and the other commands included, goes to stderr.
-# FINAL is set once the result or error line is out.
+# error line); everything else goes to stderr, except the output of apt and dpkg (see pkg_run).
+# FINAL is set once the result or error line is out. A --json run goes on to its end when its client
+# has gone (a cancelled or cut SSH session closes the pipes of stdout and stderr), so that it never
+# leaves the server half set up: SIGPIPE is ignored (see main) and a write that fails is no reason to
+# stop. In text mode a write that fails stops the run, as before.
 JSON=0 FINAL=0 TMP=""
 WARNINGS=() LAST_WARNING=""
 
-say() { printf '%s\n' "$*"; }
-warn() { printf 'warning: %s\n' "$*" >&2; }
+say() { printf '%s\n' "$*" || ((JSON)); }
+warn() { printf 'warning: %s\n' "$*" >&2 || ((JSON)); }
 # A warning that SplitLane shows: its code goes into the result of --json.
 warn_code() {
 	WARNINGS+=("$1")
@@ -111,10 +117,10 @@ warn_code() {
 die_code() {
 	local code=$1
 	shift
-	printf 'error: %s\n' "$*" >&2
+	printf 'error: %s\n' "$*" >&2 || true
 	if ((JSON && !FINAL)); then
 		FINAL=1
-		printf '{"error":{"code":"%s","message":%s}}\n' "$code" "$(json_str "$*")" >&3
+		printf '{"error":{"code":"%s","message":%s}}\n' "$code" "$(json_str "$*")" >&3 || true
 	fi
 	exit 1
 }
@@ -140,7 +146,7 @@ json_str() {
 # (start, done, skip, warn) and a detail that never holds a secret. Nothing in text mode.
 step() {
 	if ((JSON)); then
-		printf '{"step":"%s","state":"%s","detail":%s}\n' "$1" "$2" "$(json_str "$3")" >&3
+		printf '{"step":"%s","state":"%s","detail":%s}\n' "$1" "$2" "$(json_str "$3")" >&3 || true
 	fi
 }
 
@@ -181,8 +187,10 @@ Options:
   --uninstall           remove the service, sing-box, the settings and the subscription site (the
                         fail2ban and the updates of --harden stay)
   --json                the output for programs (SplitLane's "Your own VPS" runs the kit with
-                        --json --default-protocols vless,hy2 --auto-ports --harden --subscription):
-                        one JSON object per line on stdout, the text on stderr
+                        --json --default-protocols vless,hy2 --auto-ports --harden --subscription,
+                        and --host when the address typed there is a public IPv4 address): one JSON
+                        object per line on stdout, the text on stderr; the run goes on to its end
+                        when the program that started it has gone
   --dry-run <dir>       a test: write everything under <dir> and check the config; no systemd,
                         firewall, Caddy or apt (address 192.0.2.10 unless --host is given)
   -h, --help            this help
@@ -190,7 +198,8 @@ Options:
 --host, --domain, --reality-sni, the protocols (of --protocols, or of --default-protocols on a
 new installation), the ports (those of --auto-ports too) and --subscription are remembered for
 later runs, --reset included, until --uninstall. After --reset, add the new links or subscription
-address in SplitLane and remove the old ones there.
+address in SplitLane and remove the old ones there. Runs go one at a time: a run waits up to 15
+minutes for another one that is still working.
 EOF
 }
 
@@ -259,10 +268,58 @@ sha256() {
 	printf '%s' "${s%% *}"
 }
 
-# apt-get with the usual umask: packages and their scripts must not get the 077 of this script. It
-# waits up to 3 minutes for the lock of dpkg, which a fresh VPS often holds for its own first
-# updates.
-apt_get() { (umask 022 && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=180 "$@"); }
+# apt-get or dpkg ($@) with the usual umask: packages and their scripts must not get the 077 of this
+# script. In --json their output goes to a log in the temporary folder, not to the pipes of the
+# session: apt, dpkg or a package script that cannot write there when the client has gone would
+# fail and leave dpkg half done. The last lines of the log go to stderr when they fail. They run
+# with the usual SIGPIPE and without the kit's lock (fd 9), which a daemon started by a package
+# script must not keep.
+pkg_run() {
+	local rc=0
+	if ((JSON)); then
+		(umask 022 && trap - PIPE && DEBIAN_FRONTEND=noninteractive "$@") >"$TMP/apt.log" 2>&1 9>&- || rc=$?
+		if ((rc)); then
+			tail -n 20 -- "$TMP/apt.log" >&2 || true
+		fi
+		return "$rc"
+	fi
+	(umask 022 && DEBIAN_FRONTEND=noninteractive "$@") 9>&-
+}
+
+# apt-get, waiting up to 3 minutes for the lock of dpkg, which a fresh VPS often holds for its own
+# first updates.
+apt_get() { pkg_run apt-get -o DPkg::Lock::Timeout=180 "$@"; }
+
+# apt-get update, tried 3 times 20 s apart: DPkg::Lock::Timeout does not cover the lock of the
+# package lists, which apt-daily or cloud-init may hold on a fresh VPS.
+apt_update() {
+	local i
+	for i in 1 2 3; do
+		if apt_get update -qq; then
+			return 0
+		fi
+		if ((i < 3)); then
+			say "apt-get update failed; trying again in 20 s"
+			sleep 20
+		fi
+	done
+	return 1
+}
+
+# apt-get install of the packages $@, its stdout dropped. Before the first one, dpkg finishes what a
+# run cut earlier (of the kit or of the system's own updates) left half done: apt refuses to install
+# after an interrupted dpkg, and dpkg --audit lists what such a run left.
+DPKG_AUDITED=0
+apt_install() {
+	if ((!DPKG_AUDITED)); then
+		DPKG_AUDITED=1
+		if [[ -n $(dpkg --audit 2>/dev/null || true) ]]; then
+			say "dpkg was interrupted before; finishing its work (dpkg --configure -a)"
+			pkg_run dpkg --configure -a || warn "dpkg --configure -a failed"
+		fi
+	fi
+	apt_get install -y -qq "$@" >/dev/null
+}
 
 # The value after "<name>: " in the output of sing-box generate.
 field() { sed -n "s/^$1: //p" <<<"$2"; }
@@ -442,7 +499,7 @@ preflight() {
 		SYSTEM_TEXT="$id $version, $ARCH"
 		if ! command -v curl >/dev/null 2>&1; then
 			say "Installing curl"
-			if ! apt_get update -qq || ! apt_get install -y -qq curl ca-certificates >/dev/null; then
+			if ! apt_update || ! apt_install curl ca-certificates; then
 				die_code download_failed "could not install curl with apt-get"
 			fi
 		fi
@@ -494,6 +551,21 @@ check_ports() {
 }
 
 # ---- State -----------------------------------------------------------------------------------
+
+# Runs of the kit one at a time, before one reads the state: a --json run whose client has gone
+# keeps working, and a run started meanwhile (SplitLane's "Try again") waits for it and then finds
+# the server as that run left it. The lock is on fd 9 and goes with the process, however it ends. A
+# dry run takes it under its directory.
+take_lock() {
+	local file=$ROOT$P_LOCK
+	command -v flock >/dev/null 2>&1 || die "flock is missing"
+	mkdir -p -- "$(dirname -- "$file")"
+	exec 9>>"$file" || die "could not open $file"
+	if ! flock -n 9; then
+		say "Another run of the kit is working here; waiting for it to end (up to $((LOCK_WAIT / 60)) minutes)"
+		flock -w "$LOCK_WAIT" 9 || die "another run of the kit is still working"
+	fi
+}
 
 # STATE_FOUND: the kit has been here before (the protocols of such a server stay; see
 # choose_protocols).
@@ -757,7 +829,7 @@ auto_port() {
 # ---- sing-box --------------------------------------------------------------------------------
 
 install_singbox() {
-	local bin=$ROOT$P_BIN name archive version
+	local bin=$ROOT$P_BIN name archive version sum
 	if [[ -n ${ST[BINARY]:-} ]] && [[ -x $bin ]] && [[ ${ST[BINARY]} == "$SINGBOX_VERSION:$(sha256 "$bin")" ]]; then
 		say "sing-box $SINGBOX_VERSION is already installed"
 		step singbox skip "sing-box $SINGBOX_VERSION is already installed"
@@ -784,10 +856,14 @@ install_singbox() {
 	(umask 022 && mkdir -p -- "$(dirname -- "$bin")")
 	chmod 755 -- "$(dirname -- "$bin")"
 	install -m 0755 "$TMP/$name/sing-box" "$bin.new"
+	sum=$(sha256 "$bin.new")
 	mv -f -- "$bin.new" "$bin"
+	# Remembered at once, before any output: a run cut from here on (its client gone, say) leaves a
+	# binary that the next run knows as the kit's own.
+	ST[BINARY]=$SINGBOX_VERSION:$sum
+	save_state
 	version=$("$bin" version) || die "the installed sing-box does not run"
 	say "Installed ${version%%$'\n'*}"
-	ST[BINARY]=$SINGBOX_VERSION:$(sha256 "$bin")
 	step singbox "done" "installed sing-box $SINGBOX_VERSION"
 }
 
@@ -1158,7 +1234,7 @@ subscription_step() {
 setup_subscription() {
 	if ! command -v caddy >/dev/null 2>&1; then
 		say "Installing Caddy for the subscription"
-		if ! apt_get update -qq; then
+		if ! apt_update; then
 			warn_code sub_skipped "subscription skipped: apt-get update failed"
 			return 0
 		fi
@@ -1166,7 +1242,7 @@ setup_subscription() {
 			warn_code sub_skipped "subscription skipped: this distribution has no caddy package (Debian 12 and Ubuntu 24.04 have one)"
 			return 0
 		fi
-		if ! apt_get install -y -qq caddy >/dev/null; then
+		if ! apt_install caddy; then
 			warn_code sub_skipped "subscription skipped: apt-get install caddy failed"
 			return 0
 		fi
@@ -1178,7 +1254,7 @@ setup_subscription() {
 	write_subscription_site caddy
 	add_caddy_import
 	if ! caddy validate --config "$P_CADDYFILE" --adapter caddyfile >"$TMP/caddy.log" 2>&1; then
-		tail -n 5 "$TMP/caddy.log" >&2
+		tail -n 5 "$TMP/caddy.log" >&2 || true
 		drop_subscription_site
 		warn_code sub_skipped "subscription skipped: Caddy refused the site (above)"
 		return 0
@@ -1239,22 +1315,26 @@ harden_packages() {
 		return 0
 	fi
 	say "Installing ${HARDEN_PACKAGES[*]}"
-	apt_get update -qq && apt_get install -y -qq "${HARDEN_PACKAGES[@]}" >/dev/null
+	apt_update && apt_install "${HARDEN_PACKAGES[@]}"
 }
 
-# The jail of the kit: sshd on the journal of systemd, since Debian 12 has no auth.log. The bans
-# are fail2ban's defaults: 5 failed logins within 10 minutes ban the address for 10 minutes. On
-# its start fail2ban reads the journal back those 10 minutes, so the mistyped passwords just before
-# this run would ban the session that runs it: the addresses connected over SSH now are exempt (a
-# re-run writes the ones of its own time).
+# The jail of the kit: sshd on the journal of systemd, since Debian 12 has no auth.log. A ban closes
+# the ports sshd listens on (port 22, ssh, when ss finds none): SplitLane's form takes another SSH
+# port too. The bans are fail2ban's defaults: 5 failed logins within 10 minutes ban the address for
+# 10 minutes. On its start fail2ban reads the journal back those 10 minutes, so the mistyped
+# passwords just before this run would ban the session that runs it: the addresses connected over
+# SSH now are exempt. A re-run writes the ports and the addresses of its own time.
 write_jail() {
-	local peers
-	peers=$(ssh_peers)
+	local ports peers
+	ports=$(sshd_ports)
+	peers=$(ssh_peers "$ports")
 	cat >"$TMP/jail" <<EOF || return 1
 # Added by the SplitLane server kit (install-singbox-server.sh --harden); --uninstall leaves it.
 [sshd]
 enabled = true
 backend = systemd
+# The ports sshd listened on during the kit's last run; a ban closes them to the address.
+port = ${ports:-ssh}
 # This machine and the SSH sessions open during the kit's last run are never banned.
 ignoreip = 127.0.0.1/8 ::1${peers:+ $peers}
 EOF
@@ -1262,18 +1342,39 @@ EOF
 	install -m 0644 "$TMP/jail" "$ROOT$P_JAIL"
 }
 
-# The addresses of the SSH connections established now (to a port sshd listens on), each once,
-# separated by spaces: IPv4, or IPv6 without brackets and scope; an IPv4-mapped IPv6 address
+# The tcp ports sshd listens on now, each once, in ascending order, joined by commas (22,2222):
+# the lines of ss whose process list has sshd, which also covers Ubuntu's ssh.socket, where sshd
+# inherits the listener of systemd.
+sshd_ports() {
+	command -v ss >/dev/null 2>&1 || return 0
+	local state local_addr users p
+	local -a sorted=()
+	local -A seen=()
+	while read -r state _ _ local_addr _ users; do
+		p=${local_addr##*:}
+		if [[ $state == LISTEN && $users == *'"sshd",'* && $p =~ ^[0-9]{1,5}$ ]]; then
+			seen[$p]=1
+		fi
+	done < <(ss -H -ltnp 2>/dev/null || true)
+	if ((${#seen[@]})); then
+		mapfile -t sorted < <(printf '%s\n' "${!seen[@]}" | sort -n)
+	fi
+	local IFS=,
+	printf '%s' "${sorted[*]}"
+}
+
+# The addresses of the SSH connections established now to one of the ports $1 (sshd_ports), each
+# once, separated by spaces: IPv4, or IPv6 without brackets and scope; an IPv4-mapped IPv6 address
 # becomes IPv4. ss tells, since sudo drops $SSH_CLIENT.
 ssh_peers() {
 	command -v ss >/dev/null 2>&1 || return 0
-	local state local_addr peer users out=""
+	local state local_addr peer p out=""
+	local -a list=()
 	local -A ports=() seen=()
-	while read -r state _ _ local_addr _ users; do
-		if [[ $state == LISTEN && $users == *'"sshd",'* ]]; then
-			ports[${local_addr##*:}]=1
-		fi
-	done < <(ss -H -ltnp 2>/dev/null || true)
+	IFS=, read -r -a list <<<"$1"
+	for p in "${list[@]}"; do
+		ports[$p]=1
+	done
 	while read -r state _ _ local_addr peer _; do
 		if [[ $state != ESTAB || -z ${ports[${local_addr##*:}]:-} ]]; then
 			continue
@@ -1341,6 +1442,7 @@ uninstall() {
 	if ((!DRY_RUN)); then
 		((EUID == 0)) || die "run it as root: sudo bash $0 --uninstall"
 	fi
+	take_lock
 	load_state
 	local bin=$ROOT$P_BIN
 	if [[ -f $ROOT$P_UNIT ]]; then
@@ -1468,7 +1570,7 @@ print_json_result() {
 	done
 	FINAL=1
 	printf '{"result":{"links":[%s],"wireguard":%s,"subscription":%s,"ports":{%s},"warnings":[%s]}}\n' \
-		"$links" "$wg" "$sub" "$ports" "$warnings" >&3
+		"$links" "$wg" "$sub" "$ports" "$warnings" >&3 || true
 }
 
 # Removes the temporary folder. A --json run that stops without its result or error line (a
@@ -1480,7 +1582,7 @@ on_exit() {
 	fi
 	if ((JSON && rc != 0 && !FINAL)); then
 		FINAL=1
-		printf '{"error":{"code":"kit_failed","message":"the kit stopped unexpectedly (exit code %d); its stderr says where"}}\n' "$rc" >&3
+		printf '{"error":{"code":"kit_failed","message":"the kit stopped unexpectedly (exit code %d); its stderr says where"}}\n' "$rc" >&3 || true
 		exit 1
 	fi
 }
@@ -1495,6 +1597,7 @@ main() {
 	done
 	if ((JSON)); then
 		exec 3>&1 1>&2
+		trap '' PIPE
 	fi
 	trap on_exit EXIT
 	parse_args "$@"
@@ -1505,6 +1608,7 @@ main() {
 	fi
 	step system start "checking the system"
 	preflight
+	take_lock
 	load_state
 	check_state loaded
 	find_kit_pid
