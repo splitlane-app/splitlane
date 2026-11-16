@@ -20,7 +20,7 @@
 - Списки портов `--auto-ports` (дословно из спецификации, раздел 4): VLESS (tcp) 443, 2053, 2083, 2087, 2096; Hysteria2 (udp) 443, 4443, 8443, 10443; подписка (tcp) 8443, 9443, 7443; Shadowsocks (tcp и udp) 8388, 8389, 9388; WireGuard (udp) 51820, 51821, 51822. Порт 80 не переносится.
 - Протокол канала — версия 3 (`PROTOCOL_VERSION`/`protocol.Version`); окно и служебный процесс одной версии.
 - «Настроить» доступна только в фазах `off` и `error`.
-- Коды ошибок подкоманды (спецификация, раздел 8): `bad_input`, `ssh_unreachable`, `ssh_auth`, `ssh_key`, `no_admin`, `os_unsupported`, `download_failed`, `ports_busy`, `kit_failed`, `timeout`, `cancelled`, `connection_lost`; предупреждения: `harden_failed`, `sub_unreachable`, `sub_port80_busy`.
+- Коды ошибок подкоманды (спецификация, раздел 8): `bad_input`, `ssh_unreachable`, `ssh_auth`, `ssh_key`, `password_expired`, `no_admin`, `os_unsupported`, `download_failed`, `ports_busy`, `kit_failed`, `timeout`, `cancelled`, `connection_lost`; предупреждения: `harden_failed`, `sub_unreachable`, `sub_port80_busy`.
 - Тексты — `ru.ts`/`en.ts`; глоссарий части 3 плюс: «Свой VPS» — "Your own VPS", «Настроить» — "Set up", «Подключить телефон» — "Connect a phone", «Отменить» — "Cancel".
 - Модульные тесты не трогают систему и сеть вне `127.0.0.1`; Docker — только в задаче 4 и не во время сетевых проверок; `pnpm dev`, установщик, `SplitLane.exe` не запускаются; `scripts\test-installer.ps1` на этом ПК не запускать.
 - Личные данные — нигде. В тестах — `192.0.2.x`, `198.51.100.x`, `example.com`, выдуманные ключи и пароли.
