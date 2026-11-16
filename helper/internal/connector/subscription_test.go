@@ -90,6 +90,44 @@ func TestParseText(t *testing.T) {
 	}
 }
 
+// A .conf pasted together with links (the kit prints both): each part is read as if pasted alone, with
+// the line numbers of the whole text, and the .conf gets the id it has alone.
+func TestParseTextConfWithLinks(t *testing.T) {
+	cases := []struct {
+		name    string
+		text    string
+		servers []string
+		rejects []rej
+	}{
+		{"links, then the conf", linkVLESS + "\n" + linkSS + "\n\n" + wgConf, []string{"vpn.example.com:51820", "🇩🇪 Germany", "Outline"}, nil},
+		{"the conf, then links", wgConf + "\n" + linkTrojan, []string{"vpn.example.com:51820", "Trojan"}, nil},
+		{"a bad link keeps its line", linkTrojan + "\nvless://broken\n" + wgConf, []string{"vpn.example.com:51820", "Trojan"}, []rej{{2, CodeMissingField}}},
+		{"a bad conf keeps its line, the links still count", linkTrojan + "\n" + strings.Replace(wgConf, "MTU = 1420", "Jc = 3", 1),
+			[]string{"Trojan"}, []rej{{6, CodeAmneziaWG}}},
+		{"a comment with an address stays in the conf", "# from https://example.com/vpn\n" + wgConf, []string{"vpn.example.com:51820"}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			servers, rejected, sub := ParseText(c.text, "")
+			if got := names(servers); !reflect.DeepEqual(got, c.servers) {
+				t.Errorf("servers %q, want %q", got, c.servers)
+			}
+			if got := rejs(rejected); !reflect.DeepEqual(got, c.rejects) {
+				t.Errorf("rejected %v, want %v", got, c.rejects)
+			}
+			if sub != "" {
+				t.Errorf("subscription %q", sub)
+			}
+		})
+	}
+	alone, _, _ := ParseText(wgConf, "")
+	mixed, _, _ := ParseText(linkTrojan+"\n"+wgConf+"\n"+linkSS, "")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	if len(alone) != 1 || len(mixed) != 3 || alone[0].Text != mixed[0].Text || ServerID(key, alone[0].Text) != ServerID(key, mixed[0].Text) {
+		t.Fatalf("the conf among links differs from the conf alone: %s / %s", dump(alone), dump(mixed))
+	}
+}
+
 func TestParseTextConfName(t *testing.T) {
 	cases := []struct{ conf, want string }{
 		{"office", "office"},

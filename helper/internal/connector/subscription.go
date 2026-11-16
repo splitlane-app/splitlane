@@ -2,13 +2,15 @@ package connector
 
 import (
 	"net/url"
+	"regexp"
 	"strings"
 )
 
 // ParseText reads the text of proxy.add. It is one of:
 //   - a WireGuard .conf, when a line is "[Interface]": one server or one rejection; the server is
 //     named confName (a base name the caller supplies, never a path; see ParseWireGuardConf), or
-//     host:port when it is empty;
+//     host:port when it is empty. Share links may come with it, as the server kit prints both: the
+//     lines that start like a link are read as links (parseConfWithLinks);
 //   - a subscription address: a single https:// line (with nothing else but blank and comment
 //     lines), returned as subscriptionURL for the caller to fetch; a single http:// line in its
 //     place is the rejection fetch_not_https of the whole text, and nothing is fetched;
@@ -26,11 +28,8 @@ func ParseText(text, confName string) (servers []Server, rejected []Rejection, s
 	lines := splitLines(text)
 	for _, l := range lines {
 		if strings.EqualFold(strings.TrimSpace(l), "[interface]") {
-			s, r := parseConf([]byte(text), confName)
-			if r != nil {
-				return nil, []Rejection{*r}, ""
-			}
-			return []Server{s}, nil, ""
+			servers, rejected = parseConfWithLinks(lines, confName)
+			return servers, rejected, ""
 		}
 	}
 	only, count := 0, 0
@@ -52,6 +51,39 @@ func ParseText(text, confName string) (servers []Server, rejected []Rejection, s
 	}
 	servers, rejected = parseLines(lines, true)
 	return servers, rejected, ""
+}
+
+// schemeLine matches a line that starts like a share link: a .conf never has one (its comments start
+// with '#', and wg-quick's PostUp and the like start with their key).
+var schemeLine = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+
+// parseConfWithLinks reads a .conf that may come with share links around it, as the server kit prints
+// them: the lines that start like a link are read as links, the others as the .conf. Each part keeps the
+// line numbers of the whole text, the other part's lines left blank, and blank lines change neither the
+// .conf nor its id. The .conf comes first in the answer.
+func parseConfWithLinks(lines []string, confName string) ([]Server, []Rejection) {
+	conf := make([]string, len(lines))
+	links := make([]string, len(lines))
+	hasLinks := false
+	for i, l := range lines {
+		if schemeLine.MatchString(strings.TrimSpace(l)) {
+			links[i], hasLinks = l, true
+		} else {
+			conf[i] = l
+		}
+	}
+	var servers []Server
+	var rejected []Rejection
+	if s, r := parseConf([]byte(strings.Join(conf, "\n")), confName); r != nil {
+		rejected = append(rejected, *r)
+	} else {
+		servers = append(servers, s)
+	}
+	if hasLinks {
+		s, r := parseLines(links, true)
+		servers, rejected = append(servers, s...), append(rejected, r...)
+	}
+	return servers, rejected
 }
 
 // ParseSubscription reads a subscription response: links one per line, either as plain text or the

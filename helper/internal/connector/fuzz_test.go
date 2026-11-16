@@ -76,6 +76,7 @@ func FuzzParseSubscription(f *testing.F) {
 	f.Add([]byte(base64.RawURLEncoding.EncodeToString([]byte(list))))
 	f.Add([]byte("#profile-title: x\r\n\r\n" + linkTrojan))
 	f.Add([]byte(wgConf))
+	f.Add([]byte(linkTrojan + "\n" + wgConf + "\n" + linkSS))
 	f.Add([]byte("proxies:\n - {}"))
 	f.Add([]byte("=\n"))
 	f.Fuzz(func(t *testing.T, body []byte) {
