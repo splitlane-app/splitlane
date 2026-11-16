@@ -163,7 +163,7 @@ func TestHelloFirst(t *testing.T) {
 	if code := errCode(c.send(t, `{"id":1,"method":"state.get"}`)); code != protocol.CodeBadRequest {
 		t.Fatalf("before hello: %s", code)
 	}
-	m := c.send(t, `{"id":2,"method":"hello","params":{"protocol":2}}`)
+	m := c.send(t, `{"id":2,"method":"hello","params":{"protocol":3}}`)
 	res, _ := m["result"].(map[string]any)
 	if m["id"].(float64) != 2 || res["core"] != "1.14.4" || res["protocol"].(float64) != protocol.Version {
 		t.Fatalf("hello: %v", m)
@@ -188,7 +188,7 @@ func TestLongRequestsAreAnsweredConcurrently(t *testing.T) {
 	entered, cancelled, release := h.holdDownloads()
 	defer release()
 	c := dial(t, name)
-	c.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	c.send(t, `{"id":1,"method":"hello","params":{"protocol":3}}`)
 	c.conn.Write([]byte(`{"id":2,"method":"proxy.refresh","params":{"id":"sub-0123456789abcdef"}}` + "\n"))
 	<-entered
 	if m := c.send(t, `{"id":3,"method":"routing.disable"}`); m["id"].(float64) != 3 || m["result"] == nil {
@@ -205,7 +205,7 @@ func TestLongRequestsAreAnsweredConcurrently(t *testing.T) {
 	entered, cancelled, release = h.holdDownloads()
 	defer release()
 	gone := dial(t, name)
-	gone.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	gone.send(t, `{"id":1,"method":"hello","params":{"protocol":3}}`)
 	gone.conn.Write([]byte(`{"id":2,"method":"proxy.add","params":{"text":"https://example.com/s"}}` + "\n"))
 	gone.conn.Write([]byte(`{"id":3,"method":"proxy.refresh","params":{"id":"sub-0123456789abcdef"}}` + "\n"))
 	<-entered
@@ -218,7 +218,7 @@ func TestLongRequestsAreAnsweredConcurrently(t *testing.T) {
 
 	entered, cancelled, _ = h.holdDownloads()
 	last := dial(t, name)
-	last.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	last.send(t, `{"id":1,"method":"hello","params":{"protocol":3}}`)
 	last.conn.Write([]byte(`{"id":2,"method":"proxy.refresh","params":{"id":"sub-0123456789abcdef"}}` + "\n"))
 	<-entered
 	s.Close()
@@ -277,8 +277,8 @@ func TestProtocolMismatch(t *testing.T) {
 func TestBroadcastToEveryClient(t *testing.T) {
 	s, h, name := serve(t)
 	a, b, silent := dial(t, name), dial(t, name), dial(t, name)
-	a.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
-	b.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	a.send(t, `{"id":1,"method":"hello","params":{"protocol":3}}`)
+	b.send(t, `{"id":1,"method":"hello","params":{"protocol":3}}`)
 	_ = silent
 	deadline := time.Now().Add(5 * time.Second)
 	for h.count() != 2 && time.Now().Before(deadline) {
@@ -306,8 +306,8 @@ func TestBroadcastToEveryClient(t *testing.T) {
 func TestStalledClientIsDropped(t *testing.T) {
 	s, h, name := serve(t)
 	stalled, live := dial(t, name), dial(t, name)
-	stalled.conn.Write([]byte(`{"id":1,"method":"hello","params":{"protocol":2}}` + "\n")) // never reads again
-	live.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+	stalled.conn.Write([]byte(`{"id":1,"method":"hello","params":{"protocol":3}}` + "\n")) // never reads again
+	live.send(t, `{"id":1,"method":"hello","params":{"protocol":3}}`)
 	big := protocol.State{Phase: protocol.PhaseOn}
 	for i := 0; i < 40; i++ {
 		big.Apps = append(big.Apps, protocol.AppRule{ID: fmt.Sprint(i), Name: strings.Repeat("x", 250), Exe: strings.Repeat("y", 250)})
@@ -382,7 +382,7 @@ func TestShutdownReplyIsNotLost(t *testing.T) {
 		h.srv = s
 		go s.Serve()
 		c := dial(t, name)
-		c.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`)
+		c.send(t, `{"id":1,"method":"hello","params":{"protocol":3}}`)
 		c.conn.Write([]byte(`{"id":2,"method":"helper.shutdown"}` + "\n"))
 		c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		text, err := c.r.ReadString('\n')
@@ -457,7 +457,7 @@ func TestAcceptErrorDoesNotStopServing(t *testing.T) {
 		t.Fatalf("Accept was tried again after %s, want a pause of %s", waited, acceptPause)
 	}
 	c := &testClient{conn: peer, r: bufio.NewReader(peer)}
-	if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":2}}`); m["result"] == nil {
+	if m := c.send(t, `{"id":1,"method":"hello","params":{"protocol":3}}`); m["result"] == nil {
 		t.Fatalf("the client after the error is not served: %v", m)
 	}
 	select {

@@ -7,6 +7,7 @@ import {
   packageValue,
   parseActivity,
   parseProxyAddResult,
+  parseProxyRevealResult,
   parseState,
   utf8Bytes
 } from './protocol'
@@ -121,8 +122,8 @@ const sub = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
 })
 
 describe('parseState v2', () => {
-  test('the protocol is 2 and no_server is a reason', () => {
-    expect(PROTOCOL_VERSION).toBe(2)
+  test('the protocol is 3 and no_server is a reason', () => {
+    expect(PROTOCOL_VERSION).toBe(3)
     const s = emptyState()
     s.reason = { code: 'no_server', params: {} }
     expect(parseState(s).reason?.code).toBe('no_server')
@@ -198,10 +199,23 @@ describe('parseState v2', () => {
 })
 
 describe('parseProxyAddResult', () => {
-  const ok = { added: [SERVER_A], existing: 1, rejected: [{ line: 0, code: 'too_many' }, { line: 3, code: 'bad_link' }], rejectedMore: 4 }
+  const ok = { added: [SERVER_A], existing: 1, servers: [SERVER_A], subscription: null, rejected: [{ line: 0, code: 'too_many' }, { line: 3, code: 'bad_link' }], rejectedMore: 4 }
   test('accepts the helper answer', () => {
     expect(parseProxyAddResult(ok)).toEqual(ok)
-    expect(parseProxyAddResult({ added: [], existing: 0, rejected: [], rejectedMore: 0 }).added).toEqual([])
+    expect(parseProxyAddResult({ added: [], existing: 0, servers: [], subscription: null, rejected: [], rejectedMore: 0 }).added).toEqual([])
+  })
+  test('servers and subscription (protocol 3) are required and checked', () => {
+    const sub = 'sub-0123456789abcdef'
+    expect(parseProxyAddResult({ ...ok, servers: [SERVER_A, SERVER_A], subscription: sub })).toMatchObject({ servers: [SERVER_A, SERVER_A], subscription: sub })
+    const { servers: _s, ...noServers } = ok
+    const { subscription: _u, ...noSubscription } = ok
+    expect(() => parseProxyAddResult(noServers)).toThrow(/servers/)
+    expect(() => parseProxyAddResult(noSubscription)).toThrow(/subscription/)
+    expect(() => parseProxyAddResult({ ...ok, servers: ['xyz'] })).toThrow(/servers\[0\]/)
+    expect(() => parseProxyAddResult({ ...ok, subscription: SERVER_A })).toThrow(/subscription/)
+    expect(() => parseProxyAddResult({ ...ok, subscription: 7 })).toThrow(/subscription/)
+    expect(parseProxyAddResult({ ...ok, servers: Array(500).fill(SERVER_A) }).servers).toHaveLength(500)
+    expect(() => parseProxyAddResult({ ...ok, servers: Array(501).fill(SERVER_A) })).toThrow(/more than 500/)
   })
   test('keeps a code it does not know', () => {
     const r = parseProxyAddResult({ ...ok, rejected: [{ line: 1, code: 'from_the_future' }] })
@@ -225,4 +239,21 @@ describe('parseProxyAddResult', () => {
     expect(new Set(PROXY_REJECT_CODES).size).toBe(18)
     for (const c of PROXY_REJECT_CODES) expect(ERROR_CODES.includes(c as never) || c === 'too_many').toBe(true)
   })
+})
+
+describe('parseProxyRevealResult', () => {
+  test('the address of a subscription', () => {
+    expect(parseProxyRevealResult({ address: 'https://sub.example.com/t' })).toEqual({ address: 'https://sub.example.com/t' })
+  })
+  test('is strict about the shape', () => {
+    expect(() => parseProxyRevealResult(null)).toThrow()
+    expect(() => parseProxyRevealResult({})).toThrow(/address/)
+    expect(() => parseProxyRevealResult({ address: '' })).toThrow(/address/)
+    expect(() => parseProxyRevealResult({ address: 7 })).toThrow(/address/)
+    expect(() => parseProxyRevealResult({ address: 'x'.repeat(64 * 1024 + 1) })).toThrow(/address/)
+  })
+})
+
+test('the protocol is version 3', () => {
+  expect(PROTOCOL_VERSION).toBe(3)
 })

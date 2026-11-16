@@ -157,6 +157,8 @@ test('the notice of a late answer: the numbers only, never a line', () => {
     result: {
       added: Array.from({ length: added }, (_, i) => `00000000000000${String(i).padStart(2, '0')}`),
       existing: 4,
+      servers: [],
+      subscription: null,
       rejected: Array.from({ length: rejected }, (_, i) => ({ line: i + 1, code: 'bad_link' })),
       rejectedMore: more
     }

@@ -25,7 +25,7 @@ const withState = (s = proxyState([], null, [], { phase: 'off' })): Snapshot => 
 
 const result = (over: Partial<ProxyAddResult> = {}): ProxyOutcome => ({
   kind: 'done',
-  result: { added: [], existing: 0, rejected: [], rejectedMore: 0, ...over }
+  result: { added: [], existing: 0, servers: [], subscription: null, rejected: [], rejectedMore: 0, ...over }
 })
 
 /** A bridge call that waits for the test to answer it. */

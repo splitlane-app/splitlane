@@ -37,6 +37,9 @@ func (e *Engine) Handle(ctx context.Context, method string, params json.RawMessa
 		return e.cmdProxyAdd(ctx, params)
 	case protocol.MethodProxyRefresh:
 		return e.cmdProxyRefresh(ctx, params)
+	case protocol.MethodProxyReveal:
+		// Any phase, outside the queue: it only reads.
+		return e.cmdProxyReveal(params)
 	}
 	e.queue.Lock()
 	keep := false // true when a background job took over the queue and unlocks it when done

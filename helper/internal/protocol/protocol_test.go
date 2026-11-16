@@ -120,10 +120,10 @@ func TestStateJSONHasEmptyListsAndNulls(t *testing.T) {
 // Protocol version 2 (spec of stage 3 part 1, section 4): the proxy methods, the connector and the
 // proxy block of the state.
 func TestVersionTwoHasTheProxyMethods(t *testing.T) {
-	if Version != 2 {
+	if Version != 3 {
 		t.Fatalf("version %d", Version)
 	}
-	for _, m := range []string{MethodProxyAdd, MethodProxyRefresh, MethodProxyRemove, MethodProxySelect} {
+	for _, m := range []string{MethodProxyAdd, MethodProxyRefresh, MethodProxyRemove, MethodProxySelect, MethodProxyReveal} {
 		found := false
 		for _, k := range Methods {
 			found = found || k == m
@@ -133,8 +133,8 @@ func TestVersionTwoHasTheProxyMethods(t *testing.T) {
 		}
 	}
 	if MethodProxyAdd != "proxy.add" || MethodProxyRefresh != "proxy.refresh" || MethodProxyRemove != "proxy.remove" ||
-		MethodProxySelect != "proxy.select" || ReasonNoServer != "no_server" || ConnectorTailscale != "tailscale" || ConnectorProxy != "proxy" {
-		t.Fatal("names of version 2")
+		MethodProxySelect != "proxy.select" || MethodProxyReveal != "proxy.reveal" || ReasonNoServer != "no_server" || ConnectorTailscale != "tailscale" || ConnectorProxy != "proxy" {
+		t.Fatal("names of version 3")
 	}
 }
 
@@ -168,8 +168,8 @@ func TestProxyStateJSON(t *testing.T) {
 	if s.Proxy.Servers[0].Name != "a" || *s.Proxy.Selected != sel || s.Proxy.Subscriptions[0].Count != 1 || *s.Proxy.Subscriptions[0].Error != errText {
 		t.Fatal("clone shares the proxy block with the original")
 	}
-	r, _ := json.Marshal(ProxyAddResult{Added: []string{}, Existing: 1, Rejected: []ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3})
-	if string(r) != `{"added":[],"existing":1,"rejected":[{"line":2,"code":"bad_link"}],"rejectedMore":3}` {
+	r, _ := json.Marshal(ProxyAddResult{Added: []string{}, Existing: 1, Servers: []string{"a"}, Rejected: []ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3})
+	if string(r) != `{"added":[],"existing":1,"servers":["a"],"subscription":null,"rejected":[{"line":2,"code":"bad_link"}],"rejectedMore":3}` {
 		t.Fatalf("result %s", r)
 	}
 }

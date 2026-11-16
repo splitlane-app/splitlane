@@ -69,6 +69,11 @@ export interface SplitLaneBridge {
   proxyAddFile(): Promise<ProxyOutcome>
   /** Downloads a subscription again; `id` is the id of a subscription. */
   proxyRefresh(id: string): Promise<ProxyOutcome>
+  /**
+   * The address of a subscription (`id` is a subscription's), to show it as a QR code for a phone: a secret, kept
+   * out of the state, the logs and the page's storage by the caller.
+   */
+  proxyReveal(id: string): Promise<{ address: string } | { error: HelperError }>
   /** The window's version, and whether it runs from the installed folder (only then it can repair the helper). */
   appInfo(): Promise<AppInfo>
   retryLink(): Promise<void>
@@ -102,6 +107,7 @@ export const IPC = {
   proxyAdd: 'splitlane:proxy-add',
   proxyAddFile: 'splitlane:proxy-add-file',
   proxyRefresh: 'splitlane:proxy-refresh',
+  proxyReveal: 'splitlane:proxy-reveal',
   appInfo: 'splitlane:app-info',
   retryLink: 'splitlane:retry-link',
   setSettings: 'splitlane:set-settings',

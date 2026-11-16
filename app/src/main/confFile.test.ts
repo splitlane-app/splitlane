@@ -3,7 +3,7 @@ import { LIMITS } from '../shared/protocol'
 import { FALLBACK_CONF_NAME, addConfFile, confName, readUpTo, type ConfDeps, type ConfHandle } from './confFile'
 
 const PATH = String.raw`C:\Users\someone\Documents\wg-home.conf`
-const RESULT = { added: ['0123456789abcdef'], existing: 0, rejected: [], rejectedMore: 0 }
+const RESULT = { added: ['0123456789abcdef'], existing: 0, servers: ['0123456789abcdef'], subscription: null, rejected: [], rejectedMore: 0 }
 const MAX = LIMITS.maxProxyTextBytes
 
 /** A file of `bytes` that hands out at most `chunk` bytes per read. */
@@ -76,13 +76,13 @@ describe('addConfFile', () => {
     const big = setup(enc('a'.repeat(MAX + 1)))
     expect(await addConfFile(big.deps, big.link)).toEqual({
       kind: 'done',
-      result: { added: [], existing: 0, rejected: [{ line: 0, code: 'too_long' }], rejectedMore: 0 }
+      result: { added: [], existing: 0, servers: [], subscription: null, rejected: [{ line: 0, code: 'too_long' }], rejectedMore: 0 }
     })
     expect(big.link.call).not.toHaveBeenCalled()
     expect(big.h?.closed).toBe(true)
   })
   test('empty, blank or not UTF-8: a line-0 bad_wireguard without a call', async () => {
-    const bad = { kind: 'done', result: { added: [], existing: 0, rejected: [{ line: 0, code: 'bad_wireguard' }], rejectedMore: 0 } }
+    const bad = { kind: 'done', result: { added: [], existing: 0, servers: [], subscription: null, rejected: [{ line: 0, code: 'bad_wireguard' }], rejectedMore: 0 } }
     const files = [new Uint8Array(0), enc('  \r\n'), enc('\ufeff'), Uint8Array.of(0xff, 0xfe, 0x41, 0x00), Uint8Array.of(0x5b, 0xc3, 0x28)]
     for (const bytes of files) {
       const t = setup(bytes)

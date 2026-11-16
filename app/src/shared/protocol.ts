@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 export const PIPE_NAME = '\\\\.\\pipe\\SplitLane.Helper'
 export const TASK_NAME = 'SplitLane Helper'
 
@@ -164,10 +164,16 @@ export interface ProxyRejection {
   code: string
 }
 
-/** The answer of proxy.add and proxy.refresh. */
+/**
+ * The answer of proxy.add and proxy.refresh. `servers` are the ids of every server of the text or the
+ * subscription, in their order, new and already there; `subscription` is the id of the subscription this call
+ * added or refreshed, null for links and a .conf (protocol 3).
+ */
 export interface ProxyAddResult {
   added: string[]
   existing: number
+  servers: string[]
+  subscription: string | null
   rejected: ProxyRejection[]
   rejectedMore: number
 }
@@ -217,6 +223,7 @@ export const LIMITS = {
   maxServers: 500,
   maxSubscriptions: 20,
   maxSubscriptionBytes: 1024 * 1024,
+  maxSubscriptionAddress: 64 * 1024,
   fetchTimeoutSeconds: 20,
   maxRejections: 50
 } as const
@@ -363,9 +370,13 @@ export function parseProxyAddResult(x: unknown): ProxyAddResult {
   const o = obj(x, 'result')
   const rejected = arr(o.rejected, 'result.rejected')
   if (rejected.length > LIMITS.maxRejections) throw new Error(`result.rejected: more than ${LIMITS.maxRejections}`)
+  const servers = arr(o.servers, 'result.servers')
+  if (servers.length > LIMITS.maxServers) throw new Error(`result.servers: more than ${LIMITS.maxServers}`)
   return {
     added: arr(o.added, 'result.added').map((v, i) => matching(v, SERVER_ID, `result.added[${i}]`)),
     existing: int(o.existing, 'result.existing'),
+    servers: servers.map((v, i) => matching(v, SERVER_ID, `result.servers[${i}]`)),
+    subscription: o.subscription === null ? null : matching(o.subscription, SUBSCRIPTION_ID, 'result.subscription'),
     rejected: rejected.map((v, i) => {
       const p = `result.rejected[${i}]`
       const e = obj(v, p)
@@ -373,6 +384,14 @@ export function parseProxyAddResult(x: unknown): ProxyAddResult {
     }),
     rejectedMore: int(o.rejectedMore, 'result.rejectedMore')
   }
+}
+
+/** The answer of proxy.reveal: the address of a subscription, a secret that only the QR code of the window shows. */
+export function parseProxyRevealResult(x: unknown): { address: string } {
+  const o = obj(x, 'result')
+  const address = str(o.address, 'result.address')
+  if (address === '' || address.length > LIMITS.maxSubscriptionAddress) throw new Error('result.address: empty or too long')
+  return { address }
 }
 
 export function parseState(x: unknown): HelperState {

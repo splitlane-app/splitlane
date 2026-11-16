@@ -38,7 +38,7 @@ const usage = `usage: slctl [-pipe NAME] [-timeout 150s] [-show-addresses] [-url
   lanes FILE                     lanes.set with the params in FILE (JSON)
   exitnode IP                    tailscale.setExitNode
   proxy add [-name NAME] TEXT|@FILE   proxy.add: links, a .conf or a subscription address; a .conf FILE is named after it
-  proxy refresh|remove|select ID      proxy.refresh, proxy.remove, proxy.select
+  proxy refresh|remove|select|reveal ID  proxy.refresh, proxy.remove, proxy.select, proxy.reveal (prints the address)
   proxy list                     the connector, the servers and the subscriptions
   clear-system-exit-node         systemTailscale.clearExitNode
   login [-timeout 300s]          tailscale.login, print the login link once, wait until logged in
@@ -543,7 +543,7 @@ func command(c *client, cmd string, args []string, url string) int {
 
 // proxyCommand is slctl proxy (stage 3 part 1, for development): proxy.add with the text, or with @FILE
 // read here (a FILE ending in .conf gives its base name as the name unless -name names one, as the window
-// does), proxy.refresh, proxy.remove and proxy.select of an id, and list from state.get. The text is sent,
+// does), proxy.refresh, proxy.remove, proxy.select and proxy.reveal (prints the address of a subscription) of an id, and list from state.get. The text is sent,
 // never printed: the answer of add and refresh is printed as the ids and the rejected lines with their codes.
 func proxyCommand(c *client, args []string) int {
 	if len(args) == 0 {
@@ -573,7 +573,7 @@ func proxyCommand(c *client, args []string) int {
 			}
 		}
 		return proxyResult(c, protocol.MethodProxyAdd, protocol.ProxyAddParams{Text: text, Name: *name})
-	case "refresh", "remove", "select":
+	case "refresh", "remove", "select", "reveal":
 		if len(rest) != 1 {
 			fmt.Fprintln(c.out, usage)
 			return exitUsage
@@ -614,6 +614,15 @@ func proxyResult(c *client, method string, params any) int {
 		return c.fail(err)
 	case perr != nil:
 		return exitFailed // call printed its ERROR line
+	case method == protocol.MethodProxyReveal:
+		// Development only: the address goes to this console, never into a report or a log.
+		var res protocol.ProxyRevealResult
+		if json.Unmarshal(raw, &res) != nil {
+			c.print("SLCTL: the answer is not a proxy.reveal result")
+			return exitFailed
+		}
+		c.print("ADDRESS %s", res.Address)
+		return exitOK
 	case method != protocol.MethodProxyAdd && method != protocol.MethodProxyRefresh:
 		return exitOK
 	}
@@ -625,7 +634,8 @@ func proxyResult(c *client, method string, params any) int {
 	for _, r := range res.Rejected {
 		c.print("REJECTED line=%d code=%s", r.Line, r.Code)
 	}
-	c.print("SLCTL: added=%d existing=%d rejected=%d more=%d", len(res.Added), res.Existing, len(res.Rejected), res.RejectedMore)
+	c.print("SLCTL: added=%d existing=%d servers=%d subscription=%s rejected=%d more=%d", len(res.Added), res.Existing,
+		len(res.Servers), str(res.Subscription), len(res.Rejected), res.RejectedMore)
 	return exitOK
 }
 

@@ -361,9 +361,12 @@ func storedServer(s connector.Server, id, source string) store.StoredServer {
 }
 
 // addResult is the answer of proxy.add and proxy.refresh: the servers new to the list, how many were there
-// already, at most MaxRejected rejected lines and the number of the others.
-func addResult(added []string, existing int, rejected []connector.Rejection) protocol.ProxyAddResult {
-	r := protocol.ProxyAddResult{Added: append([]string{}, added...), Existing: existing, Rejected: []protocol.ProxyRejection{}}
+// already, the ids of all servers of the text or the subscription (servers, in their order, new and not),
+// the id of the subscription (nil for links and a .conf), at most MaxRejected rejected lines and the
+// number of the others.
+func addResult(added []string, existing int, servers []string, subscription *string, rejected []connector.Rejection) protocol.ProxyAddResult {
+	r := protocol.ProxyAddResult{Added: append([]string{}, added...), Existing: existing, Servers: append([]string{}, servers...),
+		Subscription: subscription, Rejected: []protocol.ProxyRejection{}}
 	for i, x := range rejected {
 		if i == protocol.MaxRejected {
 			r.RejectedMore = len(rejected) - i
@@ -437,9 +440,15 @@ func (e *Engine) addServersLocked(servers []connector.Server, rejected []connect
 		have[s.ID] = true
 	}
 	var added []string
+	all := []string{} // the ids of every server of the text, once each
+	seen := map[string]bool{}
 	existing := 0
 	for _, s := range servers {
 		id := e.serverIDLocked(s.Text)
+		if !seen[id] {
+			seen[id] = true
+			all = append(all, id)
+		}
 		if have[id] {
 			existing++
 			continue
@@ -450,7 +459,7 @@ func (e *Engine) addServersLocked(servers []connector.Server, rejected []connect
 	}
 	if len(next.Servers) > store.MaxServers {
 		e.d.Log("proxy.add: %d servers would be more than %d: nothing added", len(next.Servers), store.MaxServers)
-		return addResult(nil, 0, append([]connector.Rejection{{Code: protocol.CodeTooMany}}, rejected...)), false, nil
+		return addResult(nil, 0, nil, nil, append([]connector.Rejection{{Code: protocol.CodeTooMany}}, rejected...)), false, nil
 	}
 	if len(added) > 0 {
 		if err := e.saveServersLocked(next); err != nil {
@@ -460,7 +469,7 @@ func (e *Engine) addServersLocked(servers []connector.Server, rejected []connect
 	switched := e.selectFirstLocked(added)
 	e.publish()
 	e.d.Log("proxy.add: %d servers added, %d there already; %d lines rejected (%s)", len(added), existing, len(rejected), codes(rejected))
-	return addResult(added, existing, rejected), switched, nil
+	return addResult(added, existing, all, nil, rejected), switched, nil
 }
 
 // cmdProxyRefresh is proxy.refresh (stage 3 part 1, section 4): the subscription is downloaded again
@@ -610,6 +619,7 @@ func (e *Engine) applySubscriptionLocked(id, address string, add, existed bool, 
 	}
 	next := cloneServers(e.servers)
 	var added []string
+	all := []string{} // the ids of every server of the subscription, once each
 	count, existing := 0, 0
 	if code == "" {
 		kept := make([]store.StoredServer, 0, len(next.Servers)+len(servers))
@@ -622,6 +632,9 @@ func (e *Engine) applySubscriptionLocked(id, address string, add, existed bool, 
 		}
 		for _, s := range servers {
 			sid := e.serverIDLocked(s.Text)
+			if !slices.Contains(all, sid) {
+				all = append(all, sid)
+			}
 			if before[sid] {
 				existing++
 			} else {
@@ -650,7 +663,7 @@ func (e *Engine) applySubscriptionLocked(id, address string, add, existed bool, 
 		case ferr != nil || len(rejected) == 0:
 			rejected = []connector.Rejection{{Code: code}}
 		}
-		return addResult(nil, 0, rejected), false, nil
+		return addResult(nil, 0, nil, nil, rejected), false, nil
 	}
 	sub := store.StoredSubscription{ID: id, Name: hostOf(address), URL: address,
 		UpdatedAt: e.d.Clock.Now().UTC().Format(time.RFC3339), Count: count}
@@ -670,7 +683,7 @@ func (e *Engine) applySubscriptionLocked(id, address string, add, existed bool, 
 	e.publish()
 	e.d.Log("subscription %s: %d servers, %d of them its own, %d new to the list; %d lines rejected (%s)",
 		id, len(servers), count, len(added), len(rejected), codes(rejected))
-	return addResult(added, existing, rejected), switched, nil
+	return addResult(added, existing, all, &id, rejected), switched, nil
 }
 
 // subscriptionFailedLocked keeps the code of a failed update in the subscription, when it is there, for
@@ -696,7 +709,7 @@ func (e *Engine) subscriptionFailedLocked(id, code string) {
 // limit of subscriptions is the rejection too_many of the whole text, as the limit of servers is.
 func refusedSubscription(add bool, err *protocol.Error) (any, *protocol.Error) {
 	if add && err.Code == protocol.CodeTooMany {
-		return addResult(nil, 0, []connector.Rejection{{Code: protocol.CodeTooMany}}), nil
+		return addResult(nil, 0, nil, nil, []connector.Rejection{{Code: protocol.CodeTooMany}}), nil
 	}
 	return nil, err
 }
@@ -753,6 +766,34 @@ func (e *Engine) cmdProxyRemove(params json.RawMessage) *protocol.Error {
 	e.publish()
 	e.d.Log("proxy.remove: %s removed; %d servers, %d subscriptions", p.ID, len(next.Servers), len(next.Subscriptions))
 	return nil
+}
+
+// cmdProxyReveal is proxy.reveal (protocol 3): the address of a subscription, which the window shows as a
+// QR code for a phone. The id of a server is bad_request (it has no address), one nobody has is
+// unknown_server. Any phase, outside the queue: it only reads. The log names the method and the id, never
+// the address. Who may ask is the pipe's check of the caller.
+func (e *Engine) cmdProxyReveal(params json.RawMessage) (any, *protocol.Error) {
+	var p protocol.ProxyIDParams
+	if err := protocol.DecodeParams(params, &p); err != nil {
+		return nil, err
+	}
+	if err := protocol.ValidateProxyID(p.ID); err != nil {
+		return nil, err
+	}
+	if !protocol.IsSubscriptionID(p.ID) {
+		return nil, protocol.Errorf(protocol.CodeBadRequest, "id is not the id of a subscription")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.serversReadyLocked(); err != nil {
+		return nil, err
+	}
+	sub := e.subscriptionLocked(p.ID)
+	if sub == nil {
+		return nil, protocol.Errorf(protocol.CodeUnknownServer, "no subscription has this id")
+	}
+	e.d.Log("proxy.reveal %s", p.ID)
+	return protocol.ProxyRevealResult{Address: sub.URL}, nil
 }
 
 // cmdProxySelect is proxy.select (stage 3 part 1, section 4): the server becomes the selected one and the

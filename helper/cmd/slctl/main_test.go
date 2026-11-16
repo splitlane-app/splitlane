@@ -163,9 +163,11 @@ func (f *fakeHelper) Handle(ctx context.Context, method string, params json.RawM
 	f.mu.Unlock()
 	switch method {
 	case protocol.MethodProxyAdd:
-		return protocol.ProxyAddResult{Added: []string{"00112233445566aa"}, Existing: 2, Rejected: []protocol.ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3}, nil
+		return protocol.ProxyAddResult{Added: []string{"00112233445566aa"}, Existing: 2, Servers: []string{"00112233445566aa", "00112233445566bb"}, Subscription: nil, Rejected: []protocol.ProxyRejection{{Line: 2, Code: "bad_link"}}, RejectedMore: 3}, nil
 	case protocol.MethodProxyRefresh:
 		return nil, protocol.Errorf("fetch_timeout", "subscription not refreshed: fetch_timeout")
+	case protocol.MethodProxyReveal:
+		return protocol.ProxyRevealResult{Address: "https://sub.example.com/t"}, nil
 	case protocol.MethodProxyRemove, protocol.MethodProxySelect:
 		return struct{}{}, nil
 	case protocol.MethodStateGet:
@@ -818,9 +820,13 @@ func TestProxyCommands(t *testing.T) {
 	}
 	const link = "trojan://hunter2secretpass@example.com:443#T"
 	code, out := slctl("proxy", "add", link)
-	if code != exitOK || !strings.Contains(out, "SLCTL: added=1 existing=2 rejected=1 more=3\n") || !strings.Contains(out, "REJECTED line=2 code=bad_link\n") ||
+	if code != exitOK || !strings.Contains(out, "SLCTL: added=1 existing=2 servers=2 subscription=null rejected=1 more=3\n") || !strings.Contains(out, "REJECTED line=2 code=bad_link\n") ||
 		strings.Contains(out, "hunter2secretpass") {
 		t.Fatalf("add: %d\n%s", code, out)
+	}
+	if code, out := slctl("proxy", "reveal", "sub-0123456789abcdef"); code != exitOK || !strings.Contains(out, "ADDRESS https://sub.example.com/t\n") ||
+		f.paramsOf(protocol.MethodProxyReveal) != `{"id":"sub-0123456789abcdef"}` {
+		t.Fatalf("reveal: %d\n%s", code, out)
 	}
 	if got := f.paramsOf(protocol.MethodProxyAdd); got != `{"text":"`+link+`"}` {
 		t.Fatalf("add params %s", got)
@@ -944,7 +950,7 @@ func rawFake(t *testing.T, serve func(r *bufio.Reader, c net.Conn)) string {
 func TestSilentOrDyingHelper(t *testing.T) {
 	hello := func(r *bufio.Reader, c net.Conn) {
 		r.ReadString('\n')
-		io.WriteString(c, `{"id":1,"result":{"protocol":2}}`+"\n")
+		io.WriteString(c, `{"id":1,"result":{"protocol":3}}`+"\n")
 	}
 	cases := []struct {
 		what    string

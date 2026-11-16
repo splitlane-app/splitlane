@@ -24,6 +24,7 @@ const bridge: SplitLaneBridge = {
   // no path crosses: the main process opens the dialog
   proxyAddFile: () => ipcRenderer.invoke(IPC.proxyAddFile),
   proxyRefresh: (id) => ipcRenderer.invoke(IPC.proxyRefresh, id),
+  proxyReveal: (id) => ipcRenderer.invoke(IPC.proxyReveal, id),
   appInfo: () => ipcRenderer.invoke(IPC.appInfo),
   retryLink: () => ipcRenderer.invoke(IPC.retryLink),
   setSettings: (patch) => ipcRenderer.invoke(IPC.setSettings, patch),

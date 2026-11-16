@@ -1,12 +1,12 @@
 import { describe, expect, test, vi } from 'vitest'
 import { IPC, type Command } from '../shared/ipc'
 import { LIMITS } from '../shared/protocol'
-import { PROXY_CALL_TIMEOUT_MS, registerIpc, runCommand, runProxyAdd, runProxyRefresh, validateCommand, type IpcDeps, type IpcEventLike } from './ipc'
+import { PROXY_CALL_TIMEOUT_MS, registerIpc, runCommand, runProxyAdd, runProxyRefresh, runProxyReveal, validateCommand, type IpcDeps, type IpcEventLike } from './ipc'
 import { CallTimeoutError, HelperCallError } from './rpc'
 
 const SERVER = '0123456789abcdef'
 const SUB = 'sub-0123456789abcdef'
-const RESULT = { added: [SERVER], existing: 0, rejected: [], rejectedMore: 0 }
+const RESULT = { added: [SERVER], existing: 0, servers: [SERVER], subscription: null, rejected: [], rejectedMore: 0 }
 
 function link(answer: () => unknown = () => RESULT) {
   return { call: vi.fn(async (_m: string, _p?: object, _t?: number): Promise<unknown> => answer()) }
@@ -67,7 +67,7 @@ describe('runProxyAdd', () => {
     expect(max).toBe(65536)
     expect((await runProxyAdd(l, 'a'.repeat(max))).kind).toBe('done')
     expect(l.call).toHaveBeenCalledTimes(1)
-    const tooLong = { kind: 'done', result: { added: [], existing: 0, rejected: [{ line: 0, code: 'too_long' }], rejectedMore: 0 } }
+    const tooLong = { kind: 'done', result: { added: [], existing: 0, servers: [], subscription: null, rejected: [{ line: 0, code: 'too_long' }], rejectedMore: 0 } }
     expect(await runProxyAdd(l, 'a'.repeat(max + 1))).toEqual(tooLong)
     expect(l.call).toHaveBeenCalledTimes(1)
   })
@@ -125,6 +125,30 @@ describe('runProxyRefresh', () => {
   })
 })
 
+describe('runProxyReveal', () => {
+  test('a subscription id: the address, no timeout of its own', async () => {
+    const l = link(() => ({ address: 'https://sub.example.com/t' }))
+    expect(await runProxyReveal(l, SUB)).toEqual({ address: 'https://sub.example.com/t' })
+    expect(l.call).toHaveBeenCalledWith('proxy.reveal', { id: SUB })
+  })
+  test('anything else is bad_request without a call', async () => {
+    const l = link()
+    for (const id of [SERVER, '', 'sub-', 7, null, undefined]) {
+      expect(await runProxyReveal(l, id)).toMatchObject({ error: { code: 'bad_request' } })
+    }
+    expect(l.call).not.toHaveBeenCalled()
+  })
+  test('the helper error is kept, a malformed answer is an error', async () => {
+    const e = new HelperCallError({ code: 'unknown_server', message: 'no subscription has this id' })
+    const l = link(() => {
+      throw e
+    })
+    expect(await runProxyReveal(l, SUB)).toEqual({ error: { code: 'unknown_server', message: 'no subscription has this id' } })
+    expect(await runProxyReveal(link(() => ({})), SUB)).toHaveProperty('error')
+    expect(await runProxyReveal(link(() => ({ address: '' })), SUB)).toHaveProperty('error')
+  })
+})
+
 describe('the proxy channels', () => {
   test('checked sender, checked arguments, file dialog without arguments', async () => {
     const handlers = new Map<string, (event: IpcEventLike, ...args: unknown[]) => unknown>()
@@ -143,9 +167,12 @@ describe('the proxy channels', () => {
     expect(await call(IPC.proxyAdd, 42)).toMatchObject({ kind: 'failed' })
     expect(await call(IPC.proxyRefresh, SUB)).toMatchObject({ kind: 'done' })
     expect(await call(IPC.proxyRefresh, SERVER)).toMatchObject({ kind: 'failed' })
+    l.call.mockResolvedValueOnce({ address: 'https://sub.example.com/t' })
+    expect(await call(IPC.proxyReveal, SUB)).toEqual({ address: 'https://sub.example.com/t' })
+    expect(await call(IPC.proxyReveal, SERVER)).toMatchObject({ error: { code: 'bad_request' } })
     expect(await call(IPC.proxyAddFile, '/some/path')).toEqual({ kind: 'cancelled' })
     expect(proxyAddFile).toHaveBeenCalledWith()
     expect(() => handlers.get(IPC.proxyAdd)?.({ sender: {} }, 'x')).toThrow(/unexpected sender/)
-    expect(l.call).toHaveBeenCalledTimes(2)
+    expect(l.call).toHaveBeenCalledTimes(3)
   })
 })

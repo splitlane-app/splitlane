@@ -15,6 +15,7 @@ import {
   SERVER_ID,
   SUBSCRIPTION_ID,
   parseProxyAddResult,
+  parseProxyRevealResult,
   utf8Bytes,
   type AppRule,
   type HelperError,
@@ -263,7 +264,7 @@ export async function runCommand(link: Pick<LinkCalls, 'call'>, c: Command): Pro
 export const PROXY_CALL_TIMEOUT_MS = 30_000
 
 export function proxyRejected(code: string): ProxyOutcome {
-  return { kind: 'done', result: { added: [], existing: 0, rejected: [{ line: 0, code }], rejectedMore: 0 } }
+  return { kind: 'done', result: { added: [], existing: 0, servers: [], subscription: null, rejected: [{ line: 0, code }], rejectedMore: 0 } }
 }
 
 async function proxyCall(link: Pick<LinkCalls, 'call'>, method: string, params: object): Promise<ProxyOutcome> {
@@ -293,6 +294,18 @@ export async function runProxyRefresh(link: Pick<LinkCalls, 'call'>, id: unknown
     return { kind: 'failed', error: { code: 'bad_request', message: 'id must be the id of a subscription' } }
   }
   return proxyCall(link, 'proxy.refresh', { id })
+}
+
+/** proxy.reveal: `id` is the id of a subscription. The address is returned, never logged. Never throws. */
+export async function runProxyReveal(link: Pick<LinkCalls, 'call'>, id: unknown): Promise<{ address: string } | { error: HelperError }> {
+  if (typeof id !== 'string' || !SUBSCRIPTION_ID.test(id)) {
+    return { error: { code: 'bad_request', message: 'id must be the id of a subscription' } }
+  }
+  try {
+    return parseProxyRevealResult(await link.call('proxy.reveal', { id }))
+  } catch (e) {
+    return { error: toHelperError(e) }
+  }
 }
 
 /** The archive path in the answer of diagnostics.export. */
@@ -392,6 +405,7 @@ export function registerIpc(d: IpcDeps): void {
   on(IPC.proxyAdd, (x) => runProxyAdd(d.link, x))
   on(IPC.proxyAddFile, () => d.proxyAddFile())
   on(IPC.proxyRefresh, (x) => runProxyRefresh(d.link, x))
+  on(IPC.proxyReveal, (x) => runProxyReveal(d.link, x))
   on(IPC.appInfo, () => d.appInfo())
   on(IPC.retryLink, () => {
     d.link.retry()

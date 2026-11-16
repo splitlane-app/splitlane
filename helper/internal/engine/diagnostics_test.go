@@ -336,3 +336,26 @@ func TestExportLeavesServersOut(t *testing.T) {
 		}
 	}
 }
+
+// proxy.reveal: the address it returns is in no archive and no log.
+func TestRevealLeavesNoTraceInTheArchive(t *testing.T) {
+	h := newHarness(t)
+	logEvents(h)
+	exportData(h)
+	h.load()
+	h.fetch.bodies[subURL] = subscriptionBody(linkVLESS)
+	mustAdd(h, subURL, "")
+	if got, err := reveal(h, subID(subURL)); err != nil || got.Address != subURL {
+		t.Fatalf("%+v %v", got, err)
+	}
+	path, err := export(h, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range archiveEntries(t, path) {
+		if strings.Contains(text, subToken) || strings.Contains(text, "sub.example.com/api") {
+			t.Fatalf("%s has the address", name)
+		}
+	}
+	noSecrets(t, h)
+}

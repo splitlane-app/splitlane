@@ -16,8 +16,10 @@ import (
 )
 
 // Version is the pipe protocol version: 2 since stage 3 part 1 (its spec, section 4) added the proxy
-// connector; the window and the helper are installed together and speak the same one.
-const Version = 2
+// connector; 3 since the server setup (its spec, section 7) added the server ids to the answers of
+// proxy.add and proxy.refresh and proxy.reveal. The window and the helper are installed together and
+// speak the same one.
+const Version = 3
 
 // Methods (spec 5.1). There are no others.
 const (
@@ -38,6 +40,7 @@ const (
 	MethodProxyRefresh        = "proxy.refresh"
 	MethodProxyRemove         = "proxy.remove"
 	MethodProxySelect         = "proxy.select"
+	MethodProxyReveal         = "proxy.reveal"
 )
 
 // Methods lists every method of spec 5.1 and of stage 3 part 1 (section 4).
@@ -46,6 +49,7 @@ var Methods = []string{
 	MethodLogin, MethodLogout, MethodSetExitNode, MethodClearSystemExitNode,
 	MethodActivitySubscribe, MethodDiagnosticsExport, MethodShutdown,
 	MethodProxyAdd, MethodProxyRefresh, MethodProxyRemove, MethodProxySelect,
+	MethodProxyReveal,
 }
 
 // Error codes: the closed list of spec 5.1.
@@ -373,6 +377,12 @@ type ProxyIDParams struct {
 	ID string `json:"id"`
 }
 
+// ProxyRevealResult is the answer of proxy.reveal: the address of a subscription (a secret; only the
+// window reads it, to show it as a QR code).
+type ProxyRevealResult struct {
+	Address string `json:"address"`
+}
+
 // ProxyRejection is one rejected line: its 1-based number (0: the whole text) and its code; never the line.
 type ProxyRejection struct {
 	Line int    `json:"line"`
@@ -382,9 +392,15 @@ type ProxyRejection struct {
 // ProxyAddResult is the answer of proxy.add and proxy.refresh: the ids of the servers the text or the
 // subscription added (new to the list), how many it gave that were there already (not added again), the
 // first MaxRejected rejected lines and how many more there were.
+//
+// Servers are the ids of every server of the text or of the downloaded subscription, in their order, the
+// new and the ones there already (at most store's MaxServers); Subscription is the id of the subscription
+// this call added or refreshed, null for links and a .conf. The window selects a server from them.
 type ProxyAddResult struct {
 	Added        []string         `json:"added"`
 	Existing     int              `json:"existing"`
+	Servers      []string         `json:"servers"`
+	Subscription *string          `json:"subscription"`
 	Rejected     []ProxyRejection `json:"rejected"`
 	RejectedMore int              `json:"rejectedMore"`
 }

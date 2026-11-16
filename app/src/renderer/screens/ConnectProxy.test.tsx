@@ -288,7 +288,7 @@ test('«Обновить»: says it is refreshing, then shows the result beside 
   expect(refresh().textContent).toBe('Обновляю…')
   expect(refresh().disabled).toBe(true)
   await act(async () => {
-    answer({ kind: 'done', result: { added: ['00000000000000d0'], existing: 1, rejected: [{ line: 4, code: 'bad_link' }], rejectedMore: 0 } })
+    answer({ kind: 'done', result: { added: ['00000000000000d0'], existing: 1, servers: ['00000000000000d0'], subscription: null, rejected: [{ line: 4, code: 'bad_link' }], rejectedMore: 0 } })
   })
   expect(refresh().textContent).toBe('Обновить')
   const status = within(subItem()).getByRole('status')
@@ -541,7 +541,7 @@ test('an add answered after the connect screen went is told by a notice with the
   act(() => services.store.getState().setSnapshot(at(proxyState([A], A.id, [], { phase: 'off' }), true)))
   expect(screen.getByRole('region', { name: 'Через VPN' })).toBeTruthy()
   await act(async () => {
-    answer({ kind: 'done', result: { added: [A.id], existing: 0, rejected: [], rejectedMore: 0 } })
+    answer({ kind: 'done', result: { added: [A.id], existing: 0, servers: [A.id], subscription: null, rejected: [], rejectedMore: 0 } })
   })
   expect(services.store.getState().notice).toBe('Добавлено серверов: 1')
   expect(screen.getByText('Добавлено серверов: 1')).toBeTruthy()

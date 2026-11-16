@@ -89,6 +89,7 @@ export function fakeBridge(over: Partial<SplitLaneBridge> = {}, answer: CommandR
     proxyAdd: async () => ({ kind: 'cancelled' }),
     proxyAddFile: async () => ({ kind: 'cancelled' }),
     proxyRefresh: async () => ({ kind: 'cancelled' }),
+    proxyReveal: async () => ({ error: { code: 'unknown_server', message: 'no subscription has this id' } }),
     appInfo: async () => ({ version: '0.2.0', installed: true }),
     retryLink: async () => {},
     setSettings: async (patch) => ({ ...DEFAULT_SETTINGS, ...patch }),
