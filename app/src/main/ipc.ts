@@ -6,7 +6,8 @@ import {
   type Command,
   type CommandResult,
   type ProxyOutcome,
-  type Snapshot
+  type Snapshot,
+  type VpsOutcome
 } from '../shared/ipc'
 import { isLanguageSetting, type Lang } from '../shared/i18n'
 import type { Dropped, Program } from '../shared/programs'
@@ -354,6 +355,11 @@ export interface IpcDeps {
   installHelper(): Promise<void>
   /** The file dialog for a `.conf`, its reading and proxy.add (confFile.ts). */
   proxyAddFile(): Promise<ProxyOutcome>
+  /** «Свой VPS» (vpsSetup.ts); the request is checked there, the key never leaves the main process. */
+  vpsPickKey(): Promise<{ name: string } | { error: 'too_large' | 'not_text' } | null>
+  vpsForgetKey(): Promise<void>
+  vpsSetup(req: unknown): Promise<VpsOutcome>
+  vpsCancel(): Promise<void>
   appInfo(): Promise<AppInfo>
   setSettings(patch: Partial<WindowSettings>): Promise<WindowSettings>
   installedPrograms(): Promise<Program[]>
@@ -406,6 +412,10 @@ export function registerIpc(d: IpcDeps): void {
   on(IPC.proxyAddFile, () => d.proxyAddFile())
   on(IPC.proxyRefresh, (x) => runProxyRefresh(d.link, x))
   on(IPC.proxyReveal, (x) => runProxyReveal(d.link, x))
+  on(IPC.vpsPickKey, () => d.vpsPickKey())
+  on(IPC.vpsForgetKey, () => d.vpsForgetKey())
+  on(IPC.vpsSetup, (x) => d.vpsSetup(x))
+  on(IPC.vpsCancel, () => d.vpsCancel())
   on(IPC.appInfo, () => d.appInfo())
   on(IPC.retryLink, () => {
     d.link.retry()

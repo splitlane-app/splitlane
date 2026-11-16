@@ -48,6 +48,27 @@ export type CommandResult = { ok: true } | { ok: false; error: HelperError }
  */
 export type ProxyOutcome = { kind: 'done'; result: ProxyAddResult } | { kind: 'failed'; error: HelperError } | { kind: 'cancelled' }
 
+/** The steps of «Свой VPS»: the first five are the subcommand's, `add` is the window's own (proxy.add and proxy.select). */
+export type VpsStep = 'connect' | 'system' | 'install' | 'harden' | 'subscription' | 'add'
+export type VpsStepState = 'start' | 'done' | 'skip' | 'warn' | 'failed'
+export interface VpsEvent {
+  step: VpsStep
+  state: VpsStepState
+  detail?: string
+}
+/** `address` is as the person typed it; the main process checks it and sends the bare host and the port apart. */
+export interface VpsRequest {
+  address: string
+  user: string
+  password?: string
+  useKey: boolean
+  keyPassphrase?: string
+}
+export type VpsOutcome =
+  | { kind: 'done'; servers: number; subscriptionId: string | null; warnings: string[] }
+  | { kind: 'failed'; code: string; detail?: string }
+  | { kind: 'cancelled' }
+
 export const LINK_CLOSED: HelperError = { code: 'internal', message: 'link closed' }
 
 /** At most this many files of one Explorer drop go to the main process. */
@@ -74,6 +95,13 @@ export interface SplitLaneBridge {
    * out of the state, the logs and the page's storage by the caller.
    */
   proxyReveal(id: string): Promise<{ address: string } | { error: HelperError }>
+  /** The dialog for an SSH key: the key stays in the main process, the page gets only its name. */
+  vpsPickKey(): Promise<{ name: string } | { error: 'too_large' | 'not_text' } | null>
+  vpsForgetKey(): Promise<void>
+  /** Sets up the server (one at a time); the progress comes through onVpsEvent. */
+  vpsSetup(req: VpsRequest): Promise<VpsOutcome>
+  vpsCancel(): Promise<void>
+  onVpsEvent(cb: (e: VpsEvent) => void): () => void
   /** The window's version, and whether it runs from the installed folder (only then it can repair the helper). */
   appInfo(): Promise<AppInfo>
   retryLink(): Promise<void>
@@ -108,6 +136,10 @@ export const IPC = {
   proxyAddFile: 'splitlane:proxy-add-file',
   proxyRefresh: 'splitlane:proxy-refresh',
   proxyReveal: 'splitlane:proxy-reveal',
+  vpsPickKey: 'splitlane:vps-pick-key',
+  vpsForgetKey: 'splitlane:vps-forget-key',
+  vpsSetup: 'splitlane:vps-setup',
+  vpsCancel: 'splitlane:vps-cancel',
   appInfo: 'splitlane:app-info',
   retryLink: 'splitlane:retry-link',
   setSettings: 'splitlane:set-settings',
@@ -128,6 +160,8 @@ export const IPC = {
   snapshotChanged: 'splitlane:snapshot-changed',
   /** main to page: an Activity event of the helper */
   activity: 'splitlane:activity',
+  /** main to page: a VpsEvent of the server setup */
+  vpsEvent: 'splitlane:vps-event',
   /** main to page: «Настройки…» in the tray menu, no data */
   openSettings: 'splitlane:open-settings'
 } as const

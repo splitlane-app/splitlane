@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import type { Dirent } from 'node:fs'
 import { access, copyFile, mkdir, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, win32 } from 'node:path'
@@ -17,6 +17,7 @@ import { addConfFile } from './confFile'
 import { exportPath, mergePrograms, registerIpc, runCommand, toHelperError } from './ipc'
 import { HelperLink, SHUTDOWN_TIMEOUT_MS } from './link'
 import { APP_USER_MODEL_ID, loginItemSettings, startupLoginItem } from './loginItem'
+import { VpsSetup, type VpsChild } from './vpsSetup'
 import { PageCrashReload } from './pageCrash'
 import { hopWith, type RequestLike } from './netHop'
 import { dialPipe } from './pipe'
@@ -560,6 +561,58 @@ function proxyAddFile(): ReturnType<typeof addConfFile> {
   )
 }
 
+/** The server setup of «Свой VPS»: the helper exe as an ordinary child, never elevated; its stdio carries the credentials. */
+const vps = new VpsSetup({
+  helperExe: win32.join(
+    helperSourceDir({ isPackaged: app.isPackaged, execPath: process.execPath, appPath: app.getAppPath() }),
+    'splitlane-helper.exe'
+  ),
+  spawn: (file, args, options): VpsChild => {
+    const c = spawn(file, args, options)
+    c.stdin.on('error', () => {}) // a broken pipe is the process leaving: its close tells the rest
+    return {
+      stdin: {
+        write: (data) =>
+          new Promise<void>((resolve, reject) => {
+            c.stdin.write(data, (err) => (err ? reject(err) : resolve()))
+          }),
+        end: () => c.stdin.end()
+      },
+      onStdout: (cb) => c.stdout.on('data', (chunk: Buffer) => cb(chunk)),
+      onClose: (cb) => c.on('close', (code) => cb(code)),
+      onError: (cb) => c.on('error', cb),
+      kill: () => {
+        c.kill()
+      }
+    }
+  },
+  phase: () => link.state()?.phase ?? null,
+  link,
+  emit: (e) => send(IPC.vpsEvent, e),
+  pick: async (filterName) => {
+    const options = {
+      properties: ['openFile' as const],
+      filters: [
+        { name: filterName, extensions: ['*'] },
+        { name: 'SSH', extensions: ['pem', 'key', 'ppk'] }
+      ]
+    }
+    const r = win !== null ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
+  },
+  openFile: async (p) => {
+    const h = await open(p, 'r')
+    return { read: (buf, length) => h.read(buf, 0, length, null), close: () => h.close() }
+  },
+  filterName: () => mainText(language).vpsKeyFilter,
+  baseName: (p) => win32.basename(p),
+  setTimer: (fn, ms) => {
+    const t = setTimeout(fn, ms)
+    return () => clearTimeout(t)
+  },
+  log
+})
+
 async function saveDiagnostics(): Promise<{ saved: boolean; error?: HelperError }> {
   let archive: string
   try {
@@ -595,6 +648,7 @@ async function quit(): Promise<void> {
   if (exiting) return
   exiting = true
   autoEnable.stop()
+  vps.shutdown()
   log('quit: sending helper.shutdown')
   await link.shutdown(SHUTDOWN_TIMEOUT_MS)
   app.quit()
@@ -635,6 +689,7 @@ function createWindow(): void {
     allowClose = true
   })
   w.on('closed', () => {
+    vps.windowClosed()
     if (win === w) win = null
   })
   // a crashed page would leave the window blank: it is reloaded once (pageCrash.ts)
@@ -679,6 +734,10 @@ async function main(): Promise<void> {
     userCommand: () => autoEnable.stop(),
     installHelper: startInstall,
     proxyAddFile,
+    vpsPickKey: () => vps.pickKey(),
+    vpsForgetKey: async () => vps.forgetKey(),
+    vpsSetup: (req) => vps.setup(req),
+    vpsCancel: () => vps.cancel(),
     // in development the setup screen works with dist\helper, so the window counts as installed
     appInfo: async () => ({
       version: app.getVersion(),
@@ -745,6 +804,7 @@ if (forbidden !== null) {
   app.on('second-instance', () => showWindow())
   app.on('before-quit', () => {
     allowClose = true
+    vps.shutdown()
   })
   // the window only hides; it closes for good when the app quits
   app.on('window-all-closed', () => {

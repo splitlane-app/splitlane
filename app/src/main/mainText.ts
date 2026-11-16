@@ -11,6 +11,7 @@ export interface MainText {
   programsFilter: string
   zipFilter: string
   confFilter: string
+  vpsKeyFilter: string
   notifyErrorTitle: string
   notifyErrorBody: string
   notifyVpnDownTitle: string
@@ -35,6 +36,7 @@ export const MAIN_TEXT: Record<Lang, MainText> = {
     programsFilter: 'Программы',
     zipFilter: 'Архив ZIP',
     confFilter: 'Файлы настроек WireGuard',
+    vpsKeyFilter: 'Ключ SSH',
     notifyErrorTitle: 'SplitLane: деление остановлено',
     notifyErrorBody: 'Откройте SplitLane, чтобы узнать причину',
     notifyVpnDownTitle: 'SplitLane: нет связи с VPN-сервером',
@@ -56,6 +58,7 @@ export const MAIN_TEXT: Record<Lang, MainText> = {
     programsFilter: 'Programs',
     zipFilter: 'ZIP archive',
     confFilter: 'WireGuard configuration files',
+    vpsKeyFilter: 'SSH key',
     notifyErrorTitle: 'SplitLane: split routing stopped',
     notifyErrorBody: 'Open SplitLane to see why',
     notifyVpnDownTitle: "SplitLane: can't reach the VPN server",

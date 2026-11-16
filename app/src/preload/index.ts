@@ -25,6 +25,12 @@ const bridge: SplitLaneBridge = {
   proxyAddFile: () => ipcRenderer.invoke(IPC.proxyAddFile),
   proxyRefresh: (id) => ipcRenderer.invoke(IPC.proxyRefresh, id),
   proxyReveal: (id) => ipcRenderer.invoke(IPC.proxyReveal, id),
+  // the key never crosses: the main process opens the dialog and keeps the text; the page gets its name
+  vpsPickKey: () => ipcRenderer.invoke(IPC.vpsPickKey),
+  vpsForgetKey: () => ipcRenderer.invoke(IPC.vpsForgetKey),
+  vpsSetup: (req) => ipcRenderer.invoke(IPC.vpsSetup, req),
+  vpsCancel: () => ipcRenderer.invoke(IPC.vpsCancel),
+  onVpsEvent: (cb) => listen(IPC.vpsEvent, cb),
   appInfo: () => ipcRenderer.invoke(IPC.appInfo),
   retryLink: () => ipcRenderer.invoke(IPC.retryLink),
   setSettings: (patch) => ipcRenderer.invoke(IPC.setSettings, patch),

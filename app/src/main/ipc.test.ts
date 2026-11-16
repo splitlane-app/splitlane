@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { IPC, type Command, type ProxyOutcome, type Snapshot } from '../shared/ipc'
+import { IPC, type Command, type ProxyOutcome, type Snapshot, type VpsOutcome } from '../shared/ipc'
 import type { AppRule } from '../shared/protocol'
 import type { UpdateState } from '../shared/update'
 import {
@@ -303,6 +303,10 @@ function ipcHarness() {
     userCommand: vi.fn(),
     installHelper: vi.fn(async () => {}),
     proxyAddFile: vi.fn(async (): Promise<ProxyOutcome> => ({ kind: 'cancelled' })),
+    vpsPickKey: vi.fn(async () => null),
+    vpsForgetKey: vi.fn(async () => {}),
+    vpsSetup: vi.fn(async (_x: unknown): Promise<VpsOutcome> => ({ kind: 'cancelled' })),
+    vpsCancel: vi.fn(async () => {}),
     appInfo: vi.fn(async () => ({ version: '0.2.0', installed: true })),
     setSettings: vi.fn(async (p: object) => ({ openAtLogin: false, enableOnStart: false, connectedOnce: false, checkUpdates: true, pendingUpdate: null, language: 'system' as const, lastExitNode: null, notifications: true, notifiedVersion: null, ...p })),
     installedPrograms: vi.fn(async () => []),
@@ -339,9 +343,19 @@ test('registerIpc checks the sender and every argument from the page', async () 
   expect([...h.handlers.keys()].sort()).toEqual(
     Object.values(IPC)
       // the pushes from main to the page have no handler: the page cannot send on them
-      .filter((c) => c !== IPC.snapshotChanged && c !== IPC.activity && c !== IPC.openSettings)
+      .filter((c) => c !== IPC.snapshotChanged && c !== IPC.activity && c !== IPC.vpsEvent && c !== IPC.openSettings)
       .sort()
   )
+
+  // the VPS channels pass the page's argument on untouched: vpsSetup checks it itself, the others take none
+  await h.invoke(IPC.vpsSetup, { address: 'x' })
+  expect(h.d.vpsSetup).toHaveBeenCalledWith({ address: 'x' })
+  await h.invoke(IPC.vpsPickKey, 'ignored')
+  expect(h.d.vpsPickKey).toHaveBeenCalledWith()
+  await h.invoke(IPC.vpsForgetKey)
+  await h.invoke(IPC.vpsCancel)
+  expect(h.d.vpsForgetKey).toHaveBeenCalled()
+  expect(h.d.vpsCancel).toHaveBeenCalled()
 
   // another sender gets nothing
   await expect(h.invokeFrom({ id: 'other' }, IPC.command, { method: 'routing.enable' })).rejects.toThrow()
