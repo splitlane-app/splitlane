@@ -16,13 +16,13 @@
   | Shadowsocks 2022, `2022-blake3-aes-128-gcm` | 8388/tcp and udp | `SplitLane-SS2022` |
   | WireGuard | 51820/udp | the file `splitlane-wg.conf` |
 
-  Clients reach the internet only: connections to private and local addresses (the VPS itself, its provider's internal network) are refused.
+  Connections from clients to loopback and private-network addresses (the VPS's own `127.0.0.1`, its provider's internal network) are refused. Services on the VPS's public address stay reachable through the tunnel, as from the internet.
 - A systemd service `splitlane-kit` that runs as its own system user, not as root, and restarts after a failure.
 - With `--subscription`: [Caddy](https://caddyserver.com) serves the three links as a subscription at `https://<name>:8443/<random token>/sub`, with a certificate from Let's Encrypt.
 
 ## Requirements
 
-- A VPS with Debian 12 or later, or Ubuntu 22.04 or later, on x86_64 or arm64 (aarch64), with systemd and root access.
+- A VPS with Debian 12 or later, or Ubuntu 22.04 or later, on x86_64 or arm64 (aarch64), with systemd; you log in as root or as a user with sudo.
 - A public IPv4 address. The script asks `api.ipify.org` for it; with `--host` you give the address or a name yourself.
 - Free ports 443/tcp, 443/udp, 8388/tcp, 8388/udp and 51820/udp. If your provider has a firewall in its control panel, open them there.
 - For `--subscription`: Caddy in the distribution's packages (Debian 12 and later, Ubuntu 24.04 and later; Ubuntu 22.04 has none, so the step is skipped with a message), ports 80/tcp and 8443/tcp reachable from the internet (Let's Encrypt checks port 80) and a name that points to the VPS. By default the name is `<a-b-c-d>.sslip.io` for the address a.b.c.d: [sslip.io](https://sslip.io) resolves such names to the address in them, so you need no domain of your own.
@@ -37,7 +37,12 @@ less install-singbox-server.sh    # read what you are about to run as root
 sudo bash install-singbox-server.sh --subscription    # or without --subscription
 ```
 
-If the address doesn't open (for example, while the repository is private), copy the file from your copy of the repository: `scp scripts/server/install-singbox-server.sh root@<VPS address>:` (Windows 10 and 11 have `scp` built in).
+If the address doesn't open (for example, before the kit is on the `main` branch), copy the file from your copy of the repository to the home folder of your user on the VPS and run it there (Windows 10 and 11 have `scp` built in):
+
+```sh
+scp scripts/server/install-singbox-server.sh <user>@<VPS address>:    # on your PC
+sudo bash ~/install-singbox-server.sh --subscription                  # on the VPS
+```
 
 | Option | What it does |
 |---|---|
@@ -50,7 +55,7 @@ If the address doesn't open (for example, while the repository is private), copy
 | `--dry-run <folder>` | A test: write everything under the folder and check the config with `sing-box check`; no systemd, firewall, Caddy or apt. The address is `192.0.2.10` unless `--host` is given. |
 | `-h`, `--help` | The list of options. |
 
-`--host`, `--domain`, `--reality-sni` and `--subscription` are remembered for later runs. The port numbers, the Reality site and the log level are variables at the top of the script.
+`--host`, `--domain`, `--reality-sni` and `--subscription` are remembered for later runs, `--reset` included, until `--uninstall`; giving one again with another value replaces it. The port numbers, the Reality site and the log level are variables at the top of the script.
 
 ## What it prints
 
@@ -65,26 +70,26 @@ https://192-0-2-10.sslip.io:8443/…/sub
 
 The same is saved in `/root/splitlane-kit/`, which only root can open: `links.txt` (the three links), `splitlane-wg.conf` (WireGuard) and `subscription.txt` (the three links in base64, the format of subscriptions).
 
-If ufw is active, the script allows the ports in it; otherwise it lists the ports to open in your provider's firewall.
+If ufw is active, the script allows the ports in it before the server and Caddy start; otherwise it lists the ports to open in your provider's firewall.
 
 ## Add the server to SplitLane
 
 - **Links:** on **Connect a VPN** (or later on **Connection**), choose **Key or subscription**, paste one link or all three, one per line, and click **Add**.
-- **WireGuard:** copy the file to your PC, for example `scp root@<VPS address>:/root/splitlane-kit/splitlane-wg.conf .`, then choose **Configuration file** and pick it. You can also paste its text under **Key or subscription**.
-- **Subscription:** paste the subscription address under **Key or subscription**. **Refresh** next to the subscription on **Connection** downloads it again, for example after `--reset`.
+- **WireGuard:** paste the text the script printed (or `sudo cat /root/splitlane-kit/splitlane-wg.conf`) under **Key or subscription**. To pick the file under **Configuration file** instead, copy it to your home folder on the VPS with `sudo install -m 600 -o "$USER" /root/splitlane-kit/splitlane-wg.conf ~/` and then to your PC with `scp <user>@<VPS address>:splitlane-wg.conf .`; delete both copies once SplitLane has it.
+- **Subscription:** paste the subscription address under **Key or subscription**. **Refresh** next to the subscription on **Connection** downloads it again after a run that keeps the address, for example with a new `--host` or `--reality-sni`. After `--reset` the address changes: see below.
 
 Then choose a server in the list and turn split routing on.
 
 ## Run again, start over, remove
 
 - **A second run** keeps the keys and the links (they are stored in `/etc/splitlane-kit/`). Run it again to print them, to change an option, or to update the kit.
-- **`--reset`** generates new keys, links and subscription address. The old ones stop working: add the new ones to SplitLane (or refresh the subscription) and remove the old servers there.
+- **`--reset`** generates new keys, links and subscription address. The old ones stop working, and the old subscription address answers "not found", so **Refresh** can't pick up the change. In SplitLane, add the new subscription address (or the new links and `.conf`), then remove the old subscription and the old servers.
 - **`--uninstall`** stops and removes the `splitlane-kit` service and its system user, `/usr/local/bin/sing-box`, `/etc/splitlane-kit` and the subscription site in Caddy (Caddy itself stays installed). It leaves `/root/splitlane-kit` for you to delete (`rm -rf /root/splitlane-kit`) and keeps the ufw rules it added (marked `splitlane-kit`; see them with `ufw status numbered`).
 
 ## Security notes
 
 - **Keys** are generated on the VPS by sing-box. They stay in `/etc/splitlane-kit` and `/root/splitlane-kit` (root only) and, once you add them, in SplitLane's `%ProgramData%\SplitLane\servers.json` on your PC (administrators only). Anyone who has a link or the `.conf` can use your server: treat them like passwords.
-- **The subscription address is a secret.** The random token in its path is all that protects it: whoever has the address gets all three links. `--reset` changes it.
+- **The subscription address is a secret.** The random token in its path is all that protects it: whoever has the address gets all three links. `--reset` changes it. On the VPS the token is in files that only root and Caddy can read (`/etc/caddy/splitlane-kit.caddy` and the served copy, `640 root:caddy`), but also in Caddy's admin API on `localhost:2019`, which any local account can ask. So the secrecy of the subscription assumes the VPS has no local accounts you don't trust.
 - **Reality borrows the handshake of a public site** (`www.microsoft.com` by default): to anyone without the key, port 443/tcp of your VPS answers like that site, and the server connects to the site for these handshakes. With `--reality-sni` you can choose another site that speaks TLS 1.3.
 - **Hysteria2 uses a self-signed certificate, and its link skips the certificate check** (`insecure=1`). The traffic is encrypted, but someone who can intercept the connection and answer in place of your server could pose as it and learn the Hysteria2 password. Where that matters, use VLESS + Reality or WireGuard.
 - **The service runs as the user `splitlane-kit`** with only two capabilities: binding port 443 and network administration for the core's socket options. The config stays readable by root only; systemd copies it to `/run/splitlane-kit` (in memory) when the service starts.

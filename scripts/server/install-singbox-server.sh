@@ -33,6 +33,9 @@ SS_PORT=8388   # Shadowsocks 2022, tcp and udp
 WG_PORT=51820  # WireGuard, udp
 SUB_PORT=8443  # the subscription (Caddy, HTTPS), tcp
 ACME_PORT=80   # Caddy gets the certificate of the subscription over HTTP here, tcp
+# The ports as the firewall and the checks see them.
+SERVER_PORTS=("$VLESS_PORT/tcp" "$HY2_PORT/udp" "$SS_PORT/tcp" "$SS_PORT/udp" "$WG_PORT/udp")
+SUB_PORTS=("$ACME_PORT/tcp" "$SUB_PORT/tcp")
 
 # A common site that speaks TLS 1.3: Reality answers anyone who is not a client with its handshake.
 REALITY_SNI_DEFAULT=www.microsoft.com
@@ -101,7 +104,9 @@ Options:
                         firewall, Caddy or apt (address 192.0.2.10 unless --host is given)
   -h, --help            this help
 
---host, --domain, --reality-sni and --subscription are remembered for later runs.
+--host, --domain, --reality-sni and --subscription are remembered for later runs, --reset
+included, until --uninstall. After --reset, add the new links or subscription address in
+SplitLane and remove the old ones there.
 EOF
 }
 
@@ -123,6 +128,43 @@ is_ipv4() {
 
 is_ipv6() { [[ $1 == *:* && $1 =~ ^[0-9A-Fa-f:.]+$ ]]; }
 
+# The full form of an IPv6 address (eight groups of four digits) joined by $2. Fails on anything
+# else, the IPv4-mapped form included. Joined by '-' it is an sslip.io name whose labels never
+# start or end with '-', as the short form with "::" would.
+ipv6_full() {
+	local a=${1,,} sep=$2 head tail g i missing=0 out=""
+	local -a h=() t=() all=()
+	[[ $a =~ ^[0-9a-f:]+$ ]] || return 1
+	if [[ $a == *::* ]]; then
+		head=${a%%::*} tail=${a#*::}
+		[[ $tail != *::* ]] || return 1
+	else
+		head=$a tail=""
+	fi
+	if [[ -n $head ]]; then
+		IFS=: read -r -a h <<<"$head"
+	fi
+	if [[ -n $tail ]]; then
+		IFS=: read -r -a t <<<"$tail"
+	fi
+	if [[ $a == *::* ]]; then
+		missing=$((8 - ${#h[@]} - ${#t[@]}))
+		((missing >= 1)) || return 1
+	elif ((${#h[@]} != 8)); then
+		return 1
+	fi
+	all=("${h[@]}")
+	for ((i = 0; i < missing; i++)); do
+		all+=(0)
+	done
+	all+=("${t[@]}")
+	for g in "${all[@]}"; do
+		[[ $g =~ ^[0-9a-f]{1,4}$ ]] || return 1
+		out+="${out:+$sep}$(printf '%04x' "$((16#$g))")"
+	done
+	printf '%s' "$out"
+}
+
 is_name() {
 	((${#1} <= 253)) && [[ $1 =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]
 }
@@ -132,6 +174,9 @@ sha256() {
 	s=$(sha256sum "$1")
 	printf '%s' "${s%% *}"
 }
+
+# apt-get with the usual umask: packages and their scripts must not get the 077 of this script.
+apt_get() { (umask 022 && DEBIAN_FRONTEND=noninteractive apt-get "$@"); }
 
 # The value after "<name>: " in the output of sing-box generate.
 field() { sed -n "s/^$1: //p" <<<"$2"; }
@@ -251,8 +296,8 @@ preflight() {
 		[[ -d /run/systemd/system ]] || die "systemd is not running here; the kit needs it"
 		if ! command -v curl >/dev/null 2>&1; then
 			say "Installing curl"
-			apt-get update -qq
-			DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates >/dev/null
+			apt_get update -qq
+			apt_get install -y -qq curl ca-certificates >/dev/null
 		fi
 	fi
 	local c
@@ -268,7 +313,7 @@ check_ports() {
 		return 0
 	fi
 	local p opt busy=()
-	for p in "$VLESS_PORT/tcp" "$HY2_PORT/udp" "$SS_PORT/tcp" "$SS_PORT/udp" "$WG_PORT/udp"; do
+	for p in "${SERVER_PORTS[@]}"; do
 		opt=-lnt
 		if [[ $p == */udp ]]; then
 			opt=-lnu
@@ -362,6 +407,7 @@ choose_settings() {
 	HOST=${HOST%]}
 	if is_ipv6 "$HOST"; then
 		HOST=${HOST,,}
+		ipv6_full "$HOST" : >/dev/null || die "--host: '$HOST' is not an IPv6 address the kit can use"
 		HOST_URI="[$HOST]"
 	elif is_ipv4 "$HOST" || is_name "$HOST"; then
 		HOST_URI=$HOST
@@ -379,7 +425,7 @@ choose_settings() {
 	elif is_ipv4 "$HOST"; then
 		DOMAIN=${HOST//./-}.sslip.io
 	elif is_ipv6 "$HOST"; then
-		DOMAIN=${HOST//:/-}.sslip.io
+		DOMAIN=$(ipv6_full "$HOST" -).sslip.io
 	else
 		DOMAIN=$HOST
 	fi
@@ -424,7 +470,7 @@ install_singbox() {
 	name=sing-box-$SINGBOX_VERSION-linux-$ARCH
 	archive=$TMP/$name.tar.gz
 	say "Downloading sing-box $SINGBOX_VERSION ($ARCH)"
-	curl -fsSL --proto '=https' --retry 3 --connect-timeout 20 -o "$archive" \
+	curl -fsSL --proto '=https' --retry 3 --connect-timeout 20 --max-time 300 --speed-limit 1024 --speed-time 60 -o "$archive" \
 		"https://github.com/SagerNet/sing-box/releases/download/v$SINGBOX_VERSION/$name.tar.gz" ||
 		die "could not download sing-box; nothing was installed"
 	local got
@@ -648,27 +694,31 @@ start_service() {
 	say "The $SERVICE service is running"
 }
 
-ports_list() {
-	PORTS=("$VLESS_PORT/tcp" "$HY2_PORT/udp" "$SS_PORT/tcp" "$SS_PORT/udp" "$WG_PORT/udp")
+# The ports this run needs (PORTS), for the messages.
+needed_ports() {
+	PORTS=("${SERVER_PORTS[@]}")
 	if [[ $SUBSCRIPTION == 1 ]]; then
-		PORTS+=("$ACME_PORT/tcp" "$SUB_PORT/tcp")
+		PORTS+=("${SUB_PORTS[@]}")
 	fi
 }
 
+# Allows the given ports in ufw when it is active, before the server or Caddy that needs them
+# starts (Let's Encrypt checks port 80 right away). The firewall of the provider is not the
+# script's to change: its ports are listed at the end.
+UFW_ACTIVE=0
 open_ports() {
 	local status="" p
-	ports_list
 	if command -v ufw >/dev/null 2>&1; then
 		status=$(ufw status 2>/dev/null || true)
 	fi
-	if [[ $status == "Status: active"* ]]; then
-		for p in "${PORTS[@]}"; do
-			ufw allow "$p" comment "$SERVICE" >/dev/null
-		done
-		say "ufw: allowed ${PORTS[*]}"
-	else
-		say "Open these ports in the firewall of your VPS provider, if it has one: ${PORTS[*]}"
+	if [[ $status != "Status: active"* ]]; then
+		return 0
 	fi
+	UFW_ACTIVE=1
+	for p in "$@"; do
+		ufw allow "$p" comment "$SERVICE" >/dev/null
+	done
+	say "ufw: allowed $*"
 }
 
 # ---- The subscription ------------------------------------------------------------------------
@@ -681,7 +731,8 @@ write_subscription_site() {
 	install -d -m 0750 ${group:+-g "$group"} "$ROOT$P_WWW_ROOT" "$www" "$www/$token"
 	install -m 0640 ${group:+-g "$group"} "$ROOT$P_OUT/subscription.txt" "$www/$token/sub"
 	mkdir -p -- "$(dirname -- "$ROOT$P_CADDY_SITE")"
-	cat >"$ROOT$P_CADDY_SITE" <<EOF
+	# The site names the token too, so it is as private as the served file.
+	cat >"$TMP/site.caddy" <<EOF
 # The SplitLane subscription, added by install-singbox-server.sh (the SplitLane server kit);
 # --uninstall removes it. Only /<token>/sub is served: the address is the secret.
 $DOMAIN:$SUB_PORT {
@@ -702,14 +753,33 @@ $DOMAIN:$SUB_PORT {
 	}
 }
 EOF
-	chmod 644 "$ROOT$P_CADDY_SITE"
+	install -m 0640 ${group:+-g "$group"} "$TMP/site.caddy" "$ROOT$P_CADDY_SITE"
 	SUB_URL=https://$DOMAIN:$SUB_PORT/$token/sub
 }
 
+# Adds the kit's two lines at the end of the Caddyfile (after a line break if the file lacks its
+# last one), so that remove_caddy_import leaves the file as it was.
+add_caddy_import() {
+	local file=$P_CADDYFILE
+	if grep -qxF "$CADDY_IMPORT" "$file"; then
+		return 0
+	fi
+	if [[ -s $file && -n $(tail -c 1 -- "$file") ]]; then
+		printf '\n' >>"$file"
+	fi
+	printf '%s\n%s\n' "$CADDY_MARK" "$CADDY_IMPORT" >>"$file"
+}
+
+# Takes the kit's two lines out of the Caddyfile. When grep cannot read the file (status 2), it
+# fails and leaves the file alone; status 1 only means that no other line is left.
 remove_caddy_import() {
-	local file=$ROOT$P_CADDYFILE
+	local file=$ROOT$P_CADDYFILE rc=0
 	[[ -f $file ]] || return 0
-	grep -vxF -e "$CADDY_MARK" -e "$CADDY_IMPORT" "$file" >"$TMP/Caddyfile" || true
+	grep -vxF -e "$CADDY_MARK" -e "$CADDY_IMPORT" "$file" >"$TMP/Caddyfile" || rc=$?
+	if ((rc > 1)); then
+		warn "could not read $P_CADDYFILE; take the line '$CADDY_IMPORT' out of it by hand"
+		return 1
+	fi
 	cat "$TMP/Caddyfile" >"$file"
 }
 
@@ -717,7 +787,7 @@ setup_subscription() {
 	SUB_URL=""
 	if ! command -v caddy >/dev/null 2>&1; then
 		say "Installing Caddy for the subscription"
-		if ! apt-get update -qq; then
+		if ! apt_get update -qq; then
 			warn "subscription skipped: apt-get update failed"
 			return 0
 		fi
@@ -725,7 +795,7 @@ setup_subscription() {
 			warn "subscription skipped: this distribution has no caddy package (Debian 12 and Ubuntu 24.04 have one)"
 			return 0
 		fi
-		if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -qq caddy >/dev/null; then
+		if ! apt_get install -y -qq caddy >/dev/null; then
 			warn "subscription skipped: apt-get install caddy failed"
 			return 0
 		fi
@@ -735,15 +805,14 @@ setup_subscription() {
 		return 0
 	fi
 	write_subscription_site caddy
-	if ! grep -qxF "$CADDY_IMPORT" "$P_CADDYFILE"; then
-		printf '\n%s\n%s\n' "$CADDY_MARK" "$CADDY_IMPORT" >>"$P_CADDYFILE"
-	fi
+	add_caddy_import
 	if ! caddy validate --config "$P_CADDYFILE" --adapter caddyfile >"$TMP/caddy.log" 2>&1; then
 		tail -n 5 "$TMP/caddy.log" >&2
 		drop_subscription_site
 		warn "subscription skipped: Caddy refused the site (above)"
 		return 0
 	fi
+	open_ports "${SUB_PORTS[@]}"
 	if ! systemctl enable --quiet caddy || ! systemctl reload-or-restart caddy; then
 		drop_subscription_site
 		systemctl reload-or-restart caddy >/dev/null 2>&1 || true
@@ -755,8 +824,9 @@ setup_subscription() {
 
 # Undoes write_subscription_site and the import line after a failure.
 drop_subscription_site() {
-	remove_caddy_import
-	rm -f -- "$P_CADDY_SITE"
+	if remove_caddy_import; then
+		rm -f -- "$P_CADDY_SITE"
+	fi
 	rm -rf -- "$P_WWW_ROOT"
 	SUB_URL=""
 	unset 'ST[SUBSCRIPTION]'
@@ -789,22 +859,30 @@ uninstall() {
 		fi
 	fi
 	if [[ -f $ROOT$P_CADDY_SITE ]]; then
-		rm -f -- "$ROOT$P_CADDY_SITE"
-		remove_caddy_import
-		if ((!DRY_RUN)) && systemctl is-active --quiet caddy; then
-			systemctl reload caddy || warn "Caddy did not reload; check $P_CADDYFILE"
+		if remove_caddy_import; then
+			rm -f -- "$ROOT$P_CADDY_SITE"
+			if ((!DRY_RUN)) && systemctl is-active --quiet caddy; then
+				systemctl reload caddy || warn "Caddy did not reload; check $P_CADDYFILE"
+			fi
+			say "Removed the subscription site from Caddy (Caddy itself stays)"
+		else
+			warn "left $P_CADDY_SITE: the Caddyfile still imports it"
 		fi
-		say "Removed the subscription site from Caddy (Caddy itself stays)"
 	fi
-	rm -rf -- "$ROOT$P_STATE" "$ROOT$P_WWW_ROOT"
+	rm -rf -- "$ROOT$P_WWW_ROOT"
+	if [[ -d $ROOT$P_STATE ]]; then
+		rm -rf -- "$ROOT$P_STATE"
+		say "Removed $P_STATE"
+	fi
 	if ((!DRY_RUN)) && id -u "$SERVICE_USER" >/dev/null 2>&1; then
 		userdel "$SERVICE_USER" || true
 	fi
-	say "Removed $P_STATE"
 	if command -v ufw >/dev/null 2>&1 && [[ $(ufw status 2>/dev/null || true) == "Status: active"* ]]; then
 		say "ufw rules marked '$SERVICE' stay; see them with: ufw status numbered"
 	fi
-	say "$P_OUT was left for you to delete (it holds the keys): rm -rf $P_OUT"
+	if [[ -d $ROOT$P_OUT ]]; then
+		say "$P_OUT was left for you to delete (it holds the keys): rm -rf $P_OUT"
+	fi
 }
 
 # ---- Main ------------------------------------------------------------------------------------
@@ -831,6 +909,10 @@ print_result() {
 	fi
 	say "Saved in $out: links.txt, splitlane-wg.conf, subscription.txt (base64 of links.txt)"
 	say "Keep them private: anyone with a link or the .conf can use this server."
+	if ((RESET)); then
+		say "After --reset the old links, .conf and subscription address no longer work: add the new ones"
+		say "in SplitLane and remove the old servers and subscription there."
+	fi
 }
 
 main() {
@@ -863,11 +945,12 @@ main() {
 		fi
 		save_state
 		print_result
-		ports_list
+		needed_ports
 		say ""
 		say "Dry run: nothing was installed or started; the files are under $ROOT (ports: ${PORTS[*]})"
 		return
 	fi
+	open_ports "${SERVER_PORTS[@]}"
 	start_service
 	if [[ $SUBSCRIPTION == 1 ]]; then
 		setup_subscription
@@ -876,7 +959,10 @@ main() {
 		fi
 	fi
 	save_state
-	open_ports
+	if ((!UFW_ACTIVE)); then
+		needed_ports
+		say "Open these ports in the firewall of your VPS provider, if it has one: ${PORTS[*]}"
+	fi
 	print_result
 }
 
