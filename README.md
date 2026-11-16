@@ -2,22 +2,22 @@
 
 [Русская версия](README.ru.md)
 
-SplitLane is a Windows app for split routing by program. It puts programs on two lanes, **Via VPN** and **Direct**: programs on the VPN lane go through your Tailscale exit node, everything else goes directly through your normal connection. It is for people who use a Tailscale exit node as their VPN and want only some programs to use it, for example because some websites are slow or don't work through the VPN. You arrange programs by dragging them from one lane to the other.
+SplitLane is a Windows app for split routing by program. It puts programs on two lanes, **Via VPN** and **Direct**: programs on the VPN lane go through your VPN, everything else goes directly through your normal connection. The VPN is a Tailscale exit node or a server from a key (a share link), a subscription or a WireGuard file. It is for people who want only some programs to use the VPN, for example because some websites are slow or don't work through it. You arrange programs by dragging them from one lane to the other.
 
-This is a beta. It works with Tailscale only.
+This is a beta.
 
 ## How it works
 
 - The SplitLane window runs without administrator rights. It sends commands to the SplitLane service, a background process with administrator rights that Task Scheduler starts when you sign in to Windows.
 - The service runs a bundled network core (sing-box 1.14.4, unmodified). The core captures traffic with a virtual adapter and sends each connection to a lane by the path of the program that opened it.
-- The VPN lane goes through an embedded Tailscale node inside the core. It is a separate device in your tailnet, named `<PC name>-splitlane`, and it uses the exit node you choose. The Direct lane uses your normal connection.
+- With Tailscale, the VPN lane goes through an embedded Tailscale node inside the core. It is a separate device in your tailnet, named `<PC name>-splitlane`, and it uses the exit node you choose. With a key, a subscription or a WireGuard file, the core connects to the server you chose itself, without a Tailscale node. The Direct lane uses your normal connection.
 - One lane is the main lane. Programs you haven't pinned follow it; pinned programs stay on their lane.
 - If the Tailscale app for Windows is installed and uses an exit node, SplitLane turns that exit node off while split routing is on and turns it back on when you turn split routing off. After a crash or a restart of Windows, it turns it back on the next time the service starts.
 
 ## Requirements
 
 - Windows 10 or 11, x64.
-- A Tailscale account (tailnet) with an exit node you can use; the exit node must reach the internet from a different address than this PC.
+- A VPN: a Tailscale account (tailnet) with an exit node you can use, or a server of a protocol SplitLane supports (see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard)). The VPN must reach the internet from a different address than this PC.
 - The Tailscale app for Windows is optional: if it is installed and uses an exit node, SplitLane turns that exit node off while split routing is on and turns it back on afterwards.
 - A Windows account with administrator rights. You install and use SplitLane under the same account: if you confirm the Windows prompt (UAC) with a different account, the installation stops.
 
@@ -45,13 +45,38 @@ winget: coming soon.
 ## First start
 
 1. If the window shows **First-time setup**, click **Install the service** and confirm the Windows prompt. The installer normally does this for you, so this screen appears only when the service needs to be repaired.
-2. On **Connect a VPN**, click **Log in to Tailscale**. SplitLane's window opens the login page in your browser: log in to the tailnet that has your exit node. This logs in SplitLane's embedded node, a new device `<PC name>-splitlane`; the Tailscale app isn't involved. If your tailnet requires device approval, approve the device in the Tailscale admin console; the window continues by itself.
-3. Choose an exit node, then click **Turn on split routing**.
+2. On **Connect a VPN**, choose how you connect: **Tailscale**, **Key or subscription** or **Configuration file**. For a key, a subscription or a WireGuard file, see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard). For Tailscale, click **Log in to Tailscale**. SplitLane's window opens the login page in your browser: log in to the tailnet that has your exit node. This logs in SplitLane's embedded node, a new device `<PC name>-splitlane`; the Tailscale app isn't involved. If your tailnet requires device approval, approve the device in the Tailscale admin console; the window continues by itself.
+3. Choose an exit node or a server, then click **Turn on split routing**.
 4. Drag programs onto the lanes. You can move a card from one lane to the other, drop an `.exe` file or a shortcut from Explorer onto a lane, or click **+ Add** to pick a program that is online now, an installed program or a file. The same actions are in the context menu of a card (**Send via VPN**, **Send direct**, **Unpin**) and work from the keyboard.
 
 A pinned program stays on its lane; other programs follow the main lane (**make main** on the other lane switches it). By default a program means its whole folder, so its updaters and helper processes go the same way; you can change this in the program card. **Settings and connection** in the header (or **Settings…** in the tray menu) opens the **Connection** screen: the exit node, logging out of Tailscale, the language and the settings **Start when I sign in to Windows**, **Turn on split routing at startup**, **Check for updates automatically** and **Show notifications**.
 
 Closing the window keeps SplitLane in the tray; while it is there, SplitLane shows a Windows notification when split routing stops with an error, the VPN server can't be reached, the Tailscale app turns its exit node back on, the Tailscale login expires or a new version is available. **Quit** in the tray menu turns split routing off and stops the service.
+
+## Keys, subscriptions and WireGuard
+
+Instead of a Tailscale exit node, the VPN lane can go through a VPN server of your own or of a VPN service. SplitLane's core speaks these protocols itself:
+
+- **Protocols:** VLESS (including Reality and `xtls-rprx-vision`), VMess, Trojan, Shadowsocks (including Shadowsocks 2022 and Outline keys), Hysteria2 and TUIC v5 from share links (`vless://`, `vmess://`, `trojan://`, `ss://`, `hysteria2://` or `hy2://`, `tuic://`); WireGuard from a `.conf` file.
+- **Transports:** plain TCP, WebSocket, gRPC, HTTPUpgrade, HTTP/2 and QUIC; TLS with SNI, ALPN and a uTLS fingerprint, or Reality.
+- **Subscriptions:** an `https://` address that returns a list of share links, as plain text or in base64.
+
+**Adding servers.** On **Connect a VPN** (or later on **Connection**), choose **Key or subscription**, paste one or more links (one per line) or one subscription address, and click **Add**. For WireGuard, choose **Configuration file** and pick the `.conf` file; you can also paste its text under **Key or subscription**. SplitLane then shows how many servers it added and which lines it rejected and why, by line number (the line itself isn't shown: it holds a key). A link with something SplitLane doesn't support is rejected with the reason rather than half understood.
+
+**Choosing a server.** The servers are listed with their name, protocol and source (added by hand, a file or the subscription's name). The server you choose leads the VPN lane, and the header shows it as `<server> · <protocol>`. Changing the server while split routing is on restarts split routing briefly, like changing the exit node. Choosing an exit node switches the VPN lane back to Tailscale.
+
+**Subscriptions.** **Connection** lists each subscription with its number of servers, the time of its last update and the error of the last refresh, if it failed. **Refresh** downloads it again and replaces its servers; the selected server stays selected if the subscription still has it. **Remove** deletes a server, or a subscription with all its servers. While split routing is on, the selected server can't be removed, and its subscription can't be refreshed or removed.
+
+Links, WireGuard files and subscription addresses are secrets. SplitLane keeps them only in `%ProgramData%\SplitLane\servers.json` (administrators only); they aren't written to the logs or put in diagnostics archives.
+
+**Your own server.** [scripts/server](scripts/server/README.md) has a script that sets up VLESS + Reality, Hysteria2, Shadowsocks 2022 and WireGuard on a Debian or Ubuntu VPS and prints the links, the `.conf` file and, if you like, a subscription address.
+
+**Limits.**
+
+- Only the protocols and transports listed above. AmneziaWG and OpenVPN aren't supported yet. The `xhttp`, `splithttp` and `kcp` transports, the `http` header over TCP, Shadowsocks plugins and Clash or sing-box subscriptions are rejected with a reason.
+- Subscriptions are refreshed only when you click **Refresh**, not on a schedule.
+- A server without UDP can't carry the UDP traffic of programs on the VPN lane (games, calls).
+- There is no latency test and no automatic choice of server; one server leads the VPN lane at a time.
 
 ## Updates
 
@@ -76,7 +101,7 @@ Silent uninstall: `"%ProgramFiles%\SplitLane\Uninstall SplitLane.exe" /S` keeps 
 SplitLane has no telemetry and no accounts of its own. In short:
 
 - The window checks GitHub for updates. You can turn the automatic check off.
-- The embedded Tailscale node talks to Tailscale's servers like any Tailscale device.
+- With Tailscale, the embedded Tailscale node talks to Tailscale's servers like any Tailscale device. With a key or a WireGuard file, the core connects to that server; the service downloads a subscription from the address you add, when you add or refresh it.
 - While split routing is on, the service checks both lanes with `api.ipify.org`, and website names are resolved through encrypted DNS at `1.1.1.1` over the VPN lane.
 - Settings and logs stay on your PC. A diagnostics archive leaves it only if you share it.
 
@@ -86,17 +111,17 @@ Details, and how to delete everything: [PRIVACY.md](PRIVACY.md).
 
 - The installer and the programs aren't signed. SmartScreen warns about the downloaded installer, and the update check verifies integrity, not authenticity.
 - One Windows user per PC. Split routing applies to the whole PC, so programs in other Windows sessions follow the same lanes, but only the user who installed SplitLane can control it.
-- Tailscale only. "Key or subscription" and "Configuration file" are shown in the app as coming soon.
+- Keys, subscriptions and WireGuard files have limits of their own: see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard).
 - Installation only in `%ProgramFiles%\SplitLane`.
 - The embedded node is a separate device in your tailnet with its own login expiry. When it expires, SplitLane asks you to log in again.
-- DNS is shared by both lanes. While the VPN lane works, names are resolved through it, so content delivery networks may give programs on the Direct lane servers near the exit node. When the VPN server is unreachable or **All direct** is on, all names go to your ISP's DNS.
+- DNS is shared by both lanes. While the VPN lane works, names are resolved through it, so content delivery networks may give programs on the Direct lane servers near the VPN server. When the VPN server is unreachable or **All direct** is on, all names go to your ISP's DNS.
 - If the Tailscale app manages DNS (its default), MagicDNS names don't resolve while split routing is on, and if your tailnet overrides DNS for all names, split routing doesn't turn on. It has been tested only with DNS management turned off in the Tailscale app.
 - WSL and virtual machines follow the main lane. So do connections whose program the core can't identify (for example `ping`).
 - Programs that go online through shared system processes (for example, the Edge web component) can't be separated from each other.
 - Traffic to private, local and Tailscale addresses always goes directly.
 - IPv6 to the internet doesn't work while split routing is on.
-- There is no kill switch. When the core crashes, traffic goes directly until SplitLane turns the exit node of the Tailscale app back on (about a second), then through that exit node until the core restarts. When SplitLane restarts the core itself (after a network change, when you change the exit node), traffic goes through the exit node of the Tailscale app meanwhile. If the Tailscale app isn't installed or had no exit node selected, traffic goes directly in both cases.
-- An exit node that reaches the internet from the same address as this PC can't be used.
+- There is no kill switch. When the core crashes, traffic goes directly until SplitLane turns the exit node of the Tailscale app back on (about a second), then through that exit node until the core restarts. When SplitLane restarts the core itself (after a network change, when you change the exit node or the server), traffic goes through the exit node of the Tailscale app meanwhile. If the Tailscale app isn't installed or had no exit node selected, traffic goes directly in both cases.
+- An exit node or a server that reaches the internet from the same address as this PC can't be used.
 - If the Tailscale app used automatic exit node selection, a specific exit node is selected there after split routing is turned off.
 - If the Tailscale app is installed, SplitLane reads one of its settings through a debug command whose format can change. After you update Tailscale, turn split routing on and off once.
 - Messages of the service (its log, the reasons the installer shows when it stops) are in English in both languages.
@@ -135,7 +160,7 @@ Security issues: see [SECURITY.md](SECURITY.md). Other problems and questions: [
 
 ## Development
 
-- **Layout.** `helper/`: the service `splitlane-helper.exe` (Go), the only part with administrator rights. `helper/cmd/slctl`: a test client for the service's pipe. `helper/cmd/slguard`: a guard for live checks on a PC during development, not shipped. `app/`: the window (Electron, React, TypeScript); `app/build/installer.nsh`: additions to the installer. `scripts/`: the core download, the builds and the installer check. `docs/`: specifications and plans, in Russian. `.github/workflows/build.yml`: the CI build.
+- **Layout.** `helper/`: the service `splitlane-helper.exe` (Go), the only part with administrator rights. `helper/cmd/slctl`: a test client for the service's pipe. `helper/cmd/slguard`: a guard for live checks on a PC during development, not shipped. `app/`: the window (Electron, React, TypeScript); `app/build/installer.nsh`: additions to the installer. `scripts/`: the core download, the builds and the installer check; `scripts/server`: the server kit for a VPS (a bash script, not shipped). `docs/`: specifications and plans, in Russian. `.github/workflows/build.yml`: the CI build.
 - **The service alone** (Go 1.27.4, no CGO):
 
   ```powershell
