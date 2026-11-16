@@ -61,7 +61,7 @@ Instead of a Tailscale exit node, the VPN lane can go through a VPN server of yo
 - **Transports:** plain TCP, WebSocket, gRPC, HTTPUpgrade, HTTP/2 and QUIC; TLS with SNI, ALPN and a uTLS fingerprint, or Reality.
 - **Subscriptions:** an `https://` address that returns a list of share links, as plain text or in base64.
 
-**Adding servers.** On **Connect a VPN** (or later on **Connection**), choose **Key or subscription**, paste one or more links (one per line) or one subscription address, and click **Add**. For WireGuard, choose **Configuration file** and pick the `.conf` file; you can also paste its text under **Key or subscription**. SplitLane then shows how many servers it added and which lines it rejected and why, by line number (the line itself isn't shown: it holds a key). A link with something SplitLane doesn't support is rejected with the reason rather than half understood.
+**Adding servers.** On **Connect a VPN** (or later on **Connection**), choose **Key or subscription**, paste one or more links (one per line) or one subscription address, and click **Add**. For WireGuard, choose **Configuration file** and pick the `.conf` file; you can also paste its text under **Key or subscription**, alone or together with links. SplitLane then shows how many servers it added and which lines it rejected and why, by line number (the line itself isn't shown: it holds a key). A link with something SplitLane doesn't support is rejected with the reason rather than half understood.
 
 **Choosing a server.** The servers are listed with their name, protocol and source (added by hand, a file or the subscription's name). The server you choose leads the VPN lane, and the header shows it as `<server> · <protocol>`. Changing the server while split routing is on restarts split routing briefly, like changing the exit node. Choosing an exit node switches the VPN lane back to Tailscale.
 
@@ -78,6 +78,7 @@ Links, WireGuard files and subscription addresses are secrets. SplitLane keeps t
 - Subscriptions are refreshed only when you click **Refresh**, not on a schedule.
 - A server without UDP can't carry the UDP traffic of programs on the VPN lane (games, calls).
 - There is no latency test and no automatic choice of server; one server leads the VPN lane at a time.
+- Some internet providers recognize Shadowsocks and WireGuard by DPI and cut them (Russia, Iran, China). To SplitLane this looks like a server that doesn't answer: it says it couldn't make sure the tunnel works, turns split routing off and suggests VLESS + Reality or Hysteria2, which usually get through.
 
 ## Updates
 
