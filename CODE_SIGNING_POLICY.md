@@ -4,7 +4,7 @@
 
 ## English
 
-Status: SplitLane has applied to the SignPath Foundation for free code signing. Until the application is approved, releases are not signed.
+Status: releases are not signed yet. SplitLane is applying to the SignPath Foundation for free code signing; this page describes how signing works once the application is approved.
 
 Free code signing provided by SignPath.io, certificate by SignPath Foundation
 
@@ -33,7 +33,7 @@ SplitLane sends nothing over the network except what the [privacy policy](PRIVAC
 
 ## Русский
 
-Состояние: SplitLane подал заявку в SignPath Foundation на бесплатную подпись кода. Пока заявка не одобрена, выпуски не подписаны.
+Состояние: выпуски пока не подписаны. SplitLane подаёт заявку в SignPath Foundation на бесплатную подпись кода; эта страница описывает, как будет устроена подпись, когда заявку одобрят.
 
 Free code signing provided by SignPath.io, certificate by SignPath Foundation
 
