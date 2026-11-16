@@ -171,6 +171,11 @@ func (f *httpFetcher) Get(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 	// One byte over the limit tells a body over it.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxSubscriptionLen+1))
+	// The deadline is the last word: a read of a chunked body that races it can end without an error
+	// and with only part of the body (TestFetchTimeout), so a body read past it is not trusted.
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		return nil, classify(ctx, err)
 	}
