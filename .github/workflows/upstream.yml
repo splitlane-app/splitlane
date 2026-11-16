@@ -1,0 +1,25 @@
+# SplitLane: once a week, scripts/upstream-check.sh compares the pinned sing-box, Go and Electron with what upstream
+# has released and opens an issue for each finding (docs/maintenance.md says what to do). It changes no file.
+# GitHub turns off a scheduled workflow after 60 days without activity in the repository: then turn it on again
+# under Actions → upstream.
+name: upstream
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compare the pins with upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/upstream-check.sh
