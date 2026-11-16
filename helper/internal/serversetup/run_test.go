@@ -423,7 +423,8 @@ func TestRunSystemUnsupported(t *testing.T) {
 		{"Debian testing without a version", map[string]fakeReply{"cat /etc/os-release": {stdout: "ID=debian\nVERSION_CODENAME=trixie\n"}}, "debian"},
 		{"Mint, like Ubuntu", map[string]fakeReply{"cat /etc/os-release": {stdout: "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nVERSION_ID=\"21.3\"\n"}}, "linuxmint 21.3"},
 		{"a version that is not a number", map[string]fakeReply{"cat /etc/os-release": {stdout: "ID=debian\nVERSION_ID=\"12x\"\n"}}, "debian 12x"},
-		{"no os-release", map[string]fakeReply{"cat /etc/os-release": {stderr: "cat: /etc/os-release: No such file or directory\n", status: 1}}, "os-release"},
+		{"no os-release", map[string]fakeReply{"cat /etc/os-release": {stderr: "cat: /etc/os-release: No such file or directory\n", status: 1}}, "os-release: cat: /etc/os-release: No such file or directory"},
+		{"os-release fails silently", map[string]fakeReply{"cat /etc/os-release": {status: 1}}, "os-release"},
 		{"armv7l", map[string]fakeReply{"uname -m": {stdout: "armv7l\n"}}, "armv7l"},
 		{"i686", map[string]fakeReply{"uname -m": {stdout: "i686\n"}}, "i686"},
 		{"no systemd", map[string]fakeReply{"test -d /run/systemd/system": {status: 1}}, "systemd"},
@@ -445,6 +446,50 @@ func TestRunSystemUnsupported(t *testing.T) {
 					t.Fatalf("ran %q", cmd)
 				}
 			}
+		})
+	}
+}
+
+// TestRunPasswordExpired (Ruling 12): an account that must change its password logs in, then every
+// command fails; the first command's stderr tells it apart from a system that does not fit.
+func TestRunPasswordExpired(t *testing.T) {
+	const spaced = "p\tw  x!" // a tab and two spaces: the detail's one-line form must not hide it from the mask
+	cases := []struct {
+		name, stderr string
+		code, detail string
+		password     string // "" means focusPassword
+	}{
+		{"OpenSSH without a terminal", "WARNING: Your password has expired.\nPassword change required but no TTY available.\n", CodePasswordExpired, "", ""},
+		{"PAM", "You are required to change your password immediately (administrator enforced)\n", CodePasswordExpired, "", ""},
+		{"another case", "PASSWORD HAS EXPIRED\n", CodePasswordExpired, "", ""},
+		{"only the second line", "Password change required but no TTY available.\n", CodePasswordExpired, "", ""},
+		{"a nologin shell", "This account is currently not available.\n", CodeOSUnsupported, "os-release: This account is currently not available.", ""},
+		{"the last two lines, masked", "line one\nsee https://198-51-100-7.sslip.io:8443/Q2xvc2VkVG9rZW4xMjM0NTY3/sub\nshell said " + focusPassword + "\n",
+			CodeOSUnsupported, "os-release: see https://198-51-100-7.sslip.io:8443/•••/sub | shell said •••", ""},
+		{"a password with a tab and two spaces", "shell said " + spaced + " here\n", CodeOSUnsupported, "os-release: shell said ••• here", spaced},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			password := c.password
+			if password == "" {
+				password = focusPassword
+			}
+			f := newFakeServer(t, func(f *fakeServer) { f.password = password })
+			f.setReply("cat /etc/os-release", fakeReply{stderr: c.stderr, status: 1})
+			events, _, fail := setupRun(context.Background(), passwordRequest(f, password), testDeps(t, nil))
+			wantFailure(t, fail, c.code, c.detail)
+			if c.code == CodePasswordExpired {
+				if b := mustJSON(t, fail); b != `{"code":"password_expired"}` {
+					t.Fatalf("%s", b)
+				}
+			}
+			if got := f.commands(); !reflect.DeepEqual(got, []string{"cat /etc/os-release"}) {
+				t.Fatalf("commands %q", got)
+			}
+			if !reflect.DeepEqual(steps(events), []string{"connect start", "connect done", "system start"}) {
+				t.Fatalf("%v", steps(events))
+			}
+			noSecrets(t, f, events, fail, password, "p w x!", "Q2xvc2VkVG9rZW4xMjM0NTY3")
 		})
 	}
 }
@@ -1000,6 +1045,37 @@ func TestRunSubscriptionWait(t *testing.T) {
 			}
 			noSecrets(t, f, events, fail, testSubURL, "Q2xvc2VkVG9rZW4xMjM0NTY3", f.password)
 		})
+	}
+}
+
+// TestRunTotalDuringSubscriptionWait (Ruling 13): the wait ends with what is left of Total, and once
+// the kit has succeeded its links are kept: Done without the subscription, not timeout.
+func TestRunTotalDuringSubscriptionWait(t *testing.T) {
+	f := newFakeServer(t, nil)
+	f.setKit(fakeReply{stdout: kitOutput(resultLine(t, []string{testLinkVLESS, testLinkHy2}, testSubURL, []string{"harden_failed"}))})
+	fetch := &fakeFetch{} // never answers
+	d := testDeps(t, fetch)
+	d.Total = time.Second
+	d.SubWait = time.Minute
+	d.SubEvery = 20 * time.Millisecond
+	start := time.Now()
+	events, done, fail := setupRun(context.Background(), passwordRequest(f, f.password), d)
+	el := time.Since(start)
+	if fail != nil {
+		t.Fatalf("%+v", *fail)
+	}
+	if done.Subscription != nil || done.Links != testLinkVLESS+"\n"+testLinkHy2 ||
+		!reflect.DeepEqual(done.Warnings, []string{"harden_failed", "sub_unreachable"}) {
+		t.Fatalf("%+v", done)
+	}
+	if el < d.Total || el > 5*time.Second {
+		t.Fatalf("took %v with Total %v and SubWait %v", el, d.Total, d.SubWait)
+	}
+	if len(fetch.attempts()) < 2 {
+		t.Fatalf("%d attempts", len(fetch.attempts()))
+	}
+	if last := events[len(events)-1]; last != (Event{"subscription", "warn", "the subscription address did not answer"}) {
+		t.Fatalf("%+v", last)
 	}
 }
 

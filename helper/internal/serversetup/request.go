@@ -45,8 +45,22 @@ var requestFields = map[string]bool{"host": true, "port": true, "user": true, "p
 // copies go with Wipe. They are unquoted by hand: a JSON string decoded into a Go string would leave
 // a copy nothing can wipe.
 func ParseRequest(line []byte) (Request, *Failure) {
-	if len(line) > maxRequestLen {
+	if len(line) > maxRequestLen || !json.Valid(line) {
 		return Request{}, badInput("request")
+	}
+	// The names are checked before any value is copied. A name given twice is refused (Ruling 14):
+	// json.Unmarshal would keep the last value and drop its copy of the first, which then could not
+	// be wiped.
+	names, ok := objectNames(line)
+	if !ok {
+		return Request{}, badInput("request")
+	}
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		if !requestFields[n] || seen[n] {
+			return Request{}, badInput("request")
+		}
+		seen[n] = true
 	}
 	// The values stay raw JSON, copies of line that are cleared on the way out.
 	var fields map[string]json.RawMessage
@@ -58,14 +72,10 @@ func ParseRequest(line []byte) (Request, *Failure) {
 			clear(v)
 		}
 	}()
-	for k := range fields {
-		if !requestFields[k] {
-			return Request{}, badInput("request")
-		}
-	}
 
 	var r Request
-	host, ok := textField(fields["host"])
+	var host string
+	host, ok = textField(fields["host"])
 	if !ok {
 		return Request{}, badInput("host")
 	}
@@ -122,6 +132,84 @@ func (r *Request) Wipe() {
 }
 
 func badInput(field string) *Failure { return &Failure{Code: CodeBadInput, Detail: field} }
+
+// objectNames returns the member names of the JSON object b, in order, nested objects not
+// included; false when b is not an object. b must be valid JSON (json.Valid). The values are only
+// stepped over, never copied: the request's secrets are among them.
+func objectNames(b []byte) ([]string, bool) {
+	i := skipSpace(b, 0)
+	if i >= len(b) || b[i] != '{' {
+		return nil, false
+	}
+	var names []string
+	for i = skipSpace(b, i+1); i < len(b) && b[i] != '}'; {
+		end := endOfString(b, i)
+		var name string // decoded, so an escaped spelling of a name is that name
+		if b[i] != '"' || json.Unmarshal(b[i:end], &name) != nil {
+			return nil, false
+		}
+		names = append(names, name)
+		i = skipSpace(b, end)
+		if i >= len(b) || b[i] != ':' {
+			return nil, false
+		}
+		i = skipSpace(b, endOfValue(b, skipSpace(b, i+1)))
+		if i < len(b) && b[i] == ',' {
+			i = skipSpace(b, i+1)
+		}
+	}
+	return names, i < len(b)
+}
+
+func skipSpace(b []byte, i int) int {
+	for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r') {
+		i++
+	}
+	return i
+}
+
+// endOfString is the index after the string that starts with the quote at i.
+func endOfString(b []byte, i int) int {
+	for i++; i < len(b); i++ {
+		switch b[i] {
+		case '\\':
+			i++
+		case '"':
+			return i + 1
+		}
+	}
+	return len(b)
+}
+
+// endOfValue is the index after the JSON value that starts at i.
+func endOfValue(b []byte, i int) int {
+	if i >= len(b) {
+		return i
+	}
+	switch b[i] {
+	case '"':
+		return endOfString(b, i)
+	case '{', '[':
+		depth := 0
+		for ; i < len(b); i++ {
+			switch b[i] {
+			case '"':
+				i = endOfString(b, i) - 1
+			case '{', '[':
+				depth++
+			case '}', ']':
+				if depth--; depth == 0 {
+					return i + 1
+				}
+			}
+		}
+		return len(b)
+	}
+	for i < len(b) && !bytes.ContainsRune([]byte(",}] \t\r\n"), rune(b[i])) { // a number, true, false, null
+		i++
+	}
+	return i
+}
 
 // textField reads a JSON string that is not a secret; a missing field or null is not one.
 func textField(raw json.RawMessage) (string, bool) {

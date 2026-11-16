@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -248,6 +249,13 @@ func TestParseRequestCredentials(t *testing.T) {
 		{"null", `null`, "request"},
 		{"empty", ``, "request"},
 		{"too long", `{"host":"198.51.100.7","user":"root","password":"` + strings.Repeat("x", 64<<10) + `"}`, "request"},
+		// Ruling 14: a name given twice is refused (json.Unmarshal would keep the last value and drop
+		// the copy of the first unwiped).
+		{"the password twice", `{"host":"198.51.100.7","user":"root","password":"a","password":"b"}`, "request"},
+		{"the key twice", `{"host":"198.51.100.7","user":"root","key":"a","key":"b"}`, "request"},
+		{"the host twice", `{"host":"198.51.100.7","host":"192.0.2.1","user":"root","password":"a"}`, "request"},
+		{"the password twice, once escaped", `{"host":"198.51.100.7","user":"root","password":"a","pass` + jsonU('w') + `ord":"b"}`, "request"},
+		{"a nested value with a brace in a string", `{"port":{"x":[1,{"y":"}\"]"}],"z":{"port":2}},"host":"198.51.100.7","user":"root","password":"a"}`, "port"},
 		{"host not a string", `{"host":7,"user":"root","password":"x"}`, "host"},
 		{"no host", `{"user":"root","password":"x"}`, "host"},
 	}
@@ -261,6 +269,36 @@ func TestParseRequestCredentials(t *testing.T) {
 				t.Fatalf("a refused request keeps secrets: %q %q %q", r.Password, r.Key, r.Passphrase)
 			}
 		})
+	}
+}
+
+func TestObjectNames(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string // nil with ok false: not an object
+		ok   bool
+	}{
+		{`{}`, nil, true},
+		{` { } `, nil, true},
+		{`{"a":1}`, []string{"a"}, true},
+		{" {\n\t\"a\" : 1 ,\r\n \"b\" :\"x\" } ", []string{"a", "b"}, true},
+		{`{"a":{"a":1,"b":[{"a":2}]},"a":2}`, []string{"a", "a"}, true},
+		{`{"a\"b":1,"c\\":2}`, []string{`a"b`, `c\`}, true},
+		{`{"a":"x\\","b":"}","c":"\"{"}`, []string{"a", "b", "c"}, true},
+		{`{"a":[1,[2,[3]],{"b":{}}],"c":null,"d":true,"e":-1.5e3}`, []string{"a", "c", "d", "e"}, true},
+		{`{"p` + jsonU('w') + `":1}`, []string{"pw"}, true},
+		{`[]`, nil, false},
+		{`null`, nil, false},
+		{`"{}"`, nil, false},
+	}
+	for _, c := range cases {
+		if !json.Valid([]byte(c.in)) {
+			t.Fatalf("%s: not valid JSON", c.in)
+		}
+		got, ok := objectNames([]byte(c.in))
+		if ok != c.ok || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %q %v, want %q %v", c.in, got, ok, c.want, c.ok)
+		}
 	}
 }
 

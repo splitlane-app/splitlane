@@ -22,18 +22,19 @@ import (
 
 // Codes of a failed setup (spec, section 8).
 const (
-	CodeBadInput       = "bad_input"       // the request does not pass the checks
-	CodeSSHUnreachable = "ssh_unreachable" // no TCP or SSH connection within ConnectTimeout, refused, a name that does not resolve
-	CodeSSHAuth        = "ssh_auth"        // the server refused the login
-	CodeSSHKey         = "ssh_key"         // the key cannot be used: detail ppk, passphrase or format
-	CodeNoAdmin        = "no_admin"        // not root and no usable sudo: detail sudo_missing, sudo_tty, sudo_denied or sudo_needs_password
-	CodeOSUnsupported  = "os_unsupported"  // not Debian 12+ or Ubuntu 22.04+, not x86_64 or aarch64, no systemd
-	CodeDownloadFailed = "download_failed" // the kit could not download sing-box or packages
-	CodePortsBusy      = "ports_busy"      // every port the kit tries for a protocol is taken
-	CodeKitFailed      = "kit_failed"      // any other failure of the kit, or of SSH on a live connection
-	CodeTimeout        = "timeout"         // the setup took longer than Deps.Total
-	CodeCancelled      = "cancelled"       // ctx was cancelled
-	CodeConnectionLost = "connection_lost" // the SSH connection broke after the login
+	CodeBadInput        = "bad_input"        // the request does not pass the checks
+	CodeSSHUnreachable  = "ssh_unreachable"  // no TCP or SSH connection within ConnectTimeout, refused, a name that does not resolve
+	CodeSSHAuth         = "ssh_auth"         // the server refused the login
+	CodeSSHKey          = "ssh_key"          // the key cannot be used: detail ppk, passphrase or format
+	CodePasswordExpired = "password_expired" // the login works, but the account must change its password first (no detail)
+	CodeNoAdmin         = "no_admin"         // not root and no usable sudo: detail sudo_missing, sudo_tty, sudo_denied or sudo_needs_password
+	CodeOSUnsupported   = "os_unsupported"   // not Debian 12+ or Ubuntu 22.04+, not x86_64 or aarch64, no systemd
+	CodeDownloadFailed  = "download_failed"  // the kit could not download sing-box or packages
+	CodePortsBusy       = "ports_busy"       // every port the kit tries for a protocol is taken
+	CodeKitFailed       = "kit_failed"       // any other failure of the kit, or of SSH on a live connection
+	CodeTimeout         = "timeout"          // the work over SSH took longer than Deps.Total
+	CodeCancelled       = "cancelled"        // ctx was cancelled
+	CodeConnectionLost  = "connection_lost"  // the SSH connection broke after the login
 )
 
 // WarnSubUnreachable: the subscription address did not answer within Deps.SubWait. The kit's own
@@ -68,7 +69,7 @@ type Deps struct {
 	Dial           func(ctx context.Context, network, addr string) (net.Conn, error)
 	Fetch          connector.Fetcher // downloads the subscription
 	ConnectTimeout time.Duration     // for the TCP connection, then again for the SSH handshake with the login
-	Total          time.Duration     // for the whole setup
+	Total          time.Duration     // for the whole setup; the subscription wait gets what is left of it
 	SubWait        time.Duration     // how long the subscription address may take to answer
 	SubEvery       time.Duration     // how often it is tried
 }
@@ -103,15 +104,17 @@ const masked = "•••"
 const maxDetail = 300
 
 // Run sets up the server of req (spec, section 5). It emits the steps through emit, one call at a
-// time, and returns Done or a Failure. Everything runs within d.Total (timeout); a cancelled ctx is
+// time, and returns Done or a Failure. Everything runs within d.Total: the work over SSH that does
+// not finish in it is a timeout; the subscription wait ends with it too, but then the kit has
+// succeeded and its links are kept (Done with sub_unreachable, Ruling 13). A cancelled ctx is
 // cancelled; an SSH connection that breaks after the login is connection_lost. The credentials go
 // to the server only as SSH authentication and as the stdin of sudo -S, never in a command line;
 // they and the secrets of the result (links, subscription address) are kept out of every Event and
 // Failure. Run leaves req to the caller to wipe.
 func Run(ctx context.Context, req Request, d Deps, emit func(Event)) (Done, *Failure) {
-	ctx, cancel := context.WithTimeout(ctx, d.Total)
+	runCtx, cancel := context.WithTimeout(ctx, d.Total)
 	defer cancel()
-	s := &setup{ctx: ctx, req: req, d: d, emitFn: emit}
+	s := &setup{ctx: runCtx, caller: ctx, req: req, d: d, emitFn: emit}
 	done, f := s.run()
 	if f != nil {
 		f.Detail = s.clean(f.Detail)
@@ -121,7 +124,8 @@ func Run(ctx context.Context, req Request, d Deps, emit func(Event)) (Done, *Fai
 }
 
 type setup struct {
-	ctx    context.Context
+	ctx    context.Context // the caller's, within Total
+	caller context.Context // the caller's alone: when it ends the run fails, even after the kit's success
 	req    Request
 	d      Deps
 	emitFn func(Event)
@@ -182,7 +186,16 @@ func (s *setup) checkSystem() (string, admin, *Failure) {
 		return "", 0, f
 	}
 	if r.status != 0 {
-		return "", 0, unsupported("os-release")
+		// The first command tells an account that must change its password (the login works, every
+		// command fails) from a system that does not fit (Ruling 12).
+		if passwordExpired(r.stderr) {
+			return "", 0, &Failure{Code: CodePasswordExpired}
+		}
+		detail := "os-release"
+		if t := s.stderrTail(r.stderr); t != "" {
+			detail += ": " + t
+		}
+		return "", 0, unsupported(detail)
 	}
 	id, version := osRelease(string(r.stdout))
 	if !supportedOS(id, version) {
@@ -255,7 +268,7 @@ func (s *setup) install(a admin) (*kitResult, *Failure) {
 	}
 	name := lastLine(r.stdout)
 	if r.status != 0 || !tempName.MatchString(name) {
-		return nil, kitFailed("mktemp: " + lastLines(r.stderr, 2))
+		return nil, kitFailed("mktemp: " + s.stderrTail(r.stderr))
 	}
 	defer func() {
 		_, _ = s.conn.run("rm -f "+name, nil, nil) // a failure to remove changes nothing for the user
@@ -264,13 +277,13 @@ func (s *setup) install(a admin) (*kitResult, *Failure) {
 		return nil, f
 	}
 	if r.status != 0 || r.stdinErr != nil {
-		return nil, kitFailed("upload: " + lastLines(r.stderr, 2))
+		return nil, kitFailed("upload: " + s.stderrTail(r.stderr))
 	}
 	if r, f = s.cmd("chmod 600 "+name, nil); f != nil {
 		return nil, f
 	}
 	if r.status != 0 {
-		return nil, kitFailed("chmod: " + lastLines(r.stderr, 2))
+		return nil, kitFailed("chmod: " + s.stderrTail(r.stderr))
 	}
 	return s.runKit(a, name)
 }
@@ -321,7 +334,7 @@ func (s *setup) runKit(a admin, name string) (*kitResult, *Failure) {
 	if f := ctxFailure(s.ctx); f != nil {
 		return nil, f
 	}
-	detail := lastLines(r.stderr, 2)
+	detail := s.stderrTail(r.stderr)
 	if detail == "" {
 		detail = "the kit ended without a result (exit code " + strconv.Itoa(r.status) + ")"
 	}
@@ -345,7 +358,9 @@ func (s *setup) finish(res *kitResult) (Done, *Failure) {
 		s.emit("subscription", "done", "the subscription address answers")
 		return done, nil
 	}
-	if f := ctxFailure(s.ctx); f != nil {
+	// The wait ends at SubWait or with Total, whichever comes first. The kit has succeeded, so the end
+	// of Total costs the subscription only (Ruling 13); a cancel still fails the run.
+	if f := ctxFailure(s.caller); f != nil {
 		return Done{}, f
 	}
 	done.Warnings = append(done.Warnings, WarnSubUnreachable)
@@ -353,9 +368,9 @@ func (s *setup) finish(res *kitResult) (Done, *Failure) {
 	return done, nil
 }
 
-// waitSubscription tries the subscription address every SubEvery, for SubWait at most, until it
-// answers with at least one server: Caddy needs a while for its certificate. The download has the
-// rules of the service's (connector.Fetcher: https only, public addresses, limits).
+// waitSubscription tries the subscription address every SubEvery, for SubWait at most and never past
+// Total, until it answers with at least one server: Caddy needs a while for its certificate. The
+// download has the rules of the service's (connector.Fetcher: https only, public addresses, limits).
 func (s *setup) waitSubscription(url string) bool {
 	ctx, cancel := context.WithTimeout(s.ctx, s.d.SubWait)
 	defer cancel()
@@ -410,14 +425,39 @@ func (s *setup) emit(step, state, detail string) {
 // of printable text, maxDetail characters. The password goes out first, before Mask or the cut can
 // leave a piece of it.
 func (s *setup) clean(text string) string {
-	b := []byte(text) // the secrets are compared as bytes: a string of one could not be wiped
+	text = strings.ToValidUTF8(string(s.scrub([]byte(text))), string(utf8.RuneError))
+	return clip(oneLine(connector.Mask(text)), maxDetail)
+}
+
+// scrub replaces the password and the passphrase in b with "•••". They are compared as bytes: a
+// string of one could not be wiped.
+func (s *setup) scrub(b []byte) []byte {
 	for _, secret := range [][]byte{s.req.Password, s.req.Passphrase} {
 		if len(secret) > 0 {
 			b = bytes.ReplaceAll(b, secret, []byte(masked))
 		}
 	}
-	text = strings.ToValidUTF8(string(b), string(utf8.RuneError))
-	return clip(oneLine(connector.Mask(text)), maxDetail)
+	return b
+}
+
+// stderrTail is the last two lines of a command's stderr for a detail. The secrets go out of the raw
+// text first: lastLines makes each line one line of text, and a password with a tab or two spaces in
+// a row would no longer match afterwards.
+func (s *setup) stderrTail(stderr []byte) string {
+	return lastLines(s.scrub(stderr), 2)
+}
+
+// passwordExpired tells whether a command's stderr says the account must change its password before
+// anything runs: OpenSSH's "WARNING: Your password has expired." and "Password change required but
+// no TTY available.", PAM's "You are required to change your password immediately".
+func passwordExpired(stderr []byte) bool {
+	text := strings.ToLower(string(stderr))
+	for _, p := range []string{"password has expired", "password change required", "you are required to change your password"} {
+		if strings.Contains(text, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // ctxFailure is the Failure of a context that is over, or nil.
