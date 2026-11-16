@@ -207,6 +207,16 @@ describe('a successful setup', () => {
 })
 
 describe('add failures', () => {
+  test('detail: the first refusal code of the add, else no_servers', async () => {
+    const t = setup()
+    t.link.call.mockResolvedValue(result({ added: [], servers: [], rejected: [{ line: 1, code: 'bad_link' }] }))
+    const p = t.vs.setup({ ...req })
+    await t.started(p)
+    t.c.line({ done: { subscription: null, links: LINKS, warnings: [] } })
+    t.c.close(0)
+    expect(await p).toEqual({ kind: 'failed', code: 'add_failed', detail: 'bad_link' })
+  })
+
   test('proxy.add refused as a whole (servers empty): add_failed, an add failed event', async () => {
     const t = setup()
     t.link.call.mockResolvedValue(result({ added: [], servers: [] }))
@@ -310,6 +320,35 @@ describe('the subscription falls back to the links (ruling 17)', () => {
 })
 
 describe('a failed subprocess', () => {
+  test('the failed event goes to the last step seen when none is running', async () => {
+    const t = setup()
+    const p = t.vs.setup({ ...req })
+    await t.started(p)
+    t.c.line({ step: 'install', state: 'start' })
+    t.c.line({ step: 'install', state: 'done' })
+    t.c.line({ step: 'harden', state: 'warn' })
+    t.c.line({ failed: { code: 'kit_failed' } })
+    t.c.close(1)
+    await p
+    expect(t.events.at(-1)).toEqual({ step: 'harden', state: 'failed', detail: 'kit_failed' })
+  })
+
+  test('a throwing link does not leave the setup busy', async () => {
+    const t = setup()
+    t.link.call.mockImplementation(() => {
+      throw new Error('boom')
+    })
+    t.deps.emit = () => {
+      throw new Error('emit boom')
+    }
+    const p = t.vs.setup({ ...req })
+    await t.started(p)
+    t.c.line({ done: { subscription: null, links: LINKS, warnings: [] } })
+    t.c.close(0)
+    expect(await p).toMatchObject({ kind: 'failed' })
+    expect(await t.vs.setup({ ...req, address: 'bad address' })).toMatchObject({ code: 'bad_input' }) // not busy
+  })
+
   test('failed: the code and detail, and a failed event for the step that was running', async () => {
     const t = setup()
     const p = t.vs.setup({ ...req })
@@ -502,6 +541,27 @@ describe('the key', () => {
     t.c.line({ failed: { code: 'ssh_key' } })
     t.c.close(1)
     await p
+    // a failed setup keeps the key: a retry with a corrected passphrase sends the same one
+    const p2 = t.vs.setup({ ...keyed, keyPassphrase: 'ph-r4se-2' })
+    await vi.waitFor(() => expect(t.c.writes.length).toBe(2))
+    expect(JSON.parse(t.c.writes[1])).toMatchObject({ key: KEY, passphrase: 'ph-r4se-2' })
+    t.c.line({ done: { subscription: null, links: LINKS, warnings: [] } })
+    t.c.close(0)
+    expect((await p2).kind).toBe('done')
+    // done forgets it
+    expect(await t.vs.setup({ ...keyed })).toMatchObject({ code: 'bad_input' })
+  })
+
+  test('a cancelled setup keeps the key; vpsForgetKey then drops it', async () => {
+    const t = setup({}, enc(KEY))
+    await t.vs.pickKey()
+    const p = t.vs.setup({ ...keyed })
+    await t.started(p)
+    await t.vs.cancel()
+    t.c.line({ failed: { code: 'cancelled' } })
+    t.c.close(1)
+    expect(await p).toEqual({ kind: 'cancelled' })
+    t.vs.forgetKey()
     expect(await t.vs.setup({ ...keyed })).toMatchObject({ code: 'bad_input' })
   })
 

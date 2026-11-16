@@ -592,10 +592,7 @@ const vps = new VpsSetup({
   pick: async (filterName) => {
     const options = {
       properties: ['openFile' as const],
-      filters: [
-        { name: filterName, extensions: ['*'] },
-        { name: 'SSH', extensions: ['pem', 'key', 'ppk'] }
-      ]
+      filters: [{ name: filterName, extensions: ['*'] }]
     }
     const r = win !== null ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]

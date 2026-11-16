@@ -139,13 +139,15 @@ export class VpsSetup {
     this.busy = true
     this.cancelled = false
     try {
-      return await this.run(x)
+      const out = await this.run(x)
+      // the key stays after a failure or a cancel, so that «Попробовать снова» works (ruling 18); the page drops it
+      if (out.kind === 'done') this.forgetKey()
+      return out
     } finally {
       this.child = null
       this.stopKill?.()
       this.stopKill = null
       this.busy = false
-      this.forgetKey()
     }
   }
 
@@ -252,6 +254,7 @@ export class VpsSetup {
     return new Promise<VpsOutcome>((resolve) => {
       let final: Final | null = null
       let running: VpsStep | null = null
+      let lastSeen: VpsStep | null = null
       let pending = ''
       let overflow = false
       const decoder = new TextDecoder('utf-8')
@@ -269,6 +272,7 @@ export class VpsSetup {
           const step = m.step as VpsStep
           const state = m.state as (typeof STATES)[number]
           const e: VpsEvent = typeof m.detail === 'string' ? { step, state, detail: m.detail } : { step, state }
+          lastSeen = step
           if (state === 'start') running = step
           else if (running === step) running = null
           this.d.emit(e)
@@ -313,7 +317,9 @@ export class VpsSetup {
         feed(decoder.decode())
         if (!overflow && pending.trim() !== '') handle(pending.trim()) // a last line without its newline
         pending = ''
-        void this.finish(final, running).then(resolve)
+        this.finish(final, running ?? lastSeen)
+          .catch((): VpsOutcome => ({ kind: 'failed', code: 'kit_failed' })) // busy must always be released
+          .then(resolve)
       })
 
       // the credentials go in, and the buffer is cleared as soon as the write is over; stdin stays open
@@ -361,7 +367,7 @@ export class VpsSetup {
     if (added.kind === 'failed') return fail(added.error.code)
     if (added.kind === 'cancelled') return fail('cancelled')
     const { servers, subscription } = added.result
-    if (servers.length === 0) return fail('no_servers')
+    if (servers.length === 0) return fail(added.result.rejected[0]?.code ?? 'no_servers')
     const sel = await runCommand(this.d.link, { method: 'proxy.select', id: servers[0] })
     if (!sel.ok) return fail(sel.error.code)
     const warnings = done.subscription !== null && viaLinks ? [...new Set([...done.warnings, 'sub_unreachable'])] : done.warnings
