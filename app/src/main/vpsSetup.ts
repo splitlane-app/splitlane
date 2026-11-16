@@ -350,14 +350,22 @@ export class VpsSetup {
       this.d.emit({ step: 'add', state: 'failed', detail })
       return { kind: 'failed', code: 'add_failed', detail }
     }
-    const added = await runProxyAdd(this.d.link, done.subscription ?? done.links)
+    // the subscription address first; when it is refused or yields no servers, the links of the same setup (ruling 17)
+    let added = await runProxyAdd(this.d.link, done.subscription ?? done.links)
+    let viaLinks = done.subscription === null
+    const none = (o: typeof added): boolean => o.kind !== 'done' || o.result.servers.length === 0
+    if (none(added) && !viaLinks) {
+      viaLinks = true
+      added = await runProxyAdd(this.d.link, done.links)
+    }
     if (added.kind === 'failed') return fail(added.error.code)
     if (added.kind === 'cancelled') return fail('cancelled')
     const { servers, subscription } = added.result
     if (servers.length === 0) return fail('no_servers')
     const sel = await runCommand(this.d.link, { method: 'proxy.select', id: servers[0] })
     if (!sel.ok) return fail(sel.error.code)
+    const warnings = done.subscription !== null && viaLinks ? [...new Set([...done.warnings, 'sub_unreachable'])] : done.warnings
     this.d.emit({ step: 'add', state: 'done' })
-    return { kind: 'done', servers: servers.length, subscriptionId: subscription, warnings: done.warnings }
+    return { kind: 'done', servers: servers.length, subscriptionId: subscription, warnings }
   }
 }

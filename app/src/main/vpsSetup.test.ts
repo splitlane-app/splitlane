@@ -216,7 +216,7 @@ describe('add failures', () => {
     t.c.close(0)
     expect(await p).toMatchObject({ kind: 'failed', code: 'add_failed' })
     expect(t.events.at(-1)).toMatchObject({ step: 'add', state: 'failed' })
-    expect(t.link.call).toHaveBeenCalledTimes(1) // no select
+    expect(t.link.call).toHaveBeenCalledTimes(2) // subscription, then links; no select
   })
 
   test('proxy.add error: the code of the channel in detail', async () => {
@@ -241,6 +241,71 @@ describe('add failures', () => {
     t.c.close(0)
     expect(await p).toEqual({ kind: 'failed', code: 'add_failed', detail: 'wrong_phase' })
     expect(t.events.at(-1)).toMatchObject({ step: 'add', state: 'failed' })
+  })
+})
+
+describe('the subscription falls back to the links (ruling 17)', () => {
+  const withSub = (t: ReturnType<typeof setup>, subAnswer: () => unknown) =>
+    t.link.call.mockImplementation(async (m: string, p?: object) => {
+      t.calls.push([m, p])
+      if (m !== 'proxy.add') return {}
+      if ((p as { text: string }).text === SUB_URL) return subAnswer()
+      return result({ servers: [SRV_B] })
+    })
+
+  test('subscription refused: links added and selected, sub_unreachable once, subscriptionId null', async () => {
+    const t = setup()
+    withSub(t, () => {
+      throw new HelperCallError({ code: 'fetch_failed', message: 'x' })
+    })
+    const p = t.vs.setup({ ...req })
+    await t.started(p)
+    t.c.line({ done: { subscription: SUB_URL, links: LINKS, warnings: ['harden_failed', 'sub_unreachable'] } })
+    t.c.close(0)
+    expect(await p).toEqual({ kind: 'done', servers: 1, subscriptionId: null, warnings: ['harden_failed', 'sub_unreachable'] })
+    expect(t.calls).toEqual([
+      ['proxy.add', { text: SUB_URL }],
+      ['proxy.add', { text: LINKS }],
+      ['proxy.select', { id: SRV_B }]
+    ])
+    expect(t.events.filter((e) => e.step === 'add')).toEqual([
+      { step: 'add', state: 'start' },
+      { step: 'add', state: 'done' }
+    ])
+  })
+
+  test('subscription done with empty servers: links fallback, warning added', async () => {
+    const t = setup()
+    withSub(t, () => result({ added: [], servers: [], subscription: null }))
+    const p = t.vs.setup({ ...req })
+    await t.started(p)
+    t.c.line({ done: { subscription: SUB_URL, links: LINKS, warnings: [] } })
+    t.c.close(0)
+    expect(await p).toEqual({ kind: 'done', servers: 1, subscriptionId: null, warnings: ['sub_unreachable'] })
+  })
+
+  test('both refused: add_failed with the code of the links attempt', async () => {
+    const t = setup()
+    t.link.call.mockImplementation(async (_m: string, p?: object) => {
+      throw new HelperCallError({ code: (p as { text: string }).text === SUB_URL ? 'fetch_failed' : 'bad_link', message: 'x' })
+    })
+    const p = t.vs.setup({ ...req })
+    await t.started(p)
+    t.c.line({ done: { subscription: SUB_URL, links: LINKS, warnings: [] } })
+    t.c.close(0)
+    expect(await p).toEqual({ kind: 'failed', code: 'add_failed', detail: 'bad_link' })
+    expect(t.events.at(-1)).toMatchObject({ step: 'add', state: 'failed' })
+  })
+
+  test('links also yielding no servers is add_failed', async () => {
+    const t = setup()
+    t.link.call.mockResolvedValue(result({ added: [], servers: [] }))
+    const p = t.vs.setup({ ...req })
+    await t.started(p)
+    t.c.line({ done: { subscription: SUB_URL, links: LINKS, warnings: [] } })
+    t.c.close(0)
+    expect(await p).toMatchObject({ kind: 'failed', code: 'add_failed' })
+    expect(t.link.call).toHaveBeenCalledTimes(2)
   })
 })
 
