@@ -16,6 +16,8 @@
   | Shadowsocks 2022, `2022-blake3-aes-128-gcm` | 8388/tcp and udp | `SplitLane-SS2022` |
   | WireGuard | 51820/udp | the file `splitlane-wg.conf` |
 
+  Where providers filter traffic by DPI (Russia, Iran, China), VLESS + Reality and Hysteria2 are the ones that usually get through; see [If something doesn't work](#if-something-doesnt-work).
+
   These are the default ports. If another program already uses one (for example a VPN server of your own on 443), choose another with `--vless-port`, `--hy2-port`, `--ss-port` or `--wg-port`.
 
   Connections from clients to loopback and private-network addresses (the VPS's own `127.0.0.1`, its provider's internal network) are refused. Services on the VPS's public address stay reachable through the tunnel, as from the internet.
@@ -82,7 +84,7 @@ If ufw is active, the script allows the ports in it before the server and Caddy 
 ## Add the server to SplitLane
 
 - **Links:** on **Connect a VPN** (or later on **Connection**), choose **Key or subscription**, paste one link or all three, one per line, and click **Add**.
-- **WireGuard:** paste the text the script printed (or `sudo cat /root/splitlane-kit/splitlane-wg.conf`) under **Key or subscription**. To pick the file under **Configuration file** instead, copy it to your home folder on the VPS with `sudo install -m 600 -o "$USER" /root/splitlane-kit/splitlane-wg.conf ~/` and then to your PC with `scp <user>@<VPS address>:splitlane-wg.conf .`; delete both copies once SplitLane has it.
+- **WireGuard:** paste the text the script printed (or `sudo cat /root/splitlane-kit/splitlane-wg.conf`), from `[Interface]` to the last line, under **Key or subscription**, alone or together with the links. To pick the file under **Configuration file** instead, copy it to your home folder on the VPS with `sudo install -m 600 -o "$USER" /root/splitlane-kit/splitlane-wg.conf ~/` and then to your PC with `scp <user>@<VPS address>:splitlane-wg.conf .`; delete both copies once SplitLane has it.
 - **Subscription:** paste the subscription address under **Key or subscription**. **Refresh** next to the subscription on **Connection** downloads it again after a run that keeps the address, for example with a new `--reality-sni` (a new `--host` keeps it only together with `--domain`: the default name comes from the address). After `--reset` the address changes: see below.
 
 Then choose a server in the list and turn split routing on.
@@ -107,3 +109,4 @@ Then choose a server in the list and turn split routing on.
 - `systemctl status splitlane-kit` and `journalctl -u splitlane-kit -n 50` show why the server stopped.
 - The subscription address doesn't open: Caddy may still be getting its certificate, or port 80 isn't reachable from the internet; see `journalctl -u caddy -n 50`.
 - No connection at all: check that the ports are open in the firewall of your provider.
+- Only Shadowsocks or WireGuard fails (SplitLane says it couldn't make sure the tunnel works and turns split routing off), while VLESS + Reality or Hysteria2 to the same server works: your internet provider probably blocks that protocol. Some providers (in Russia, Iran, China) recognize Shadowsocks and WireGuard by DPI and cut them: in SplitLane's own check in Russia, both were cut after the first packets, while VLESS + Reality and Hysteria2 got through. Use those two there.
