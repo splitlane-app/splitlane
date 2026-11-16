@@ -216,6 +216,8 @@ test('the progress: six steps, each waiting, in progress, done, skipped or not w
     vi.advanceTimersByTime(3_000)
   })
   await v.answer({ kind: 'done', servers: 2, subscriptionId: null, warnings: ['harden_failed', 'sub_skipped'] })
+  // no subscription, no button
+  expect(screen.queryByRole('button', { name: 'Подключить телефон' })).toBeNull()
   expect(items()).toEqual([
     'Подключение к серверуготово',
     'Проверка системыготово',
@@ -246,6 +248,7 @@ test('the result with a subscription: the number of servers, no warning, and the
   const sub = { id: 'sub-0123456789abcdef', name: '203-0-113-10.sslip.io', updatedAt: '2026-11-16T10:00:00Z', count: 2, error: null }
   act(() => services.store.getState().setSnapshot({ ...snap(), state: proxyState([A, B], A.id, [sub], { phase: 'off' }) }))
   await v.answer(DONE)
+  expect(screen.getByRole('button', { name: 'Подключить телефон' })).toBeTruthy()
   const status = screen.getByRole('status')
   expect(within(status).getByText('Готово. Добавлено серверов: 2')).toBeTruthy()
   expect(within(status).queryByText(/Телефон подключить не получилось/)).toBeNull()

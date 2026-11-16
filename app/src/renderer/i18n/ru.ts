@@ -386,6 +386,13 @@ export const ru = {
   'proxy.cancel': 'Отмена',
   'proxy.subRemoveBlocked': 'Подписку выбранного сервера можно удалить, когда деление выключено',
 
+  // «Подключить телефон»: the QR of a subscription (spec 6)
+  'phone.connect': 'Подключить телефон',
+  'phone.qr': 'QR-код подписки',
+  'phone.unknown': 'Подписка не найдена',
+  'phone.failed': 'Не удалось получить адрес подписки',
+  'phone.caption': 'Отсканируйте в Hiddify или v2rayNG. Это секрет: кто увидит этот код, получит доступ к вашему VPN',
+
   // «Свой VPS» (stage 3 part 2, spec 6): the form, the progress, the result; the texts of the codes are in model/vps.ts
   'vps.hint': 'Адрес, логин и пароль хостинг присылает в письме после аренды. Нужна Debian 12+ или Ubuntu 22.04+',
   'vps.address': 'Адрес сервера',

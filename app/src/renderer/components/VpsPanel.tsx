@@ -19,6 +19,7 @@ import {
   type VpsForm
 } from '../model/vps'
 import { useApp, useServices, type Services } from '../services'
+import { ConnectPhone } from './PhoneQr'
 import { ServerList } from './ServerList'
 import { focusLost, useMounted } from './useMounted'
 import { VpsProgress } from './VpsProgress'
@@ -268,7 +269,11 @@ export function VpsPanel({ showList = false }: { showList?: boolean }): React.JS
                 </p>
               ))}
             </div>
-            {/* «Подключить телефон» for outcome.subscriptionId (task 8) goes here, under the result */}
+            {outcome.subscriptionId !== null && (
+              <div className={styles.actions}>
+                <ConnectPhone subscriptionId={outcome.subscriptionId} />
+              </div>
+            )}
             {showList && <ServerList state={state} />}
           </>
         )}

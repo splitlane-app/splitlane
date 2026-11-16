@@ -3,6 +3,7 @@ import type { HelperState, Subscription } from '../../shared/protocol'
 import { t } from '../i18n/t'
 import { holdsSelected, refreshRequest, subscriptionErrorText, updatedText } from '../model/proxy'
 import { sendCommand, useLang, useServices } from '../services'
+import { ConnectPhone } from './PhoneQr'
 import { ProxyResult } from './ProxyResult'
 import styles from './Subscriptions.module.css'
 import { focusLost, useMounted } from './useMounted'
@@ -111,6 +112,7 @@ function SubscriptionItem({
           >
             {t('proxy.remove')}
           </button>
+          <ConnectPhone subscriptionId={sub.id} />
         </div>
       )}
       {held && <p className={styles.note}>{t('proxy.subRemoveBlocked')}</p>}

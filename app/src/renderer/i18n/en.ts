@@ -393,6 +393,13 @@ export const en: Record<Key, string> = {
   'proxy.cancel': 'Cancel',
   'proxy.subRemoveBlocked': 'You can remove the subscription of the selected server when split routing is off',
 
+  // «Подключить телефон»: the QR of a subscription (spec 6)
+  'phone.connect': 'Connect a phone',
+  'phone.qr': 'Subscription QR code',
+  'phone.unknown': 'Subscription not found',
+  'phone.failed': 'Could not get the subscription address',
+  'phone.caption': 'Scan it in Hiddify or v2rayNG. This is a secret: anyone who sees this code gets access to your VPN',
+
   // «Свой VPS» (stage 3 part 2, spec 6): the form, the progress, the result; the texts of the codes are in model/vps.ts
   'vps.hint':
     'Your hosting provider emails the address, username and password after you rent the server. It needs Debian 12+ or Ubuntu 22.04+',
