@@ -83,7 +83,7 @@ Then choose a server in the list and turn split routing on.
 ## Run again, start over, remove
 
 - **A second run** keeps the keys and the links (they are stored in `/etc/splitlane-kit/`). Run it again to print them, to change an option, or to update the kit.
-- **`--reset`** generates new keys, links and subscription address. The old ones stop working, and the old subscription address answers "not found", so **Refresh** can't pick up the change. In SplitLane, add the new subscription address (or the new links and `.conf`), then remove the old subscription and the old servers.
+- **`--reset`** generates new keys, links and subscription address. The old ones stop working, and the old subscription address answers "not found", so **Refresh** can't pick up the change. In SplitLane, in this order: turn split routing off (the selected server and its subscription can't be removed while it is on), remove the old subscription and the old servers on **Connection**, then add the new subscription address (or the new links and `.conf`). That way two subscriptions of the same name with look-alike servers are never in the list at once.
 - **`--uninstall`** stops and removes the `splitlane-kit` service and its system user, `/usr/local/bin/sing-box`, `/etc/splitlane-kit` and the subscription site in Caddy (Caddy itself stays installed). It leaves `/root/splitlane-kit` for you to delete (`rm -rf /root/splitlane-kit`) and keeps the ufw rules it added (marked `splitlane-kit`; see them with `ufw status numbered`).
 
 ## Security notes

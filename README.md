@@ -67,13 +67,14 @@ Instead of a Tailscale exit node, the VPN lane can go through a VPN server of yo
 
 **Subscriptions.** **Connection** lists each subscription with its number of servers, the time of its last update and the error of the last refresh, if it failed. **Refresh** downloads it again and replaces its servers; the selected server stays selected if the subscription still has it. **Remove** deletes a server, or a subscription with all its servers. While split routing is on, the selected server can't be removed, and its subscription can't be refreshed or removed.
 
-Links, WireGuard files and subscription addresses are secrets. SplitLane keeps them only in `%ProgramData%\SplitLane\servers.json` (administrators only); they aren't written to the logs or put in diagnostics archives.
+Links, WireGuard files and subscription addresses are secrets. SplitLane keeps them in `%ProgramData%\SplitLane\servers.json` (administrators only); they aren't written to the logs or put in diagnostics archives. The keys of the selected server are also in the core configuration file in the same folder, `core-config.json` (administrators only, never in diagnostics archives). SplitLane writes that file again each time split routing turns on, so after you remove a server its keys may stay there until split routing is next turned on.
 
 **Your own server.** [scripts/server](scripts/server/README.md) has a script that sets up VLESS + Reality, Hysteria2, Shadowsocks 2022 and WireGuard on a Debian or Ubuntu VPS and prints the links, the `.conf` file and, if you like, a subscription address.
 
 **Limits.**
 
 - Only the protocols and transports listed above. AmneziaWG and OpenVPN aren't supported yet. The `xhttp`, `splithttp` and `kcp` transports, the `http` header over TCP, Shadowsocks plugins and Clash or sing-box subscriptions are rejected with a reason.
+- A WireGuard file must send all addresses through the server: one whose `AllowedIPs` don't cover all of IPv4 (`0.0.0.0/0`, or ranges that add up to it) is rejected.
 - Subscriptions are refreshed only when you click **Refresh**, not on a schedule.
 - A server without UDP can't carry the UDP traffic of programs on the VPN lane (games, calls).
 - There is no latency test and no automatic choice of server; one server leads the VPN lane at a time.
