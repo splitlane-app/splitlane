@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { HelperState, Phase, Reason } from '../../shared/protocol'
 import type { LinkStatus } from '../../shared/status'
-import { t } from '../i18n/t'
+import { setLang, t } from '../i18n/t'
 import { bannerFor } from './banners'
 
 const ready: LinkStatus = { kind: 'ready', hello: { protocol: 2, helper: '1', core: '1' } }
@@ -119,9 +119,15 @@ describe('bannerFor and the name of the server', () => {
     expect(bannerFor(ready, s, { id: 'n9', name: 'other' })?.title).toBe(t('banner.degradedUnnamed'))
   })
 
-  it('says how to leave no_server', () => {
+  it('says no_server neutrally: none selected, or the selected one no longer usable; on the board and the wizard alike', () => {
     expect(bannerFor(ready, state('error', {}, { code: 'no_server', params: {} }))?.title).toBe(
-      'Не удалось включить: сервер не выбран — выберите его в разделе «Подключение»'
+      'Не удалось включить: не выбран сервер, который можно использовать'
     )
+    expect(t('reason.no_server')).not.toMatch(/Подключение/)
+    setLang('en')
+    expect(bannerFor(ready, state('error', {}, { code: 'no_server', params: {} }))?.title).toBe(
+      "Couldn't turn on split routing: no usable server is selected"
+    )
+    setLang('ru')
   })
 })

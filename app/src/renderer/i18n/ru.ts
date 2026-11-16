@@ -201,7 +201,7 @@ export const ru = {
   'reason.other_core': 'уже запущена другая программа на сетевом ядре sing-box',
   'reason.not_logged_in': 'вход в Tailscale не выполнен',
   'reason.no_exit_node': 'exit node не выбран',
-  'reason.no_server': 'сервер не выбран — выберите его в разделе «Подключение»',
+  'reason.no_server': 'не выбран сервер, который можно использовать',
   'reason.system_dns_override':
     'Tailscale подменяет DNS для всех имён (переопределение DNS глобальными серверами имён в его консоли), с этим деление не включается',
   'reason.config_invalid': 'настройки ядра не прошли проверку (ошибка SplitLane, сохраните журнал)',
@@ -244,6 +244,8 @@ export const ru = {
   'error.missing_field': 'В ссылке не хватает данных для подключения',
   'error.bad_wireguard': 'Настройки WireGuard повреждены или записаны с ошибкой',
   'error.amneziawg': 'Файлы AmneziaWG пока не поддерживаются',
+  'error.wireguard_partial':
+    'Этот файл WireGuard ведёт через сервер не все адреса. Для SplitLane нужен файл с AllowedIPs = 0.0.0.0/0',
   'error.plugin': 'Ссылки Shadowsocks с плагином пока не поддерживаются',
   'error.too_long': 'Текст или файл больше {kb} КБ',
 
@@ -371,6 +373,8 @@ export const ru = {
   // a refused refresh (or add of the same address): the subscription of the server live routing runs on; another download
   'proxy.refreshBlocked': 'Подписку выбранного сервера можно обновить, когда деление выключено',
   'proxy.downloading': 'Уже идёт загрузка подписки',
+  // apply_failed of a proxy method: servers.json could not be read or saved
+  'proxy.applyFailed': 'Не удалось прочитать или сохранить список серверов',
   'proxy.removeSubConfirm': 'Удалить подписку и её серверы?',
   'proxy.cancel': 'Отмена',
   'proxy.subRemoveBlocked': 'Подписку выбранного сервера можно удалить, когда деление выключено',

@@ -243,6 +243,22 @@ test('a user of the proxy list logged in to Tailscale before sees the exit nodes
   expect(screen.queryByText('Войти в Tailscale можно, когда деление выключено')).toBeNull()
 })
 
+test('a removal or a choice that the helper could not save says so of the list of servers', async () => {
+  const failed = { ok: false as const, error: { code: 'apply_failed' as const, message: 'servers.json not saved' } }
+  const { bridge, commands } = fakeBridge({}, failed)
+  const services = servicesFor(bridge, at(proxyState([A, B], A.id, [SUB], { phase: 'off' }), true))
+  renderWith(<ConnectionScreen />, services)
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить edge-b.example.com' }))
+  })
+  expect(commands.at(-1)).toEqual({ method: 'proxy.remove', id: B.id })
+  expect(services.store.getState().notice).toBe('Не удалось прочитать или сохранить список серверов')
+  act(() => services.store.getState().dismissNotice())
+  fireEvent.click(screen.getByRole('radio', { name: /edge-b/ }))
+  await vi.waitFor(() => expect(commands.at(-1)).toEqual({ method: 'proxy.select', id: B.id }))
+  await vi.waitFor(() => expect(services.store.getState().notice).toBe('Не удалось прочитать или сохранить список серверов'))
+})
+
 const subItem = (): HTMLElement => screen.getByText('sub.example.com', { selector: 'strong' }).closest('li') as HTMLElement
 
 test('a subscription shows its servers, its last update and its last error', () => {

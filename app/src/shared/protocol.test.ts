@@ -220,9 +220,9 @@ describe('parseProxyAddResult', () => {
     expect(parseProxyAddResult({ ...ok, rejected: fifty }).rejected).toHaveLength(50)
     expect(() => parseProxyAddResult({ ...ok, rejected: [...fifty, { line: 51, code: 'bad_link' }] })).toThrow(/more than 50/)
   })
-  test('the line codes are the closed list of 17', () => {
-    expect(PROXY_REJECT_CODES).toHaveLength(17)
-    expect(new Set(PROXY_REJECT_CODES).size).toBe(17)
+  test('the line codes are the closed list of 18', () => {
+    expect(PROXY_REJECT_CODES).toHaveLength(18)
+    expect(new Set(PROXY_REJECT_CODES).size).toBe(18)
     for (const c of PROXY_REJECT_CODES) expect(ERROR_CODES.includes(c as never) || c === 'too_many').toBe(true)
   })
 })

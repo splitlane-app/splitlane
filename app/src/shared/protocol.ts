@@ -118,6 +118,7 @@ export const ERROR_CODES = [
   'missing_field',
   'bad_wireguard',
   'amneziawg',
+  'wireguard_partial',
   'plugin',
   'too_long'
 ] as const
@@ -142,6 +143,7 @@ export const PROXY_REJECT_CODES = [
   'missing_field',
   'bad_wireguard',
   'amneziawg',
+  'wireguard_partial',
   'plugin',
   'too_long',
   'too_many',

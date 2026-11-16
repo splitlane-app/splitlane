@@ -5,6 +5,7 @@ import type { Command, SplitLaneBridge } from '../shared/ipc'
 import type { HelperError } from '../shared/protocol'
 import type { IconCache } from './bridge'
 import { currentLang, t } from './i18n/t'
+import { commandErrorText } from './model/proxy'
 import { errorText, type AppState } from './store/appStore'
 
 /** What the components of the page work with: the store, the bridge and the icon cache. */
@@ -56,7 +57,7 @@ export async function sendCommand({ bridge, store }: Services, c: Command): Prom
   }
   if (error !== undefined) {
     if (login) store.getState().requestLogin(false)
-    store.getState().showNotice(errorText(error))
+    store.getState().showNotice(commandErrorText(c, error))
   }
   return error === undefined
 }

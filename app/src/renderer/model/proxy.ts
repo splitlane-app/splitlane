@@ -1,4 +1,4 @@
-import type { ProxyOutcome } from '../../shared/ipc'
+import type { Command, ProxyOutcome } from '../../shared/ipc'
 import {
   PROXY_REJECT_CODES,
   type HelperError,
@@ -58,9 +58,12 @@ export interface ProxyRequest {
   phaseBusy: boolean
 }
 
-/** A single address, as the helper takes a subscription (http too: it refuses that only after the busy check). */
+/**
+ * A single https address, as the helper takes a subscription. A single http address is no download: the helper
+ * refuses it as it reads the text (fetch_not_https of the whole text), before any check of a download.
+ */
 export function isSubscriptionAddress(text: string): boolean {
-  return /^https?:\/\/\S+$/i.test(text.trim())
+  return /^https:\/\/\S+$/i.test(text.trim())
 }
 
 const changing = (state: HelperState): boolean => state.phase === 'starting' || state.phase === 'stopping'
@@ -86,12 +89,21 @@ export function refreshRequest(state: HelperState, sub: Subscription): ProxyRequ
 /**
  * The text of a failed add or refresh. A refusal of the phase for a subscription means the one of the selected server
  * while routing is live (an add of its address again is a refresh of it); a busy helper means another download, unless
- * nothing was to download or the phase may be the cause: then the general text.
+ * nothing was to download or the phase may be the cause: then the general text. apply_failed of a proxy method is
+ * servers.json that could not be read or saved, not a layout.
  */
 export function proxyErrorText(error: HelperError, req: ProxyRequest): string {
   if (error.code === 'wrong_phase' && req.subscription) return t('proxy.refreshBlocked')
   if (error.code === 'busy' && req.subscription && !req.phaseBusy) return t('proxy.downloading')
+  if (error.code === 'apply_failed') return t('proxy.applyFailed')
   return errorText(error)
+}
+
+/** The notice of a failed command: proxy.remove and proxy.select say apply_failed of the list of servers. */
+export function commandErrorText(c: Command, error: HelperError): string {
+  return (c.method === 'proxy.remove' || c.method === 'proxy.select') && error.code === 'apply_failed'
+    ? t('proxy.applyFailed')
+    : errorText(error)
 }
 
 /**

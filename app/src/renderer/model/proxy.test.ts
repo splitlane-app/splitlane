@@ -5,6 +5,7 @@ import { errorText } from '../store/appStore'
 import { proxyServer, proxyState } from '../testing'
 import {
   addRequest,
+  commandErrorText,
   FILE_REQUEST,
   isSubscriptionAddress,
   outcomeNotice,
@@ -103,12 +104,50 @@ test('busy is another download only when there was one to make and the phase can
   expect(addRequest({ ...on, connector: 'tailscale', phase: 'starting' }, 'https://sub.example.com/x').phaseBusy).toBe(false)
 })
 
-test('a subscription address is one http(s) address alone', () => {
+test('a subscription address is one https address alone; an http one is no download (the helper refuses it at once)', () => {
   expect(isSubscriptionAddress('https://sub.example.com/list?token=made-up')).toBe(true)
-  expect(isSubscriptionAddress('  HTTP://sub.example.com \n')).toBe(true)
+  expect(isSubscriptionAddress('  HTTPS://sub.example.com \n')).toBe(true)
+  expect(isSubscriptionAddress('  HTTP://sub.example.com \n')).toBe(false)
+  expect(isSubscriptionAddress('http://sub.example.com/list?token=made-up')).toBe(false)
   expect(isSubscriptionAddress('https://a.example.com\nhttps://b.example.com')).toBe(false)
   expect(isSubscriptionAddress('vless://x@a.example.com:443')).toBe(false)
   expect(isSubscriptionAddress('')).toBe(false)
+  // so a busy answer to it is the general text, not «another download»
+  const on = proxyState([], null, [], { phase: 'on' })
+  expect(proxyErrorText({ code: 'busy', message: '' }, addRequest(on, 'http://sub.example.com/x'))).toBe(t('error.busy'))
+  expect(rejectionLine({ line: 0, code: 'fetch_not_https' })).toBe('Адрес подписки должен начинаться с https://')
+})
+
+test('apply_failed of a proxy method is the list of servers, not the layout', () => {
+  const failed = { code: 'apply_failed' as const, message: 'servers.json cannot be read now' }
+  for (const req of [{ subscription: true, phaseBusy: false }, { subscription: false, phaseBusy: false }, FILE_REQUEST]) {
+    expect(proxyErrorText(failed, req)).toBe('Не удалось прочитать или сохранить список серверов')
+  }
+  expect(outcomeNotice({ kind: 'failed', error: failed }, FILE_REQUEST)).toBe('Не удалось прочитать или сохранить список серверов')
+  const id = '0123456789abcdef'
+  expect(commandErrorText({ method: 'proxy.remove', id }, failed)).toBe('Не удалось прочитать или сохранить список серверов')
+  expect(commandErrorText({ method: 'proxy.select', id }, failed)).toBe('Не удалось прочитать или сохранить список серверов')
+  expect(commandErrorText({ method: 'proxy.remove', id: SUB.id }, failed)).toBe('Не удалось прочитать или сохранить список серверов')
+  // other errors of the proxy methods and apply_failed of the others keep their texts
+  expect(commandErrorText({ method: 'proxy.remove', id }, { code: 'wrong_phase', message: '' })).toBe(t('error.wrong_phase'))
+  expect(commandErrorText({ method: 'lanes.set', apps: [], defaultLane: 'vpn' }, failed)).toBe(t('error.apply_failed'))
+  expect(commandErrorText({ method: 'routing.allDirect', on: true }, failed)).toBe(
+    'Раскладку не удалось применить, прежняя возвращена'
+  )
+  setLang('en')
+  expect(proxyErrorText(failed, FILE_REQUEST)).toBe("Couldn't read or save the list of servers")
+  expect(commandErrorText({ method: 'proxy.select', id }, failed)).toBe("Couldn't read or save the list of servers")
+})
+
+test('a WireGuard file that sends only some addresses through the server says what file is needed', () => {
+  expect(rejectionText('wireguard_partial')).toBe(
+    'Этот файл WireGuard ведёт через сервер не все адреса. Для SplitLane нужен файл с AllowedIPs = 0.0.0.0/0'
+  )
+  expect(rejectionLine({ line: 0, code: 'wireguard_partial' })).toBe(rejectionText('wireguard_partial'))
+  setLang('en')
+  expect(rejectionText('wireguard_partial')).toBe(
+    'This WireGuard file sends only some addresses through the server. SplitLane needs a file with AllowedIPs = 0.0.0.0/0'
+  )
 })
 
 test('the notice of a late answer: the numbers only, never a line', () => {

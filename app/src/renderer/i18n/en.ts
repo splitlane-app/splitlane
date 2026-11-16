@@ -205,7 +205,7 @@ export const en: Record<Key, string> = {
   'reason.other_core': 'another program that uses the sing-box network core is already running',
   'reason.not_logged_in': 'not logged in to Tailscale',
   'reason.no_exit_node': 'no exit node selected',
-  'reason.no_server': 'no server selected; choose one in “Connection”',
+  'reason.no_server': 'no usable server is selected',
   'reason.system_dns_override':
     "Tailscale overrides DNS for all names (global nameservers override local DNS in its admin console), which split routing doesn't support",
   'reason.config_invalid': 'the network core settings failed validation (a SplitLane bug; save the log)',
@@ -248,6 +248,8 @@ export const en: Record<Key, string> = {
   'error.missing_field': 'The link is missing some connection details',
   'error.bad_wireguard': 'The WireGuard configuration is damaged or has a mistake',
   'error.amneziawg': "AmneziaWG files aren't supported yet",
+  'error.wireguard_partial':
+    'This WireGuard file sends only some addresses through the server. SplitLane needs a file with AllowedIPs = 0.0.0.0/0',
   'error.plugin': "Shadowsocks links with a plugin aren't supported yet",
   'error.too_long': 'The text or file is larger than {kb} KB',
 
@@ -377,6 +379,8 @@ export const en: Record<Key, string> = {
   // a refused refresh (or add of the same address): the subscription of the server live routing runs on; another download
   'proxy.refreshBlocked': 'You can refresh the subscription of the selected server when split routing is off',
   'proxy.downloading': 'A subscription is already downloading',
+  // apply_failed of a proxy method: servers.json could not be read or saved
+  'proxy.applyFailed': "Couldn't read or save the list of servers",
   'proxy.removeSubConfirm': 'Remove the subscription and its servers?',
   'proxy.cancel': 'Cancel',
   'proxy.subRemoveBlocked': 'You can remove the subscription of the selected server when split routing is off',
