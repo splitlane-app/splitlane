@@ -237,13 +237,10 @@ func TestParseLink(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseLink: %v", err)
 			}
-			if got.ID != ServerID(c.link) || len(got.ID) != 16 {
-				t.Errorf("ID = %q, want ServerID of the link %q", got.ID, ServerID(c.link))
-			}
 			if got.Text != c.link {
 				t.Errorf("Text = %q, want the trimmed link", got.Text)
 			}
-			got.ID, got.Text = "", ""
+			got.Text = ""
 			if !reflect.DeepEqual(got, c.want) {
 				t.Errorf("got  %s\nwant %s", dump(got), dump(c.want))
 			}
@@ -286,13 +283,13 @@ func TestDialectsMeetInOneModel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", g[0], err)
 		}
-		first.ID, first.Text, first.Name = "", "", ""
+		first.Text, first.Name = "", ""
 		for _, l := range g[1:] {
 			s, err := ParseLink(l)
 			if err != nil {
 				t.Fatalf("%s: %v", l, err)
 			}
-			s.ID, s.Text, s.Name = "", "", ""
+			s.Text, s.Name = "", ""
 			if !reflect.DeepEqual(s, first) {
 				t.Errorf("%s\ngot  %s\nwant %s", l, dump(s), dump(first))
 			}
@@ -421,7 +418,7 @@ func TestParseLinkRejects(t *testing.T) {
 			if r.Code != c.code {
 				t.Errorf("code = %s (%s), want %s", r.Code, r.Detail, c.code)
 			}
-			if s.Protocol != "" || s.ID != "" {
+			if s.Protocol != "" || s.Text != "" {
 				t.Errorf("a rejected link returns a server: %s", dump(s))
 			}
 		})

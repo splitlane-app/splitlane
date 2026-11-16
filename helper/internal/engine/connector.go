@@ -89,9 +89,13 @@ func (e *Engine) cmdLogout(params json.RawMessage) *protocol.Error {
 // connector the setup mode starts, to show the state of the node and its exit nodes (spec 7); with the
 // proxy connector it does not (stage 3 part 1, section 5: tailscale.login still starts it on demand). The
 // system client is read at once (5.6), not at the next of the 3 s rounds: the window's first state would
-// say "no exit node" in off.
+// say "no exit node" in off. A servers.json that could not be read is read again (serversReadyLocked): a
+// file held for a moment at the start would otherwise leave the window with an empty list of servers.
 func (e *Engine) windowCame() {
 	e.mu.Lock()
+	if e.serversErr != nil {
+		_ = e.serversReadyLocked() // publishes the servers once they read; the log says why not
+	}
 	if e.clients.Load() > 0 && e.saved.LoggedIn && connectorOf(e.saved) == protocol.ConnectorTailscale {
 		e.startSetupLocked()
 	}

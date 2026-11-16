@@ -2,7 +2,10 @@ package engine
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -38,12 +41,102 @@ func connectorOf(s store.State) string {
 	return protocol.ConnectorTailscale
 }
 
-// subscriptionID is the id of the subscription at an address: "sub-" and the first 8 bytes of the SHA-256
-// of the address in hex. The same address is the same subscription; the id gives the address (and its
-// token) away no more than connector.ServerID gives a link away.
-func subscriptionID(address string) string {
-	sum := sha256.Sum256([]byte(address))
-	return "sub-" + hex.EncodeToString(sum[:8])
+// subscriptionID is the id of the subscription at an address: "sub-" and the first 8 bytes, in hex, of the
+// HMAC-SHA256 of the address under the id key of servers.json. The same address is the same subscription
+// under the same key; keyed, the id gives nothing of the address (and its token) away, as connector.ServerID
+// gives nothing of a link away.
+func subscriptionID(key []byte, address string) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(address))
+	return "sub-" + hex.EncodeToString(mac.Sum(nil)[:8])
+}
+
+// idKeyLen is the size of the id key of servers.json.
+const idKeyLen = 32
+
+// idKey is the id key of a servers.json; nil when it has none (or one that is not 32 bytes in base64).
+func idKey(s store.Servers) []byte {
+	k, err := base64.StdEncoding.DecodeString(s.IDKey)
+	if err != nil || len(k) != idKeyLen {
+		return nil
+	}
+	return k
+}
+
+// newIDKey makes an id key: 32 bytes of crypto/rand in standard base64.
+func newIDKey() string {
+	k := make([]byte, idKeyLen)
+	_, _ = rand.Read(k) // crypto/rand.Read never fails (Go 1.24 on): a broken source ends the program
+	return base64.StdEncoding.EncodeToString(k)
+}
+
+// serverIDLocked is the id of a server text under the id key of the servers read; e.mu must be held and
+// servers.json read (serversReadyLocked).
+func (e *Engine) serverIDLocked(text string) string {
+	return connector.ServerID(idKey(e.servers), text)
+}
+
+// takeServersLocked takes servers.json as it was read (load, serversReadyLocked). One without an id key, a
+// fresh install's or one a development build wrote before the key, is given a new key. The ids of its
+// servers and subscriptions are made again under it (an id stays that of its text without the name): each
+// server keeps its subscription as its source, and the selected server of state.json follows its new id
+// (moveSelectedLocked). When an id changed both files are saved; with nothing to move the key is written by
+// the first save. e.mu must be held.
+func (e *Engine) takeServersLocked(s store.Servers) {
+	e.servers = s
+	if idKey(s) != nil {
+		return
+	}
+	next := cloneServers(s)
+	next.IDKey = newIDKey()
+	key := idKey(next)
+	subs, moved := map[string]string{}, map[string]string{}
+	for i := range next.Subscriptions {
+		sub := &next.Subscriptions[i]
+		id := subscriptionID(key, sub.URL)
+		subs[sub.ID] = id
+		sub.ID = id
+	}
+	for i := range next.Servers {
+		st := &next.Servers[i]
+		id := connector.ServerID(key, st.Text)
+		moved[st.ID] = id
+		st.ID = id
+		if src, ok := subs[st.Source]; ok {
+			st.Source = src
+		}
+	}
+	e.servers = next
+	if len(next.Servers) == 0 && len(next.Subscriptions) == 0 {
+		return
+	}
+	e.d.Log("servers.json has no id key: a new key is made and the ids of %d servers and %d subscriptions are made again under it",
+		len(next.Servers), len(next.Subscriptions))
+	if err := e.d.Store.SaveServers(next); err != nil {
+		e.d.Log("servers.json not saved: %v", err)
+	}
+	e.movedIDs = moved
+	if e.moveSelectedLocked() {
+		e.save()
+	}
+}
+
+// moveSelectedLocked gives the selected server of the saved state the id its server got under a new id key
+// (takeServersLocked). While state.json cannot be read the move waits: the file's own selection comes in
+// when it reads (readState, save), and is moved then. True when the selection changed; the caller saves.
+// e.mu must be held.
+func (e *Engine) moveSelectedLocked() bool {
+	if e.movedIDs == nil || e.stateErr != nil {
+		return false
+	}
+	id, ok := e.movedIDs[e.saved.SelectedServer]
+	e.movedIDs = nil
+	if !ok || id == e.saved.SelectedServer {
+		return false
+	}
+	e.d.Log("the selected server has its new id")
+	e.saved.SelectedServer = id
+	return true
 }
 
 // cloneServers is a copy of a servers.json that shares nothing with it.
@@ -154,8 +247,9 @@ func parseStored(st store.StoredServer) (connector.Server, error) {
 	return servers[0], nil
 }
 
-// serversReadyLocked reads servers.json again when it could not be read before (load): until it reads, the
-// proxy commands are apply_failed and nothing is written over it. e.mu must be held.
+// serversReadyLocked reads servers.json again when it could not be read before (load): before every proxy
+// command and when a window connects (windowCame). Until it reads, the proxy commands are apply_failed and
+// nothing is written over it; once it reads, its servers are published. e.mu must be held.
 func (e *Engine) serversReadyLocked() *protocol.Error {
 	if e.serversErr == nil {
 		return nil
@@ -170,7 +264,9 @@ func (e *Engine) serversReadyLocked() *protocol.Error {
 		e.d.Log("servers.json: %v", err)
 	}
 	e.d.Log("servers.json can be read now")
-	e.servers, e.serversErr = s, nil
+	e.serversErr = nil
+	e.takeServersLocked(s)
+	e.publish()
 	return nil
 }
 
@@ -260,8 +356,8 @@ func (e *Engine) dropGoneSelectionLocked() {
 	}
 }
 
-func storedServer(s connector.Server, source string) store.StoredServer {
-	return store.StoredServer{ID: s.ID, Name: fitName(s.Name), Protocol: s.Protocol, Source: source, Text: s.Text}
+func storedServer(s connector.Server, id, source string) store.StoredServer {
+	return store.StoredServer{ID: id, Name: fitName(s.Name), Protocol: s.Protocol, Source: source, Text: s.Text}
 }
 
 // addResult is the answer of proxy.add and proxy.refresh: the servers new to the list, how many were there
@@ -308,7 +404,7 @@ func (e *Engine) cmdProxyAdd(ctx context.Context, params json.RawMessage) (any, 
 	}
 	servers, rejected, address := connector.ParseText(p.Text, p.Name)
 	if address != "" {
-		return e.subscribe(ctx, subscriptionID(address), address, true)
+		return e.subscribe(ctx, "", address, true)
 	}
 	source := protocol.SourceManual
 	if p.Name != "" {
@@ -343,13 +439,14 @@ func (e *Engine) addServersLocked(servers []connector.Server, rejected []connect
 	var added []string
 	existing := 0
 	for _, s := range servers {
-		if have[s.ID] {
+		id := e.serverIDLocked(s.Text)
+		if have[id] {
 			existing++
 			continue
 		}
-		have[s.ID] = true
-		added = append(added, s.ID)
-		next.Servers = append(next.Servers, storedServer(s, source))
+		have[id] = true
+		added = append(added, id)
+		next.Servers = append(next.Servers, storedServer(s, id, source))
 	}
 	if len(next.Servers) > store.MaxServers {
 		e.d.Log("proxy.add: %d servers would be more than %d: nothing added", len(next.Servers), store.MaxServers)
@@ -395,23 +492,27 @@ func (e *Engine) cmdProxyRefresh(ctx context.Context, params json.RawMessage) (a
 // subscribePhaseLocked is the check of subscribe before and after the download: not after
 // helper.shutdown, servers.json read, the subscription there for a refresh, room for a new one (at most
 // MaxSubscriptions), and the phase: a subscription whose server routing runs on is not refreshed while
-// routing is live (proxyPhaseLocked). e.mu must be held.
-func (e *Engine) subscribePhaseLocked(id string, add bool) *protocol.Error {
+// routing is live (proxyPhaseLocked). For an add the id is made here, from the address under the id key
+// of servers.json once it is read, and returned; a refresh keeps its id. e.mu must be held.
+func (e *Engine) subscribePhaseLocked(id, address string, add bool) (string, *protocol.Error) {
 	if e.exiting {
-		return busy()
+		return id, busy()
 	}
 	if err := e.serversReadyLocked(); err != nil {
-		return err
+		return id, err
+	}
+	if add {
+		id = subscriptionID(idKey(e.servers), address)
 	}
 	old := e.subscriptionLocked(id)
 	switch {
 	case old == nil && !add:
-		return protocol.Errorf(protocol.CodeUnknownServer, "no subscription has this id")
+		return id, protocol.Errorf(protocol.CodeUnknownServer, "no subscription has this id")
 	case old == nil && len(e.servers.Subscriptions) >= store.MaxSubscriptions:
-		return protocol.Errorf(protocol.CodeTooMany, "at most %d subscriptions", store.MaxSubscriptions)
+		return id, protocol.Errorf(protocol.CodeTooMany, "at most %d subscriptions", store.MaxSubscriptions)
 	}
 	sel := e.serverLocked(e.saved.SelectedServer)
-	return e.proxyPhaseLocked(old != nil && sel != nil && sel.Source == id)
+	return id, e.proxyPhaseLocked(old != nil && sel != nil && sel.Source == id)
 }
 
 // fetchCode is the code of a failed download: the FetchError's, else fetch_failed.
@@ -445,10 +546,11 @@ func hostOf(address string) string {
 // there, else the selection goes. A download that fails, a subscription without a server and one that
 // would take servers.json over its limit change no server: an existing subscription keeps the code in its
 // error, which the state shows; proxy.add answers with the rejection of the whole text, proxy.refresh
-// with the code as its error. The address is never in an answer, the state or the log.
+// with the code as its error. The address is never in an answer, the state or the log. id is the
+// subscription's for proxy.refresh; for proxy.add it is made from the address (subscribePhaseLocked).
 func (e *Engine) subscribe(ctx context.Context, id, address string, add bool) (any, *protocol.Error) {
 	e.mu.Lock()
-	err := e.subscribePhaseLocked(id, add)
+	id, err := e.subscribePhaseLocked(id, address, add)
 	existed := e.subscriptionLocked(id) != nil
 	if err == nil && e.downloading {
 		err = protocol.Errorf(protocol.CodeBusy, "another subscription is being downloaded")
@@ -490,7 +592,7 @@ func (e *Engine) subscribe(ctx context.Context, id, address string, add bool) (a
 func (e *Engine) applySubscriptionLocked(id, address string, add, existed bool, servers []connector.Server,
 	rejected []connector.Rejection, ferr error) (any, bool, *protocol.Error) {
 	// The phase or the servers changed during the download; a subscription there before is not made again.
-	if err := e.subscribePhaseLocked(id, add && !existed); err != nil {
+	if _, err := e.subscribePhaseLocked(id, address, add && !existed); err != nil {
 		res, rerr := refusedSubscription(add, err)
 		return res, false, rerr
 	}
@@ -519,14 +621,15 @@ func (e *Engine) applySubscriptionLocked(id, address string, add, existed bool, 
 			}
 		}
 		for _, s := range servers {
-			if before[s.ID] {
+			sid := e.serverIDLocked(s.Text)
+			if before[sid] {
 				existing++
 			} else {
-				added = append(added, s.ID)
+				added = append(added, sid)
 			}
-			if !have[s.ID] {
-				have[s.ID] = true
-				kept = append(kept, storedServer(s, id))
+			if !have[sid] {
+				have[sid] = true
+				kept = append(kept, storedServer(s, sid, id))
 				count++
 			}
 		}

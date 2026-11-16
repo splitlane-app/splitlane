@@ -309,20 +309,29 @@ func TestExportOneAtATime(t *testing.T) {
 	}
 }
 
-// Spec 3, 11: servers.json holds links and subscription addresses; the archive never has it.
+// Spec 3, 11: servers.json holds links, subscription addresses and the id key; the archive never has it, nor
+// any of them, with servers selected and the key in use.
 func TestExportLeavesServersOut(t *testing.T) {
 	h := newHarness(t)
 	data := exportData(h)
 	h.load()
-	if err := os.WriteFile(filepath.Join(data, "servers.json"), []byte("trojan://hunter2secretpass@h.example:443"), 0o644); err != nil {
+	mustAdd(h, linkTrojan, "")
+	if err := call(h, protocol.MethodProxySelect, protocol.ProxyIDParams{ID: serverID(linkTrojan)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, "servers.json"), []byte(`{"idKey":"`+testIDKey+`","servers":[{"text":"`+linkTrojan+`"}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	path, err := export(h, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, text := range archiveEntries(t, path) {
-		if name == "servers.json" || strings.Contains(text, "hunter2secretpass") {
+	entries := archiveEntries(t, path)
+	if !strings.Contains(entries["state.json"], serverID(linkTrojan)) {
+		t.Fatalf("the archive has the selected server's id: %s", entries["state.json"])
+	}
+	for name, text := range entries {
+		if name == "servers.json" || strings.Contains(text, passTrojan) || strings.Contains(text, testIDKey) || strings.Contains(text, testIDKeyRaw) {
 			t.Fatalf("%s leaks servers.json", name)
 		}
 	}

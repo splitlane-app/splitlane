@@ -65,7 +65,7 @@ func TestEnableWithProxy(t *testing.T) {
 	startEnable(h)
 	h.waitPhase(protocol.PhaseOn)
 	o := h.core.options()
-	if o.Lane.Tailscale != nil || o.Lane.Proxy == nil || o.Lane.Proxy.ID != serverID(linkVLESS) || o.Lane.Proxy.Text != linkVLESS ||
+	if o.Lane.Tailscale != nil || o.Lane.Proxy == nil || o.Lane.Proxy.Text != linkVLESS ||
 		o.Lane.Proxy.Protocol != "vless" || o.Lane.Proxy.VLESS == nil || o.Lane.Proxy.VLESS.UUID != uuidA {
 		t.Fatalf("lane %+v", o.Lane)
 	}
@@ -260,7 +260,7 @@ func TestEnableDuringTheRefreshOfTheSelectedSubscription(t *testing.T) {
 	if err := <-done; err == nil || err.Code != protocol.CodeWrongPhase {
 		t.Fatalf("the refresh after the download: %v", err)
 	}
-	if s := h.e.State(); selectedOf(s) != serverID(linkVLESS) || len(s.Proxy.Servers) != 1 || h.core.options().Lane.Proxy.ID != serverID(linkVLESS) {
+	if s := h.e.State(); selectedOf(s) != serverID(linkVLESS) || len(s.Proxy.Servers) != 1 || h.core.options().Lane.Proxy.Text != linkVLESS {
 		t.Fatalf("servers %+v", s.Proxy)
 	}
 }
@@ -276,7 +276,7 @@ func TestProxySelectReconnects(t *testing.T) {
 	h.waitFor("the second core on", func() bool {
 		return h.rec.count("core:start") == 2 && h.e.State().Phase == protocol.PhaseOn && h.idle()
 	})
-	if o := h.core.options(); o.Lane.Proxy == nil || o.Lane.Proxy.ID != serverID(linkTrojan) || o.Lane.Proxy.Trojan == nil {
+	if o := h.core.options(); o.Lane.Proxy == nil || o.Lane.Proxy.Text != linkTrojan || o.Lane.Proxy.Trojan == nil {
 		t.Fatalf("the new core must use the new server: %+v", o.Lane)
 	}
 	if !inOrder(h, mark, "sys:set 100.64.0.1 true", "core:interrupt 1000", "core:start 1001", "sys:clear") {

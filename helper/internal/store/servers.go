@@ -38,7 +38,11 @@ type StoredSubscription struct {
 
 // Servers is servers.json. The file holds secrets and is never part of the diagnostics archive.
 type Servers struct {
-	Version       int                  `json:"version"`
+	Version int `json:"version"`
+	// IDKey is the key of the ids of the servers and subscriptions (HMAC-SHA256): 32 random bytes in
+	// standard base64, made on first use. It is a secret like the texts: never published, logged or
+	// exported. "" in a file written before the key (development builds only) or of a fresh install.
+	IDKey         string               `json:"idKey,omitempty"`
 	Servers       []StoredServer       `json:"servers"`
 	Subscriptions []StoredSubscription `json:"subscriptions"`
 }

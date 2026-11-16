@@ -107,7 +107,7 @@ func parseLink(line string) (Server, *Rejection) {
 	if r != nil {
 		return Server{}, r
 	}
-	s.Text, s.ID = line, ServerID(line)
+	s.Text = line
 	if s.Name == "" {
 		s.Name = hostPortName(s.Host, s.Port)
 	}

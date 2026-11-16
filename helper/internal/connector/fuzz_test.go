@@ -10,7 +10,7 @@ import (
 
 var codes = map[string]bool{
 	CodeUnsupportedProtocol: true, CodeUnsupportedTransport: true, CodeBadLink: true, CodeMissingField: true,
-	CodeBadWireGuard: true, CodeAmneziaWG: true, CodePlugin: true, CodeTooLong: true,
+	CodeBadWireGuard: true, CodeAmneziaWG: true, CodeWireGuardPartial: true, CodePlugin: true, CodeTooLong: true,
 }
 
 func checkRejection(t *testing.T, err error) {
@@ -42,7 +42,7 @@ func FuzzParseLink(f *testing.F) {
 		}
 		checkServer(t, s)
 		again, err := ParseLink(s.Text)
-		if err != nil || again.ID != s.ID {
+		if err != nil || identity(again.Text) != identity(s.Text) {
 			t.Fatalf("the text of a parsed link does not parse back: %v", err)
 		}
 	})
@@ -50,7 +50,8 @@ func FuzzParseLink(f *testing.F) {
 
 func FuzzParseWireGuardConf(f *testing.F) {
 	f.Add([]byte(wgConf), "office")
-	f.Add([]byte("[Interface]\nPrivateKey="+wgPriv+"\nAddress=10.0.0.2\n[Peer]\nPublicKey="+wgPub+"\nEndpoint=[::1]:1\nAllowedIPs=::/0\n"), "")
+	f.Add([]byte("[Interface]\nPrivateKey="+wgPriv+"\nAddress=10.0.0.2\n[Peer]\nPublicKey="+wgPub+"\nEndpoint=[::1]:1\nAllowedIPs=::/0,0.0.0.0/0\n"), "")
+	f.Add([]byte("[Interface]\nPrivateKey="+wgPriv+"\nAddress=10.0.0.2\n[Peer]\nPublicKey="+wgPub+"\nEndpoint=[::1]:1\nAllowedIPs=10.0.0.0/8\n"), "")
 	f.Add([]byte("[Interface]\nJc=1\n"), "x.conf")
 	f.Add([]byte("[Peer]\n[Peer]\n"), "")
 	f.Add([]byte("\xff=\n["), "\x00")
@@ -82,10 +83,11 @@ func FuzzParseSubscription(f *testing.F) {
 		seen := map[string]bool{}
 		for _, s := range servers {
 			checkServer(t, s)
-			if seen[s.ID] {
-				t.Fatalf("duplicate id %s", s.ID)
+			id := identity(s.Text)
+			if seen[id] {
+				t.Fatalf("a server twice: %s", s.Name)
 			}
-			seen[s.ID] = true
+			seen[id] = true
 		}
 		for _, r := range rejected {
 			if !codes[r.Code] || r.Line < 0 {

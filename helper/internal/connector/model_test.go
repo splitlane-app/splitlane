@@ -1,43 +1,78 @@
 package connector
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strings"
 	"testing"
 )
 
+// Made-up id keys of two installs: 32 bytes each.
+var (
+	testKey  = []byte("0123456789abcdef0123456789abcdef")
+	otherKey = []byte("fedcba9876543210fedcba9876543210")
+)
+
 func TestServerID(t *testing.T) {
 	hex16 := regexp.MustCompile(`^[0-9a-f]{16}$`)
-	id := ServerID(linkTrojan)
+	id := ServerID(testKey, linkTrojan)
 	if !hex16.MatchString(id) {
 		t.Fatalf("ServerID = %q, want 16 hex digits", id)
 	}
-	if ServerID(linkTrojan) != id {
+	if ServerID(testKey, linkTrojan) != id {
 		t.Error("ServerID is not stable")
 	}
 	for _, same := range []string{"  " + linkTrojan + "\r\n", "\n\n" + linkTrojan + "\t", "\xef\xbb\xbf" + linkTrojan} {
-		if ServerID(same) != id {
+		if ServerID(testKey, same) != id {
 			t.Errorf("ServerID(%q) differs from the trimmed link", same)
 		}
 	}
-	if ServerID(strings.Replace(linkTrojan, "sni=example.com", "sni=other.example.com", 1)) == id || ServerID(linkSS) == id {
+	if ServerID(testKey, strings.Replace(linkTrojan, "sni=example.com", "sni=other.example.com", 1)) == id || ServerID(testKey, linkSS) == id {
 		t.Error("different servers share an id")
 	}
 
-	conf := ServerID(wgConf)
+	conf := ServerID(testKey, wgConf)
 	variants := []string{
 		strings.ReplaceAll(wgConf, "\n", "\r\n"),
 		"\n\n" + strings.ReplaceAll(wgConf, "\n", "  \n\t") + "\n\n",
 		strings.ReplaceAll(wgConf, "\n\n", "\n\n\n\n"),
 	}
 	for _, v := range variants {
-		if ServerID(v) != conf {
+		if ServerID(testKey, v) != conf {
 			t.Errorf("whitespace changes the id of a .conf: %q", v)
 		}
 	}
-	if ServerID(strings.Replace(wgConf, "MTU = 1420", "MTU = 1280", 1)) == conf {
+	if ServerID(testKey, strings.Replace(wgConf, "MTU = 1420", "MTU = 1280", 1)) == conf {
 		t.Error("a changed .conf keeps its id")
 	}
+}
+
+// The id is keyed: another install (another key) gives the same server another id, and without the key the id
+// is not the plain hash of the text, which could be matched by guessing a password offline.
+func TestServerIDIsKeyed(t *testing.T) {
+	for _, text := range []string{linkTrojan, wgConf} {
+		id := ServerID(testKey, text)
+		if ServerID(otherKey, text) == id {
+			t.Errorf("two keys give one id for %q", text[:10])
+		}
+		plain := sha256.Sum256([]byte(identity(text)))
+		if hex.EncodeToString(plain[:8]) == id {
+			t.Errorf("the id of %q is the unkeyed hash", text[:10])
+		}
+		if !hexOnly(id) || len(id) != 16 {
+			t.Errorf("id %q", id)
+		}
+	}
+}
+
+func hexOnly(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !(s[i] >= '0' && s[i] <= '9' || s[i] >= 'a' && s[i] <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // The name is not part of the id: a subscription that writes changing things into its names keeps
@@ -57,14 +92,14 @@ func TestServerIDLeavesTheNameOut(t *testing.T) {
 	}
 	var ids []string
 	for _, g := range groups {
-		id := ServerID(g[0])
+		id := ServerID(testKey, g[0])
 		for _, l := range g[1:] {
-			if ServerID(l) != id {
+			if ServerID(testKey, l) != id {
 				t.Errorf("%s: id differs from %s", l, g[0])
 			}
 			s, err := ParseLink(l)
-			if err == nil && s.ID != id {
-				t.Errorf("%s: parsed id differs", l)
+			if err == nil && ServerID(testKey, s.Text) != id {
+				t.Errorf("%s: the id of the parsed text differs", l)
 			}
 		}
 		ids = append(ids, id)
@@ -78,7 +113,7 @@ func TestServerIDLeavesTheNameOut(t *testing.T) {
 	}
 	for _, l := range different {
 		for _, id := range ids {
-			if ServerID(l) == id {
+			if ServerID(testKey, l) == id {
 				t.Errorf("%s shares an id with another server", l)
 			}
 		}
@@ -86,7 +121,7 @@ func TestServerIDLeavesTheNameOut(t *testing.T) {
 	// the name is still kept and shown
 	a, _ := ParseLink(trojan + "#A")
 	b, _ := ParseLink(trojan + "#B")
-	if a.Name != "A" || b.Name != "B" || a.Text == b.Text || a.ID != b.ID {
+	if a.Name != "A" || b.Name != "B" || a.Text == b.Text || ServerID(testKey, a.Text) != ServerID(testKey, b.Text) {
 		t.Errorf("names %q %q, texts %q %q", a.Name, b.Name, a.Text, b.Text)
 	}
 }
@@ -151,7 +186,7 @@ func checkServer(t *testing.T, s Server) {
 	if n != 1 {
 		t.Errorf("%d protocol blocks in %s", n, dump(s))
 	}
-	if s.Port < 1 || s.Port > 65535 || s.Host == "" || s.Name == "" || len(s.ID) != 16 || s.ID != ServerID(s.Text) {
+	if s.Port < 1 || s.Port > 65535 || s.Host == "" || s.Name == "" || s.Text == "" || identity(s.Text) == "" {
 		t.Errorf("bad server %s", dump(s))
 	}
 	if (s.Protocol == ProtocolHysteria2 || s.Protocol == ProtocolTUIC) && (s.TLS == nil || s.Transport != nil) {

@@ -912,7 +912,9 @@ var testRules = rules.Env{WindowsDir: `C:\Windows`, ProgramFiles: `C:\Program Fi
 
 func newHarness(t *testing.T) *harness {
 	h := &harness{t: t, rec: &recorder{}, clock: &fakeClock{now: time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)}}
-	h.store = &fakeStore{rec: h.rec, state: store.Defaults(), servers: store.EmptyServers()}
+	servers := store.EmptyServers()
+	servers.IDKey = testIDKey // the key of an install that has used servers.json before
+	h.store = &fakeStore{rec: h.rec, state: store.Defaults(), servers: servers}
 	h.store.state.LoggedIn = true
 	h.store.state.SelectedExitNode = exitNode
 	h.clash = &fakeClash{rec: h.rec, mode: "vpn", refuse: map[string]bool{}}

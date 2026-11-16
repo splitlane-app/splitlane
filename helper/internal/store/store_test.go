@@ -313,13 +313,17 @@ func TestServersRoundTrip(t *testing.T) {
 	if err != nil || s.Version != 1 || s.Servers == nil || s.Subscriptions == nil {
 		t.Fatalf("%+v %v", s, err)
 	}
+	if s.IDKey != "" {
+		t.Fatalf("a fresh servers.json has a key: the engine makes it on first use")
+	}
+	s.IDKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 	s.Servers = []StoredServer{{ID: "a", Name: "Сервер", Source: "manual", Text: "trojan://x@h:443"}}
 	s.Subscriptions = []StoredSubscription{{ID: "s", Name: "n", URL: "https://e.example/sub", UpdatedAt: "2026-11-16T10:00:00Z", Count: 1}}
 	if err := d.SaveServers(s); err != nil {
 		t.Fatal(err)
 	}
 	got, err := d.LoadServers()
-	if err != nil || got.Servers[0] != s.Servers[0] || got.Subscriptions[0] != s.Subscriptions[0] {
+	if err != nil || got.IDKey != s.IDKey || got.Servers[0] != s.Servers[0] || got.Subscriptions[0] != s.Subscriptions[0] {
 		t.Fatalf("%+v %v", got, err)
 	}
 }

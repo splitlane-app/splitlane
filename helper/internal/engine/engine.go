@@ -82,10 +82,11 @@ type Engine struct {
 
 	// The proxy connector (stage 3 part 1, proxy.go): servers.json as it was read or last saved. While
 	// it could not be read (store.ErrIO) the set is empty, nothing is written over the file, and each
-	// proxy command reads it again first.
+	// proxy command and each window that connects reads it again first.
 	servers     store.Servers
 	serversErr  error
-	downloading bool // a subscription is being downloaded: one at a time, a second one is busy
+	downloading bool              // a subscription is being downloaded: one at a time, a second one is busy
+	movedIDs    map[string]string // the old id to the new of each server given a new id key, until the selection follows (moveSelectedLocked)
 
 	// The connector (spec 7, connector.go).
 	setup       *setupRun  // the setup mode now; nil when it does not run
@@ -188,7 +189,7 @@ func (e *Engine) load() {
 	servers, serversErr := e.d.Store.LoadServers()
 	switch {
 	case errors.Is(serversErr, store.ErrIO):
-		e.d.Log("servers.json: %v; it is read again by the next proxy command, and not written over until then", serversErr)
+		e.d.Log("servers.json: %v; it is read again when a window connects and by the next proxy command, and not written over until then", serversErr)
 	case serversErr != nil:
 		e.d.Log("servers.json: %v", serversErr)
 		serversErr = nil
@@ -197,7 +198,10 @@ func (e *Engine) load() {
 	defer e.mu.Unlock()
 	e.saved, e.journal = s, j
 	e.stateErr, e.journalErr = stateErr, journalErr
-	e.servers, e.serversErr = servers, serversErr
+	e.servers, e.serversErr, e.movedIDs = servers, serversErr, nil
+	if serversErr == nil {
+		e.takeServersLocked(servers)
+	}
 	e.syncSaved()
 }
 
@@ -273,6 +277,9 @@ func (e *Engine) readState(ctx context.Context) {
 				s.WasOn = false // the off that came during the read is kept: no enable again
 			}
 			e.saved, e.stateErr = s, nil
+			if e.moveSelectedLocked() {
+				e.save()
+			}
 			e.publish()
 			return
 		}
@@ -411,6 +418,7 @@ func (e *Engine) save() error {
 			e.relayout = true
 		}
 		e.saved, e.stateErr, late = s, nil, true
+		e.moveSelectedLocked() // the file's selection under a new id key; written just below
 	}
 	err := e.d.Store.SaveState(e.saved)
 	if err != nil {

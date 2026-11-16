@@ -58,7 +58,10 @@ func TestParseText(t *testing.T) {
 		{"two subscription addresses", "https://a.example.com/s\nhttps://b.example.com/s", nil, []rej{{1, CodeBadLink}, {2, CodeBadLink}}, ""},
 		{"bad subscription address", "https://", nil, []rej{{1, CodeBadLink}}, ""},
 		{"subscription address with a space", "https://sub.example.com/a b", nil, []rej{{1, CodeBadLink}}, ""},
-		{"plain http subscription", "http://sub.example.com/s", nil, []rej{{1, CodeUnsupportedProtocol}}, ""},
+		{"plain http subscription", "http://sub.example.com/s", nil, []rej{{0, CodeFetchNotHTTPS}}, ""},
+		{"plain http subscription with a comment, upper case", "# my provider\n  HTTP://sub.example.com/s?token=abc123 \n", nil,
+			[]rej{{0, CodeFetchNotHTTPS}}, ""},
+		{"http address among links", linkTrojan + "\nhttp://sub.example.com/s\n", []string{"Trojan"}, []rej{{2, CodeUnsupportedProtocol}}, ""},
 		{"wireguard text", "\r\n" + strings.ReplaceAll(wgConf, "\n", "\r\n"), []string{"vpn.example.com:51820"}, nil, ""},
 		{"wireguard text with an error", strings.Replace(wgConf, "MTU = 1420", "Jc = 3", 1), nil, []rej{{5, CodeAmneziaWG}}, ""},
 		{"only comments", "# nothing\n\n#\n", nil, nil, ""},
@@ -78,9 +81,9 @@ func TestParseText(t *testing.T) {
 			if sub != c.sub {
 				t.Errorf("subscription %q, want %q", sub, c.sub)
 			}
-			for _, s := range servers {
-				if s.ID == "" || s.ID != ServerID(s.Text) {
-					t.Errorf("%s: id %q does not follow its text", s.Name, s.ID)
+			for _, r := range rejected {
+				if strings.Contains(r.Detail, "abc123") || strings.Contains(r.Detail, "sub.example.com") {
+					t.Errorf("a rejection repeats the address: %+v", r)
 				}
 			}
 		})

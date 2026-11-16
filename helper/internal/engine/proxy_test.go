@@ -34,10 +34,16 @@ const (
 	subURL2  = "https://other.example.net/s/" + subToken + "2"
 )
 
-// secrets are the strings that must never leave servers.json.
-var secrets = []string{uuidA, pbkA, passTrojan, passSecond, wgPrivate, wgPublic, subToken, "sub.example.com/api"}
+// testIDKey is the made-up id key of the fake servers.json (32 bytes); serverID and subID make the ids under it.
+var (
+	testIDKeyRaw = "made-up-id-key-for-engine-tests!"
+	testIDKey    = base64.StdEncoding.EncodeToString([]byte(testIDKeyRaw))
+)
 
-func serverID(link string) string { return connector.ServerID(link) }
+// secrets are the strings that must never leave servers.json.
+var secrets = []string{uuidA, pbkA, passTrojan, passSecond, wgPrivate, wgPublic, subToken, "sub.example.com/api", testIDKey, testIDKeyRaw}
+
+func serverID(link string) string { return connector.ServerID([]byte(testIDKeyRaw), link) }
 
 // add calls proxy.add as the pipe does and reads the answer back from its JSON.
 func add(h *harness, text, name string) (protocol.ProxyAddResult, *protocol.Error) {
@@ -73,7 +79,7 @@ func mustAdd(h *harness, text, name string) protocol.ProxyAddResult {
 	return res
 }
 
-func subID(url string) string { return subscriptionID(url) }
+func subID(url string) string { return subscriptionID([]byte(testIDKeyRaw), url) }
 
 // subscriptionBody is a subscription answer: the links in base64, as most panels send them.
 func subscriptionBody(links ...string) string {
@@ -212,6 +218,11 @@ func TestProxyAddConf(t *testing.T) {
 		res.Rejected[0].Code != connector.CodeAmneziaWG || len(res.Added) != 0 {
 		t.Fatalf("an AmneziaWG .conf: %+v", res)
 	}
+	split := strings.Replace(wgConfText, "AllowedIPs = 0.0.0.0/0", "AllowedIPs = 10.8.0.0/24, 0.0.0.0/1", 1)
+	if res, _ := add(h, split, "office.conf"); len(res.Rejected) != 1 || res.Rejected[0] != (protocol.ProxyRejection{Line: 0, Code: connector.CodeWireGuardPartial}) ||
+		len(res.Added) != 0 {
+		t.Fatalf("a split-tunnel .conf: %+v", res)
+	}
 }
 
 // The limits of proxy.add (stage 3 part 1, section 4): a text over 64 KB is the rejection too_long of the
@@ -340,6 +351,23 @@ func TestProxyAddSubscription(t *testing.T) {
 	h.fetch.bodies[subURL2] = "\n"
 	if res, _ := add(h, subURL2, ""); len(res.Added) != 0 || len(res.Rejected) != 1 || res.Rejected[0].Code != protocol.CodeEmptySubscription {
 		t.Fatalf("an empty subscription: %+v", res)
+	}
+	noSecrets(t, h)
+}
+
+// A pasted http:// subscription address is the rejection fetch_not_https of the whole text, without a download.
+func TestProxyAddHTTPSubscriptionIsNotFetched(t *testing.T) {
+	h := newHarness(t)
+	logEvents(h)
+	h.load()
+	address := "http://sub.example.com/api/v1/client/subscribe?token=" + subToken
+	h.fetch.bodies[address] = subscriptionBody(linkVLESS)
+	res, err := add(h, "# my provider\n"+address+"\n", "")
+	if err != nil || len(res.Added) != 0 || len(res.Rejected) != 1 || res.Rejected[0] != (protocol.ProxyRejection{Line: 0, Code: connector.CodeFetchNotHTTPS}) {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if h.rec.count("fetch") != 0 || len(h.e.State().Proxy.Subscriptions) != 0 || h.store.serversSaves != 0 {
+		t.Fatalf("nothing is downloaded or kept: %v", h.rec.list())
 	}
 	noSecrets(t, h)
 }
@@ -633,6 +661,177 @@ func TestProxyServersUnreadable(t *testing.T) {
 	h.store.mu.Unlock()
 	if _, err := add(h, linkSecond, ""); err == nil || err.Code != protocol.CodeApplyFailed || len(h.e.State().Proxy.Servers) != 2 {
 		t.Fatalf("a save that fails changes nothing: %v", err)
+	}
+}
+
+// A servers.json that cannot be read at the start (an antivirus holds it for a moment) is read again when a window
+// connects: the window does not stay with an empty list until the next proxy command.
+func TestServersReadAgainWhenAWindowComes(t *testing.T) {
+	h := newHarness(t)
+	h.store.state.Connector, h.store.state.SelectedServer = protocol.ConnectorProxy, serverID(linkTrojan)
+	h.store.servers.Servers = []store.StoredServer{{ID: serverID(linkTrojan), Name: "Trojan", Protocol: "trojan", Source: "manual", Text: linkTrojan}}
+	h.store.serversReadFails = 1
+	h.load()
+	if s := h.e.State(); len(s.Proxy.Servers) != 0 || s.Proxy.Selected != nil {
+		t.Fatalf("unreadable at the start: %+v", s.Proxy)
+	}
+	h.e.SetClients(1)
+	h.waitFor("the servers after the window came", func() bool {
+		s := h.e.State()
+		return len(s.Proxy.Servers) == 1 && selectedOf(s) == serverID(linkTrojan)
+	})
+	h.mu.Lock()
+	last := h.states[len(h.states)-1]
+	h.mu.Unlock()
+	if len(last.Proxy.Servers) != 1 {
+		t.Fatalf("the servers are published: %+v", last.Proxy)
+	}
+	if h.store.serversSaves != 0 {
+		t.Fatalf("a read writes nothing: %d saves", h.store.serversSaves)
+	}
+}
+
+// The ids are keyed by the key of servers.json (connector.ServerID, subscriptionID): another install, another key,
+// gives the same server and subscription other ids; the key itself never leaves servers.json.
+func TestIDsFollowTheKey(t *testing.T) {
+	ids := func(key string) (string, string) {
+		h := newHarness(t)
+		h.store.servers.IDKey = key
+		h.load()
+		h.fetch.bodies[subURL] = subscriptionBody(linkVLESS)
+		mustAdd(h, linkTrojan, "")
+		mustAdd(h, subURL, "")
+		s := h.e.State()
+		if len(s.Proxy.Servers) != 2 || len(s.Proxy.Subscriptions) != 1 {
+			t.Fatalf("%+v", s.Proxy)
+		}
+		return s.Proxy.Servers[0].ID, s.Proxy.Subscriptions[0].ID
+	}
+	server, sub := ids(testIDKey)
+	if server != serverID(linkTrojan) || sub != subID(subURL) {
+		t.Fatalf("under the test key: %s %s", server, sub)
+	}
+	other := base64.StdEncoding.EncodeToString([]byte("another-made-up-key-of-32-bytes!"))
+	server2, sub2 := ids(other)
+	if server2 == server || sub2 == sub || len(server2) != 16 || !protocol.IsSubscriptionID(sub2) {
+		t.Fatalf("another key, other ids: %s %s", server2, sub2)
+	}
+	if server3, sub3 := ids(other); server3 != server2 || sub3 != sub2 {
+		t.Fatal("the same key, the same ids")
+	}
+}
+
+// A fresh install has no servers.json, so no key: one is made on first use and written with the first save; the
+// ids of the servers added are made under it.
+func TestFreshInstallMakesAKey(t *testing.T) {
+	h := newHarness(t)
+	h.store.servers = store.EmptyServers()
+	h.load()
+	if h.store.serversSaves != 0 || h.store.stateSaves != 0 {
+		t.Fatal("with nothing to move no file is written at the start")
+	}
+	res := mustAdd(h, linkTrojan, "")
+	saved := h.store.savedServers()
+	key, err := base64.StdEncoding.DecodeString(saved.IDKey)
+	if err != nil || len(key) != 32 || saved.IDKey == testIDKey {
+		t.Fatalf("the key %q: %v", saved.IDKey, err)
+	}
+	if want := connector.ServerID(key, linkTrojan); len(res.Added) != 1 || res.Added[0] != want || saved.Servers[0].ID != want {
+		t.Fatalf("the id under the new key: %+v, %+v", res, saved.Servers)
+	}
+	h.load()
+	if s := h.e.State(); len(s.Proxy.Servers) != 1 || s.Proxy.Servers[0].ID != res.Added[0] || h.store.savedServers().IDKey != saved.IDKey {
+		t.Fatalf("read again, the key and the ids stay: %+v", s.Proxy)
+	}
+}
+
+// keylessServers is servers.json as a development build wrote it before the id key: ids of the old kind (any
+// string here), a server of a subscription, and the selected server in state.json.
+func keylessServers(h *harness) {
+	h.store.servers = store.Servers{Version: 1,
+		Servers: []store.StoredServer{
+			{ID: "1111111111111111", Name: "Trojan", Protocol: "trojan", Source: protocol.SourceManual, Text: linkTrojan},
+			{ID: "2222222222222222", Name: "Reality", Protocol: "vless", Source: "sub-3333333333333333", Text: linkVLESS},
+			{ID: "4444444444444444", Name: "home", Protocol: "wireguard", Source: protocol.SourceFile, Text: wgConfText},
+		},
+		Subscriptions: []store.StoredSubscription{{ID: "sub-3333333333333333", Name: "sub.example.com", URL: subURL,
+			UpdatedAt: "2026-11-16T10:00:00Z", Count: 1}},
+	}
+	h.store.state.Connector, h.store.state.SelectedServer = protocol.ConnectorProxy, "2222222222222222"
+}
+
+// A servers.json without the id key (only development builds wrote one): the helper makes a key, makes the ids of
+// the servers and the subscriptions again under it, each server keeps its subscription as its source, the selected
+// server of state.json follows its new id, and both files are saved. The key is in neither the state, state.json
+// nor the log.
+func TestKeylessServersGetAKey(t *testing.T) {
+	h := newHarness(t)
+	logEvents(h)
+	keylessServers(h)
+	h.load()
+	saved := h.store.savedServers()
+	key, err := base64.StdEncoding.DecodeString(saved.IDKey)
+	if err != nil || len(key) != 32 || h.store.serversSaves != 1 {
+		t.Fatalf("a key is made and servers.json saved: %q %v, %d saves", saved.IDKey, err, h.store.serversSaves)
+	}
+	sub := subscriptionID(key, subURL)
+	want := []store.StoredServer{
+		{ID: connector.ServerID(key, linkTrojan), Name: "Trojan", Protocol: "trojan", Source: protocol.SourceManual, Text: linkTrojan},
+		{ID: connector.ServerID(key, linkVLESS), Name: "Reality", Protocol: "vless", Source: sub, Text: linkVLESS},
+		{ID: connector.ServerID(key, wgConfText), Name: "home", Protocol: "wireguard", Source: protocol.SourceFile, Text: wgConfText},
+	}
+	if fmt.Sprint(saved.Servers) != fmt.Sprint(want) || len(saved.Subscriptions) != 1 || saved.Subscriptions[0].ID != sub ||
+		saved.Subscriptions[0].URL != subURL {
+		t.Fatalf("servers.json under the new key:\n%+v\nwant %+v", saved, want)
+	}
+	if st := h.store.saved(); st.SelectedServer != want[1].ID || st.Connector != protocol.ConnectorProxy {
+		t.Fatalf("state.json keeps the selection under its new id: %+v", st)
+	}
+	s := h.e.State()
+	if selectedOf(s) != want[1].ID || len(s.Proxy.Servers) != 3 || s.Proxy.Servers[1].Source != sub || s.Proxy.Subscriptions[0].ID != sub {
+		t.Fatalf("the state: %+v", s.Proxy)
+	}
+	// read again: the key is there now, nothing moves
+	saves := h.store.serversSaves
+	h.load()
+	if h.store.serversSaves != saves || selectedOf(h.e.State()) != want[1].ID || h.store.savedServers().IDKey != saved.IDKey {
+		t.Fatal("a file with its key is taken as it is")
+	}
+	// the refresh of the subscription finds it by its new id and keeps the selected server
+	h.fetch.bodies[subURL] = subscriptionBody(linkVLESS, linkSecond)
+	if res, err := refresh(h, sub); err != nil || res.Existing != 1 || len(res.Added) != 1 || selectedOf(h.e.State()) != want[1].ID {
+		t.Fatalf("refresh under the new ids: %+v %v", res, err)
+	}
+	secrets := append([]string{saved.IDKey, string(key)}, secrets...)
+	h.mu.Lock()
+	states, _ := json.Marshal(h.states)
+	h.mu.Unlock()
+	st, _ := json.Marshal(h.store.saved())
+	logs := strings.Join(h.rec.list(), "\n")
+	for _, x := range secrets {
+		if strings.Contains(string(states), x) || strings.Contains(string(st), x) || strings.Contains(logs, x) {
+			t.Errorf("a secret left servers.json: %q", x)
+		}
+	}
+}
+
+// The selection follows its server to the new id also when state.json could not be read while servers.json was
+// given its key: the move waits until state.json reads (here at the next save, which takes the file's settings).
+func TestKeylessServersMoveTheSelectionOnceStateReads(t *testing.T) {
+	h := newHarness(t)
+	keylessServers(h)
+	h.store.stateReadFails = 4 // the read at the start and its three retries
+	h.load()
+	key := idKey(h.store.savedServers())
+	if key == nil || h.store.stateSaves != 0 {
+		t.Fatalf("servers.json gets its key, state.json is not written: %d saves", h.store.stateSaves)
+	}
+	mustAdd(h, linkSecond, "") // its save reads state.json, now readable, and gives way to it
+	if st := h.store.saved(); st.SelectedServer != connector.ServerID(key, linkVLESS) || st.Connector != protocol.ConnectorProxy {
+		t.Fatalf("state.json: %+v", st)
+	}
+	if selectedOf(h.e.State()) != connector.ServerID(key, linkVLESS) {
+		t.Fatalf("the state: %+v", h.e.State().Proxy)
 	}
 }
 

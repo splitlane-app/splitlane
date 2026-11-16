@@ -1,9 +1,12 @@
 package connector
 
 import (
+	"cmp"
 	"encoding/base64"
+	"encoding/binary"
 	"net/netip"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -24,9 +27,11 @@ var ignoredInterfaceKeys = map[string]bool{
 
 // ParseWireGuardConf parses a WireGuard .conf with one [Interface] and exactly one [Peer]. Keys and
 // section names are case-insensitive, '#' starts a comment, Address and AllowedIPs may repeat and
-// hold comma lists, a bare address is a host prefix. name is the file's base name (".conf" is cut,
-// and so is anything up to a '/' or '\'); when it is empty the server is called host:port. The
-// error is always a *Rejection; Line is the line of the problem, 0 when it is the whole file.
+// hold comma lists, a bare address is a host prefix; the AllowedIPs must together cover all of IPv4
+// (wireguard_partial otherwise: the lane sends everything through the server). name is the file's
+// base name (".conf" is cut, and so is anything up to a '/' or '\'); when it is empty the server is
+// called host:port. The error is always a *Rejection; Line is the line of the problem, 0 when it is
+// the whole file.
 func ParseWireGuardConf(text []byte, name string) (Server, error) {
 	s, r := parseConf(text, name)
 	if r != nil {
@@ -165,12 +170,41 @@ func parseConf(text []byte, name string) (Server, *Rejection) {
 		return fail(0, CodeMissingField, "Endpoint")
 	case len(wg.Peer.AllowedIPs) == 0:
 		return fail(0, CodeMissingField, "AllowedIPs")
+	case !coversIPv4(wg.Peer.AllowedIPs):
+		return fail(0, CodeWireGuardPartial, "AllowedIPs")
 	}
 	if name = confBaseName(name); name == "" {
 		name = hostPortName(host, port)
 	}
-	return Server{ID: ServerID(src), Name: name, Protocol: ProtocolWireGuard, Host: host, Port: port,
-		Text: normalize(src), WireGuard: &wg}, nil
+	return Server{Name: name, Protocol: ProtocolWireGuard, Host: host, Port: port, Text: normalize(src), WireGuard: &wg}, nil
+}
+
+// coversIPv4 tells whether the IPv4 prefixes among ps together cover all of IPv4, as 0.0.0.0/0 does: the
+// ranges of the prefixes, sorted by their first address and joined, must run from 0.0.0.0 to
+// 255.255.255.255 without a gap (0.0.0.0/1 with 128.0.0.0/1 does; overlaps are fine). A split-tunnel file
+// sends only some addresses through the server, and the lane's other traffic would fail its proof. IPv6
+// prefixes do not count: the lane needs no IPv6 through the server.
+func coversIPv4(ps []netip.Prefix) bool {
+	type span struct{ from, to uint64 } // inclusive; uint64, so that the end of IPv4 plus one fits
+	var spans []span
+	for _, p := range ps {
+		if !p.Addr().Is4() {
+			continue
+		}
+		p = p.Masked()
+		a := p.Addr().As4()
+		from := uint64(binary.BigEndian.Uint32(a[:]))
+		spans = append(spans, span{from, from + 1<<(32-p.Bits()) - 1})
+	}
+	slices.SortFunc(spans, func(a, b span) int { return cmp.Compare(a.from, b.from) })
+	next := uint64(0) // the first address no span has covered yet
+	for _, s := range spans {
+		if s.from > next {
+			return false
+		}
+		next = max(next, s.to+1)
+	}
+	return next == 1<<32
 }
 
 // wgKey checks a key of 32 bytes in standard base64 (44 characters), as wg writes it.

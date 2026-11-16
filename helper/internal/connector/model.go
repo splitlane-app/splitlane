@@ -10,6 +10,7 @@ package connector
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -49,6 +50,7 @@ const (
 	CodeMissingField         = "missing_field"         // a required part is absent
 	CodeBadWireGuard         = "bad_wireguard"         // a malformed .conf
 	CodeAmneziaWG            = "amneziawg"             // AmneziaWG parameters in a .conf
+	CodeWireGuardPartial     = "wireguard_partial"     // a .conf whose AllowedIPs leave part of IPv4 off the tunnel
 	CodePlugin               = "plugin"                // a Shadowsocks plugin (SIP003)
 	CodeTooLong              = "too_long"              // over a size limit
 )
@@ -63,10 +65,10 @@ const (
 	MaxNameLen         = 100 // characters
 )
 
-// Server is one imported server. ID, Name, Protocol, Host and Port are not secret; everything else
-// (Text and the protocol blocks) is, and lives only in servers.json.
+// Server is one imported server. Name, Protocol, Host and Port are not secret; everything else (Text and
+// the protocol blocks) is, and lives only in servers.json. Its id is ServerID of Text under the key of the
+// install: the caller, who holds the key, makes it.
 type Server struct {
-	ID       string // ServerID(Text)
 	Name     string // from the link (#name, vmess "ps"), the .conf file name, else host:port
 	Protocol string // one of the Protocol* constants; exactly the matching block below is set
 	Host     string // a DNS name or an IP address (IPv6 without brackets)
@@ -264,23 +266,33 @@ func reject(code, detail string) *Rejection {
 	return &Rejection{Code: code, Detail: detail}
 }
 
-// ServerID is the id of a server: the first 8 bytes, in hex, of the SHA-256 of its normalized text
-// without its name. Leading and trailing spaces of every line, line endings, blank lines and a byte
-// order mark do not change it, and neither does the name: a link is taken without the part from its
-// first '#', a vmess:// base64 link as its JSON without "ps" (keys sorted). So a subscription that
-// writes changing things into its names (traffic left, a load mark) keeps the ids of its servers
-// across refreshes; the name itself is still kept in Text and shown. A .conf carries no name (the
-// name is the file's), so it is taken whole.
-func ServerID(text string) string {
+// ServerID is the id of a server: the first 8 bytes, in hex, of the HMAC-SHA256 under key (the random key
+// of the install, kept in servers.json) of its identity: its normalized text without its name. Keyed, an id
+// says nothing of the secrets in the text: ids go into state.json and the log, and so into diagnostics
+// archives, where an unkeyed hash of a link with a weak password could be matched by guessing offline.
+// Under the same key the same server always has the same id: leading and trailing spaces of every line,
+// line endings, blank lines and a byte order mark do not change it, and neither does the name: a link is
+// taken without the part from its first '#', a vmess:// base64 link as its JSON without "ps" (keys
+// sorted). So a subscription that writes changing things into its names (traffic left, a load mark) keeps
+// the ids of its servers across refreshes; the name itself is still kept in Text and shown. A .conf
+// carries no name (the name is the file's), so it is taken whole.
+func ServerID(key []byte, text string) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(identity(text)))
+	return hex.EncodeToString(mac.Sum(nil)[:8])
+}
+
+// identity is what ServerID hashes: the normalized text, for one link without its name. Two texts of the
+// same server have the same identity, so the parsers count such a server once. It is as secret as the text.
+func identity(text string) string {
 	n := normalize(text)
 	if !strings.Contains(n, "\n") {
 		n = withoutName(n)
 	}
-	sum := sha256.Sum256([]byte(n))
-	return hex.EncodeToString(sum[:8])
+	return n
 }
 
-// withoutName cuts the name out of one link for ServerID.
+// withoutName cuts the name out of one link for identity.
 func withoutName(link string) string {
 	link, _, _ = strings.Cut(link, "#")
 	i := strings.Index(link, "://")

@@ -10,13 +10,14 @@ import (
 //     named confName (a base name the caller supplies, never a path; see ParseWireGuardConf), or
 //     host:port when it is empty;
 //   - a subscription address: a single https:// line (with nothing else but blank and comment
-//     lines), returned as subscriptionURL for the caller to fetch;
+//     lines), returned as subscriptionURL for the caller to fetch; a single http:// line in its
+//     place is the rejection fetch_not_https of the whole text, and nothing is fetched;
 //   - share links, one per line.
 //
 // Blank lines and lines starting with '#' are skipped (comments, and the "#profile-title:" headers
-// some subscriptions carry). A link with the id of an earlier one (the same server, whatever its
-// name) counts once. A rejection carries the 1-based line number; an https:// line among links is
-// bad_link (an address goes alone).
+// some subscriptions carry). A link of the same server as an earlier one (the same identity,
+// whatever its name) counts once. A rejection carries the 1-based line number; an https:// line
+// among links is bad_link (an address goes alone).
 func ParseText(text, confName string) (servers []Server, rejected []Rejection, subscriptionURL string) {
 	if len(text) > MaxTextLen {
 		return nil, []Rejection{{Code: CodeTooLong, Detail: "text"}}, ""
@@ -38,12 +39,16 @@ func ParseText(text, confName string) (servers []Server, rejected []Rejection, s
 			only, count = i, count+1
 		}
 	}
-	if count == 1 && isHTTPS(strings.TrimSpace(lines[only])) {
-		u := strings.TrimSpace(lines[only])
-		if !validSubscriptionURL(u) {
-			return nil, []Rejection{{Line: only + 1, Code: CodeBadLink, Detail: "subscription address"}}, ""
+	if count == 1 {
+		switch u := strings.TrimSpace(lines[only]); {
+		case isHTTPS(u):
+			if !validSubscriptionURL(u) {
+				return nil, []Rejection{{Line: only + 1, Code: CodeBadLink, Detail: "subscription address"}}, ""
+			}
+			return nil, nil, u
+		case isHTTP(u):
+			return nil, []Rejection{{Code: CodeFetchNotHTTPS, Detail: "subscription address"}}, ""
 		}
-		return nil, nil, u
 	}
 	servers, rejected = parseLines(lines, true)
 	return servers, rejected, ""
@@ -51,7 +56,7 @@ func ParseText(text, confName string) (servers []Server, rejected []Rejection, s
 
 // ParseSubscription reads a subscription response: links one per line, either as plain text or the
 // whole list in base64 (standard or URL alphabet, with or without padding, wrapped or not). Blank
-// and '#' lines are skipped; a link with the id of an earlier one counts once; a line that is not
+// and '#' lines are skipped; a link of the same server as an earlier one counts once; a line that is not
 // UTF-8 is rejected alone; line numbers are those of the decoded list. A body where no line starts
 // with scheme:// (Clash YAML, sing-box JSON, a .conf, even with addresses inside) is one
 // unsupported_protocol rejection with line 0.
@@ -101,8 +106,8 @@ func parseLines(lines []string, pasted bool) ([]Server, []Rejection) {
 			rejected = append(rejected, *r)
 			continue
 		}
-		if !seen[s.ID] {
-			seen[s.ID] = true
+		if id := identity(s.Text); !seen[id] {
+			seen[id] = true
 			servers = append(servers, s)
 		}
 	}
@@ -111,6 +116,10 @@ func parseLines(lines []string, pasted bool) ([]Server, []Rejection) {
 
 func isHTTPS(l string) bool {
 	return len(l) >= 8 && strings.EqualFold(l[:8], "https://")
+}
+
+func isHTTP(l string) bool {
+	return len(l) >= 7 && strings.EqualFold(l[:7], "http://")
 }
 
 func validSubscriptionURL(u string) bool {
