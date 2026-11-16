@@ -18,6 +18,8 @@
 ;     stops the setup (exit code 2), and a window the setup closed is started again, of the new files.
 ;   The result for the window (spec 6 of stage 2 part 2), %ProgramData%\SplitLane\export\last-install.txt, is
 ;     written by the helper's prepare (a refusal) and install, which check the data folder first; not here.
+;   customWelcomePage (the first page): the privacy page, with what leaves the PC and what the installation
+;     changes in Windows (SignPath's conditions); not shown when silent.
 ; Uninstaller:
 ;   customUnWelcomePage: the page with the check box that adds --purge (silent: the parameter /PURGE).
 ;   customCheckAppRunning: the window is closed (no prepare: the helper's uninstall stops the helper itself).
@@ -61,6 +63,14 @@
   LangString splitlaneNoHelperAsk ${LANG_ENGLISH} "The SplitLane service won't start, so the uninstaller can't check that the Tailscale exit node is on. Uninstall SplitLane anyway? If the VPN doesn't work afterwards, turn on the exit node in the Tailscale app."
   LangString splitlaneNoHelperKept ${LANG_RUSSIAN} "Служебный процесс не запустился, поэтому папка %ProgramData%\SplitLane с данными и входом в Tailscale осталась: её можно удалить вручную. Настройки окна в %AppData%\SplitLane тоже остались."
   LangString splitlaneNoHelperKept ${LANG_ENGLISH} "The service didn't start, so the folder %ProgramData%\SplitLane with the data and the Tailscale login was kept. You can delete it manually. The window settings in %AppData%\SplitLane were kept too."
+  LangString splitlanePrivacyTitle ${LANG_RUSSIAN} "Конфиденциальность и изменения в системе"
+  LangString splitlanePrivacyTitle ${LANG_ENGLISH} "Privacy and system changes"
+  LangString splitlanePrivacySub ${LANG_RUSSIAN} "Что SplitLane отправляет по сети и что меняет в Windows"
+  LangString splitlanePrivacySub ${LANG_ENGLISH} "What SplitLane sends over the network and changes in Windows"
+  LangString splitlanePrivacyLink ${LANG_RUSSIAN} "Полная политика конфиденциальности:"
+  LangString splitlanePrivacyLink ${LANG_ENGLISH} "Full privacy policy:"
+  LangString splitlanePrivacyText ${LANG_RUSSIAN} `У SplitLane нет телеметрии, учётных записей и собственных серверов. С этого компьютера уходят только запросы, описанные ниже.$\r$\n$\r$\nЧто уходит с компьютера$\r$\n- Проверка обновлений: окно спрашивает GitHub (api.github.com) о последнем выпуске через 30 секунд после запуска и затем раз в 24 часа. Её можно выключить настройкой «Проверять обновления» на экране «Подключение».$\r$\n- Проверки связи: пока деление включено, служба примерно раз в 10 секунд спрашивает у api.ipify.org внешний адрес.$\r$\n- DNS: пока дорожка VPN работает, имена сайтов разрешаются через DNS-over-HTTPS на 1.1.1.1 (Cloudflare) по дорожке VPN.$\r$\n- Tailscale: при подключении через Tailscale встроенный узел обращается к серверам Tailscale, как любое устройство Tailscale.$\r$\n- Ваши серверы: SplitLane подключается к VPN-серверам и адресам подписок, которые вы добавили. В «Свой VPS» он подключается по SSH к указанному вами серверу и ставит на него VPN-сервер.$\r$\nДеление включаете и выключаете вы; проверки связи и DNS работают только пока оно включено.$\r$\n$\r$\nЧто установка меняет в Windows$\r$\n- Ставит фоновую службу: задачу планировщика SplitLane Helper, которая запускается от имени SYSTEM.$\r$\n- Пока деление включено, служба добавляет виртуальный сетевой адаптер и маршруты.$\r$\n- Если приложение Tailscale использует exit node, SplitLane выключает его, пока деление включено, и затем включает обратно.`
+  LangString splitlanePrivacyText ${LANG_ENGLISH} `SplitLane has no telemetry, no accounts and no servers of its own. Only the requests below leave this PC.$\r$\n$\r$\nWhat leaves this PC$\r$\n- Update check: the window asks GitHub (api.github.com) for the latest release 30 seconds after it starts and every 24 hours. You can turn it off with "Check for updates automatically" on the Connection screen.$\r$\n- Connection checks: while split routing is on, the service asks api.ipify.org for the external address, about every 10 seconds.$\r$\n- DNS: while the VPN lane works, website names are resolved with DNS over HTTPS at 1.1.1.1 (Cloudflare), through the VPN lane.$\r$\n- Tailscale: when you connect through Tailscale, the built-in node talks to Tailscale's servers like any Tailscale device.$\r$\n- Your servers: SplitLane connects to the VPN servers and subscription addresses you add. With Your own VPS it connects over SSH to the server you enter and installs the VPN server there.$\r$\nSplit routing is turned on and off by you; the connection checks and DNS run only while it is on.$\r$\n$\r$\nWhat the installer changes in Windows$\r$\n- It installs a background service: the Task Scheduler task SplitLane Helper, started as SYSTEM.$\r$\n- While split routing is on, the service adds a virtual network adapter and routes.$\r$\n- If the Tailscale app uses an exit node, SplitLane turns it off while split routing is on and turns it back on afterwards.`
 !macroend
 
 ; ${UN}splitlaneLine: Push <output>, Push <prefix>, Call, Pop <line>. With the prefix "" the line is the last
@@ -254,6 +264,44 @@ Var splitlaneClosed
   ; spec 2: the folder is fixed. initMultiUser (just before) takes an earlier InstallLocation or /D=; neither counts.
   !macro customInit
     StrCpy $INSTDIR "$PROGRAMFILES64\SplitLane"
+  !macroend
+!endif
+
+!ifndef BUILD_UNINSTALLER
+  ; The privacy page: before the installation, in the interactive installer only (silent installs, the update
+  ; of the window and CI, never show it). A custom nsDialogs page, not the license page: that one asks to
+  ; accept and keeps its own title. The text is a summary of PRIVACY.md; the address leads to the full policy.
+  !define SPLITLANE_PRIVACY_URL "https://github.com/splitlane-app/splitlane/blob/main/PRIVACY.md"
+  Var splitlanePrivacyText
+
+  !macro customWelcomePage
+    Function splitlanePrivacyShow
+      ${If} ${Silent}
+        Abort
+      ${EndIf}
+      !insertmacro MUI_HEADER_TEXT "$(splitlanePrivacyTitle)" "$(splitlanePrivacySub)"
+      nsDialogs::Create 1018
+      Pop $0
+      ${If} $0 == error
+        Abort
+      ${EndIf}
+      nsDialogs::CreateControl EDIT ${DEFAULT_STYLES}|${WS_TABSTOP}|${WS_VSCROLL}|${ES_MULTILINE}|${ES_AUTOVSCROLL}|${ES_READONLY} ${WS_EX_CLIENTEDGE} 0 0 100% 106u "$(splitlanePrivacyText)"
+      Pop $splitlanePrivacyText
+      ${NSD_CreateLabel} 0 112u 100% 10u "$(splitlanePrivacyLink)"
+      Pop $0
+      ${NSD_CreateLink} 0 122u 100% 10u "${SPLITLANE_PRIVACY_URL}"
+      Pop $0
+      ${NSD_OnClick} $0 splitlanePrivacyOpen
+      nsDialogs::Show
+    FunctionEnd
+
+    ; the address opens in the browser of the desktop user, not in one with the installer's rights
+    Function splitlanePrivacyOpen
+      Pop $0
+      ${StdUtils.ExecShellAsUser} $0 "${SPLITLANE_PRIVACY_URL}" "open" ""
+    FunctionEnd
+
+    Page custom splitlanePrivacyShow
   !macroend
 !endif
 
