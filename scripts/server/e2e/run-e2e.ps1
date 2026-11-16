@@ -15,7 +15,9 @@
 #
 # ASCII only: Windows PowerShell 5.1 reads a script without BOM in the ANSI code page.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\server\e2e\run-e2e.ps1
-#          [-Images debian:12,ubuntu:24.04] [-SmokeImage debian:12] [-NoSmoke] [-Parallel 5] [-Keep]
+#          [-Images debian:12,ubuntu:24.04] [-SmokeImage debian:12] [-NoSmoke] [-Parallel 5] [-MinFreeMB 2048] [-Keep]
+# Before each system and before the smoke run it checks the free memory of the PC and stops there when
+# less than -MinFreeMB is left (the systems before it keep their results).
 # Needs: Docker Desktop (Linux containers), Go, ssh-keygen (the OpenSSH client of Windows).
 # Result: last line E2E-OK or E2E-FAILED <what>; exit code 0 or 1.
 param(
@@ -24,6 +26,7 @@ param(
     [switch]$NoSmoke,
     [int]$Parallel = 5,
     [int]$BasePort = 22100,
+    [int]$MinFreeMB = 2048,
     [switch]$Keep
 )
 $ErrorActionPreference = 'Stop'
@@ -39,6 +42,16 @@ $acmeHosts = @('acme-v02.api.letsencrypt.org', 'acme-staging-v02.api.letsencrypt
 function Get-Tag([string]$image) { 'splitlane-e2e:' + ($image -replace '[:/]', '-') }
 
 function Get-Short([string]$image) { $image -replace '[:/]', '-' }
+
+# The free physical memory of the PC in MB.
+function Get-FreeMB { [int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024) }
+
+# Throws when less than -MinFreeMB is free, so that the run stops before $what.
+function Assert-Memory([string]$what) {
+    $free = Get-FreeMB
+    Write-Host "== free memory: $free MB (at least $MinFreeMB MB needed for $what)"
+    if ($free -lt $MinFreeMB) { throw "stopped before ${what}: $free MB of memory free, less than $MinFreeMB MB" }
+}
 
 # Letters and digits from a cryptographic generator.
 function New-Secret([int]$length) {
@@ -215,6 +228,7 @@ try {
     # fresh server, sudo, busy and preinstalled on one each. Their containers go when the test is over.
     $i = 0
     foreach ($image in $Images) {
+        Assert-Memory $image
         $short = Get-Short $image
         $targets = New-Object System.Collections.ArrayList
         $started = @()
@@ -254,6 +268,7 @@ try {
     }
 
     if (-not $NoSmoke) {
+        Assert-Memory 'the smoke run'
         $smokePort = $BasePort + 91
         Start-Server 'splitlane-e2e-smoke' $SmokeImage $smokePort $rootPw $kitPw $kitKey
         $state = Wait-Server 'splitlane-e2e-smoke'
