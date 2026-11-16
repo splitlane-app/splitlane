@@ -1168,3 +1168,33 @@ func TestOutcomeJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestRunNoPasswordNoKey(t *testing.T) {
+	priv, pub := newTestKey(t)
+	t.Run("a server with keys only, a password", func(t *testing.T) {
+		f := newFakeServer(t, func(f *fakeServer) {
+			f.passwordAuth = false
+			f.kbdAuth = false
+			f.key = pub
+		})
+		events, _, fail := setupRun(context.Background(), passwordRequest(f, focusPassword), testDeps(t, nil))
+		wantFailure(t, fail, CodeSSHAuth, "no_password")
+		if got := f.sentPasswords(); len(got) != 0 {
+			t.Fatalf("passwords sent %q", got)
+		}
+		noSecrets(t, f, events, fail, focusPassword)
+	})
+	t.Run("a server with passwords only, a key", func(t *testing.T) {
+		f := newFakeServer(t, nil)
+		req := passwordRequest(f, "")
+		req.Password = nil
+		req.Key = keyText(t, priv, "")
+		_, _, fail := setupRun(context.Background(), req, testDeps(t, nil))
+		wantFailure(t, fail, CodeSSHAuth, "no_key")
+	})
+	t.Run("a refused password stays without detail", func(t *testing.T) {
+		f := newFakeServer(t, nil)
+		_, _, fail := setupRun(context.Background(), passwordRequest(f, "wrong"), testDeps(t, nil))
+		wantFailure(t, fail, CodeSSHAuth, "")
+	})
+}

@@ -34,6 +34,10 @@ var (
 	// errPasswordRefused stops the login once the password method has failed: keyboard-interactive
 	// would send the same password again, a second failure for fail2ban and MaxAuthTries.
 	errPasswordRefused = errors.New("ssh: the server refused the password")
+	// errNoPassword, errNoKey: the server offers no method the login can use (a password to a server
+	// that takes keys only, a key to one that takes passwords only); nothing is sent.
+	errNoPassword = errors.New("ssh: the server does not accept passwords")
+	errNoKey      = errors.New("ssh: the server does not accept keys")
 )
 
 // sshConn is the SSH connection of a setup.
@@ -86,6 +90,10 @@ func connect(ctx context.Context, req Request, d Deps, addr string) (*sshConn, *
 			return nil, f
 		}
 		switch {
+		case errors.Is(err, errNoPassword):
+			return nil, &Failure{Code: CodeSSHAuth, Detail: "no_password"}
+		case errors.Is(err, errNoKey):
+			return nil, &Failure{Code: CodeSSHAuth, Detail: "no_key"}
 		case isTimeout(err):
 			return nil, &Failure{Code: CodeSSHUnreachable, Detail: "timeout"}
 		case !keyed.Load():
@@ -112,7 +120,13 @@ func authMethods(req Request) ([]ssh.AuthMethod, ssh.ClientAuthCallback, *Failur
 		if f != nil {
 			return nil, nil, f
 		}
-		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil, nil
+		onlyKey := func(c *ssh.ClientAuthContext) (ssh.AuthMethod, error) {
+			if !slices.Contains(c.AllowedMethods, "publickey") {
+				return nil, errNoKey
+			}
+			return nil, nil
+		}
+		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, onlyKey, nil
 	}
 	// x/crypto/ssh takes the password as a string: that copy cannot be wiped, the garbage collector
 	// frees it after the run.
@@ -132,6 +146,9 @@ func authMethods(req Request) ([]ssh.AuthMethod, ssh.ClientAuthCallback, *Failur
 		return answers, nil
 	})
 	once := func(c *ssh.ClientAuthContext) (ssh.AuthMethod, error) {
+		if !slices.Contains(c.AllowedMethods, "password") && !slices.Contains(c.AllowedMethods, "keyboard-interactive") {
+			return nil, errNoPassword
+		}
 		if slices.Contains(c.TriedMethods, "password") {
 			return nil, errPasswordRefused
 		}

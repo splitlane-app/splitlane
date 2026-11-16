@@ -260,6 +260,17 @@ describe('the texts of the end', () => {
       'Для sudo этому пользователю нужен пароль, а при входе по ключу его нет: войдите по паролю или как root'
     )
     expect(vpsErrorText('no_admin', 'sudo_denied', false)).toMatch(/^У этого пользователя на сервере нет прав администратора/)
+    // a server that takes only keys (or only passwords) says so and what to do
+    expect(vpsErrorText('ssh_auth', 'no_password', false)).toBe(
+      'Этот сервер не принимает вход по паролю. Выберите «Файл ключа» и укажите ключ, который вы добавили при создании VPS'
+    )
+    expect(vpsErrorText('ssh_auth', 'no_key', true)).toBe('Этот сервер не принимает вход по ключу. Войдите по паролю')
+    setLang('en')
+    expect(vpsErrorText('ssh_auth', 'no_password', false)).toBe(
+      "This server doesn't accept password logins. Choose «Key file» and pick the key you added when creating the VPS"
+    )
+    expect(vpsErrorText('ssh_auth', 'no_key', true)).toBe("This server doesn't accept key logins. Log in with the password")
+    setLang('ru')
     // the login by a key is refused as a key
     expect(vpsErrorText('ssh_auth', undefined, true)).toBe('Сервер не принял логин или ключ')
     // a refused request says which part

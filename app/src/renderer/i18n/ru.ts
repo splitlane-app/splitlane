@@ -462,6 +462,9 @@ export const ru = {
     'Не удалось подключиться к серверу: проверьте адрес; порт SSH может быть закрыт. Если сервер арендован только что, подождите несколько минут',
   'vps.error.ssh_auth': 'Неверный логин или пароль',
   'vps.error.ssh_auth.key': 'Сервер не принял логин или ключ',
+  'vps.error.ssh_auth.no_password':
+    'Этот сервер не принимает вход по паролю. Выберите «Файл ключа» и укажите ключ, который вы добавили при создании VPS',
+  'vps.error.ssh_auth.no_key': 'Этот сервер не принимает вход по ключу. Войдите по паролю',
   'vps.error.ssh_key': 'Этот файл ключа не подходит',
   // PuTTYgen has no Russian menus: its items are named as it shows them
   'vps.error.ssh_key.ppk':

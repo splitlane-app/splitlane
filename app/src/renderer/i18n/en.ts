@@ -471,6 +471,9 @@ export const en: Record<Key, string> = {
     "Couldn't connect to the server. Check the address; the SSH port may be closed. If you've just rented the server, wait a few minutes",
   'vps.error.ssh_auth': 'Wrong username or password',
   'vps.error.ssh_auth.key': "The server didn't accept the username or the key",
+  'vps.error.ssh_auth.no_password':
+    "This server doesn't accept password logins. Choose «Key file» and pick the key you added when creating the VPS",
+  'vps.error.ssh_auth.no_key': "This server doesn't accept key logins. Log in with the password",
   'vps.error.ssh_key': "This key file can't be used",
   'vps.error.ssh_key.ppk':
     "This key file can't be used: it's a PuTTY key (.ppk). Open it in PuTTYgen, choose Conversions → Export OpenSSH key, save the key and choose the saved file here",
