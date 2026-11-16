@@ -37,8 +37,10 @@ declare -A PORT_DEFAULT=([VLESS_PORT]=443 [HY2_PORT]=443 [SS_PORT]=8388 [WG_PORT
 VLESS_PORT="" HY2_PORT="" SS_PORT="" WG_PORT="" SUB_PORT=""
 ACME_PORT=80 # Caddy gets the certificate of the subscription over HTTP here, tcp
 # The kinds of each port, and the ports --auto-ports tries in this order when the option gives
-# none and none is remembered. The tcp ports of VLESS and of the subscription never overlap.
-declare -A PORT_KINDS=([VLESS_PORT]=tcp [HY2_PORT]=udp [SS_PORT]="tcp udp" [WG_PORT]=udp [SUB_PORT]=tcp)
+# none and none is remembered. The subscription takes its port on udp too: Caddy serves HTTP/3
+# there and does not start if the udp port is taken (by Hysteria2, say). The ports of VLESS and of
+# the subscription never overlap.
+declare -A PORT_KINDS=([VLESS_PORT]=tcp [HY2_PORT]=udp [SS_PORT]="tcp udp" [WG_PORT]=udp [SUB_PORT]="tcp udp")
 declare -A AUTO_PORT_LIST=([VLESS_PORT]="443 2053 2083 2087 2096" [HY2_PORT]="443 4443 8443 10443"
 	[SS_PORT]="8388 8389 9388" [WG_PORT]="51820 51821 51822" [SUB_PORT]="8443 9443 7443")
 
@@ -73,8 +75,8 @@ P_CADDYFILE=/etc/caddy/Caddyfile
 P_CADDY_SITE=/etc/caddy/$SERVICE.caddy
 CADDY_MARK="# Added by the SplitLane server kit; install-singbox-server.sh --uninstall removes it."
 CADDY_IMPORT="import $P_CADDY_SITE"
-# --harden: the kit's fail2ban jail (--uninstall removes it) and the switch of automatic updates
-# (written only when the system has none; it stays after --uninstall, as fail2ban does).
+# --harden: the kit's fail2ban jail and the switch of automatic updates (written only when the
+# system has none). Both stay after --uninstall, as fail2ban and Caddy do.
 P_JAIL=/etc/fail2ban/jail.d/$SERVICE.local
 P_AUTO_UPGRADES=/etc/apt/apt.conf.d/20auto-upgrades
 HARDEN_PACKAGES=(fail2ban python3-systemd unattended-upgrades)
@@ -169,14 +171,15 @@ Options:
   --hy2-port <port>     the port of Hysteria2, udp (default 443)
   --ss-port <port>      the port of Shadowsocks 2022, tcp and udp (default 8388)
   --wg-port <port>      the port of WireGuard, udp (default 51820)
-  --sub-port <port>     the port of the subscription, tcp (default 8443; Caddy needs port 80 too)
+  --sub-port <port>     the port of the subscription, tcp, also taken on udp by Caddy's HTTP/3
+                        (default 8443; Caddy needs port 80 too)
   --auto-ports          for a port neither given nor remembered: the first free one of a short
                         list (VLESS 443, 2053, 2083, 2087, 2096; Hysteria2 443, 4443, 8443, 10443;
                         Shadowsocks 8388, 8389, 9388; WireGuard 51820, 51821, 51822; the
                         subscription 8443, 9443, 7443) instead of the default
   --reset               new keys, links and subscription address
-  --uninstall           remove the service, sing-box, the settings, the subscription site and
-                        the fail2ban jail of --harden
+  --uninstall           remove the service, sing-box, the settings and the subscription site (the
+                        fail2ban and the updates of --harden stay)
   --json                the output for programs (SplitLane's "Your own VPS" runs the kit with
                         --json --default-protocols vless,hy2 --auto-ports --harden --subscription):
                         one JSON object per line on stdout, the text on stderr
@@ -256,8 +259,10 @@ sha256() {
 	printf '%s' "${s%% *}"
 }
 
-# apt-get with the usual umask: packages and their scripts must not get the 077 of this script.
-apt_get() { (umask 022 && DEBIAN_FRONTEND=noninteractive apt-get "$@"); }
+# apt-get with the usual umask: packages and their scripts must not get the 077 of this script. It
+# waits up to 3 minutes for the lock of dpkg, which a fresh VPS often holds for its own first
+# updates.
+apt_get() { (umask 022 && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=180 "$@"); }
 
 # The value after "<name>: " in the output of sing-box generate.
 field() { sed -n "s/^$1: //p" <<<"$2"; }
@@ -1202,8 +1207,8 @@ drop_subscription_site() {
 
 # fail2ban for SSH and the distribution's automatic updates; nothing in the settings of SSH
 # changes. A failure is the warning harden_failed: the VPN server works without them. A re-run
-# writes the same jail again and leaves an existing 20auto-upgrades as it is. A dry run writes the
-# files under its directory, without apt and systemctl.
+# writes the jail again (with the SSH sessions of its time) and leaves an existing 20auto-upgrades
+# as it is. A dry run writes the files under its directory, without apt and systemctl.
 harden() {
 	local why=""
 	step harden start "fail2ban for SSH, automatic security updates"
@@ -1238,16 +1243,54 @@ harden_packages() {
 }
 
 # The jail of the kit: sshd on the journal of systemd, since Debian 12 has no auth.log. The bans
-# are fail2ban's defaults: 5 failed logins within 10 minutes ban the address for 10 minutes.
+# are fail2ban's defaults: 5 failed logins within 10 minutes ban the address for 10 minutes. On
+# its start fail2ban reads the journal back those 10 minutes, so the mistyped passwords just before
+# this run would ban the session that runs it: the addresses connected over SSH now are exempt (a
+# re-run writes the ones of its own time).
 write_jail() {
-	cat >"$TMP/jail" <<'EOF' || return 1
-# Added by the SplitLane server kit (install-singbox-server.sh --harden); --uninstall removes it.
+	local peers
+	peers=$(ssh_peers)
+	cat >"$TMP/jail" <<EOF || return 1
+# Added by the SplitLane server kit (install-singbox-server.sh --harden); --uninstall leaves it.
 [sshd]
 enabled = true
 backend = systemd
+# This machine and the SSH sessions open during the kit's last run are never banned.
+ignoreip = 127.0.0.1/8 ::1${peers:+ $peers}
 EOF
 	(umask 022 && mkdir -p -- "$(dirname -- "$ROOT$P_JAIL")") || return 1
 	install -m 0644 "$TMP/jail" "$ROOT$P_JAIL"
+}
+
+# The addresses of the SSH connections established now (to a port sshd listens on), each once,
+# separated by spaces: IPv4, or IPv6 without brackets and scope; an IPv4-mapped IPv6 address
+# becomes IPv4. ss tells, since sudo drops $SSH_CLIENT.
+ssh_peers() {
+	command -v ss >/dev/null 2>&1 || return 0
+	local state local_addr peer users out=""
+	local -A ports=() seen=()
+	while read -r state _ _ local_addr _ users; do
+		if [[ $state == LISTEN && $users == *'"sshd",'* ]]; then
+			ports[${local_addr##*:}]=1
+		fi
+	done < <(ss -H -ltnp 2>/dev/null || true)
+	while read -r state _ _ local_addr peer _; do
+		if [[ $state != ESTAB || -z ${ports[${local_addr##*:}]:-} ]]; then
+			continue
+		fi
+		peer=${peer%:*}
+		peer=${peer#[}
+		peer=${peer%]}
+		peer=${peer%%%*}
+		if [[ ${peer,,} == ::ffff:* ]] && is_ipv4 "${peer:7}"; then
+			peer=${peer:7}
+		fi
+		if { is_ipv4 "$peer" || is_ipv6 "$peer"; } && [[ -z ${seen[$peer]:-} ]]; then
+			seen[$peer]=1
+			out+="${out:+ }$peer"
+		fi
+	done < <(ss -H -tn 2>/dev/null || true)
+	printf '%s' "$out"
 }
 
 # Turns on the daily package lists and unattended-upgrades (which installs the security updates of
@@ -1330,12 +1373,10 @@ uninstall() {
 			warn "left $P_CADDY_SITE: the Caddyfile still imports it"
 		fi
 	fi
+	# The protection of --harden stays: without the kit's jail, the sshd jail of Debian 12's own
+	# fail2ban looks for an auth.log the system lacks, and fail2ban would not start again.
 	if [[ -f $ROOT$P_JAIL ]]; then
-		rm -f -- "$ROOT$P_JAIL"
-		if ((!DRY_RUN)) && systemctl is-active --quiet fail2ban; then
-			systemctl reload fail2ban || warn "fail2ban did not reload without the kit's jail (on Debian 12 its own sshd jail needs /var/log/auth.log): remove fail2ban or give it a jail of your own; see: systemctl status fail2ban"
-		fi
-		say "Removed the kit's fail2ban jail ($P_JAIL); fail2ban and automatic updates stay"
+		say "fail2ban with the kit's jail for SSH ($P_JAIL) and the automatic updates stay"
 	fi
 	rm -rf -- "$ROOT$P_WWW_ROOT"
 	if [[ -d $ROOT$P_STATE ]]; then
