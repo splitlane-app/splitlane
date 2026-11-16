@@ -42,7 +42,7 @@ Out of scope: a custom domain (can be added later), analytics or any tracking on
 
 ## 5. Launch texts (not committed)
 
-- Drafts for r/selfhosted (the "Your own VPS" kit + split routing) and for "Show HN", written to a local file outside git and handed to the owner, who posts them from his accounts. Each draft: what it is, why (the launcher/game ping example), what is novel (one-click VPS with a phone QR, any protocol via sing-box), honest limits (Windows only, unsigned for now), links to the site and the repo. Reddit-friendly tone: "I built …", no marketing language.
+- Drafts for r/selfhosted (the "Your own VPS" kit + split routing) and for "Show HN", written to a local file outside git and handed to the owner, who posts them from their own accounts. Each draft: what it is, why (the launcher/game ping example), what is novel (one-click VPS with a phone QR, any protocol via sing-box), honest limits (Windows only, unsigned for now), links to the site and the repo. Reddit-friendly tone: "I built …", no marketing language.
 
 ## 6. Verification
 
