@@ -50,7 +50,7 @@ test('the key field: Add waits for a text, says it is adding, then shows the sum
   const services = servicesFor(bridge, withState())
   renderWith(<ProxyPanel mode="key" />, services)
 
-  expect(screen.getByText('По одной ссылке в строке или один адрес подписки https://')).toBeTruthy()
+  expect(screen.getByText('Ссылки по одной в строке и текст файла WireGuard, или один адрес подписки https://')).toBeTruthy()
   const add = (): HTMLButtonElement => screen.getByRole('button', { name: /^(Добавить|Добавляю…)$/ }) as HTMLButtonElement
   expect(add().disabled).toBe(true)
   fireEvent.change(field(), { target: { value: '  \n ' } })

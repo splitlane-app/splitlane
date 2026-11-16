@@ -129,6 +129,10 @@ export const en: Record<Key, string> = {
   'banner.restoreHint': 'Run this in Command Prompt:',
   'banner.error': "Couldn't turn on split routing: {reason}",
   'banner.errorUnknown': "Couldn't turn on split routing",
+  // under a failed tunnel check of a server: {protocol} is its name, such as Shadowsocks
+  'banner.proxyMaybeBlocked':
+    'If the server is running, your provider may be blocking {protocol}. Try VLESS + Reality or Hysteria2',
+  'banner.proxyCheckServer': 'Check that the server is running and its ports are open',
   'banner.allDirect': '“All direct” is on: every program bypasses the VPN',
   'banner.restarting': 'The service is restarting…',
   'banner.unresponsive': 'The service is not responding',
@@ -351,7 +355,7 @@ export const en: Record<Key, string> = {
 
   // keys, subscriptions and WireGuard files (stage 3 spec 6); a number follows its label, so no plural forms
   'proxy.textLabel': 'Links or a subscription address',
-  'proxy.textHint': 'One link per line, or one https:// subscription address',
+  'proxy.textHint': 'Links one per line and the text of a WireGuard file, or one https:// subscription address',
   'proxy.add': 'Add',
   'proxy.adding': 'Adding…',
   'proxy.chooseFile': 'Choose a .conf file…',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { HelperState, Phase, Reason } from '../../shared/protocol'
+import type { HelperState, Phase, ProxyServer, Reason } from '../../shared/protocol'
 import type { LinkStatus } from '../../shared/status'
 import { setLang, t } from '../i18n/t'
 import { bannerFor } from './banners'
@@ -117,6 +117,34 @@ describe('bannerFor and the name of the server', () => {
     expect(bannerFor(ready, s, { id: 'n1', name: 'node-a' })?.title).toBe(t('banner.degraded', { name: 'node-a' }))
     // a name remembered for another node is not used
     expect(bannerFor(ready, s, { id: 'n9', name: 'other' })?.title).toBe(t('banner.degradedUnnamed'))
+  })
+
+  it('hints under a failed tunnel check of a server: the provider may block the protocol, unless it is a disguised one', () => {
+    const proxy = (protocol: ProxyServer['protocol'], code: Reason['code']): HelperState =>
+      state(
+        'error',
+        {
+          connector: 'proxy',
+          proxy: { servers: [{ id: '0123456789abcdef', name: 'edge', protocol, source: 'manual' }], selected: '0123456789abcdef', subscriptions: [] }
+        },
+        { code, params: {} }
+      )
+    expect(bannerFor(ready, proxy('shadowsocks', 'tunnel_not_proven'))?.detail).toBe(
+      'Если сервер работает, провайдер может блокировать Shadowsocks. Попробуйте VLESS + Reality или Hysteria2'
+    )
+    expect(bannerFor(ready, proxy('wireguard', 'switch_check_failed'))?.detail).toBe(
+      t('banner.proxyMaybeBlocked', { protocol: 'WireGuard' })
+    )
+    expect(bannerFor(ready, proxy('vless', 'tunnel_not_proven'))?.detail).toBe('Проверьте, что сервер работает и его порты открыты')
+    expect(bannerFor(ready, proxy('hysteria2', 'switch_check_failed'))?.detail).toBe(t('banner.proxyCheckServer'))
+    // other reasons, and the Tailscale connector, get no hint
+    expect(bannerFor(ready, proxy('shadowsocks', 'config_invalid'))?.detail).toBeUndefined()
+    expect(bannerFor(ready, state('error', {}, { code: 'tunnel_not_proven', params: {} }))?.detail).toBeUndefined()
+    setLang('en')
+    expect(bannerFor(ready, proxy('shadowsocks', 'tunnel_not_proven'))?.detail).toBe(
+      'If the server is running, your provider may be blocking Shadowsocks. Try VLESS + Reality or Hysteria2'
+    )
+    setLang('ru')
   })
 
   it('says no_server neutrally: none selected, or the selected one no longer usable; on the board and the wizard alike', () => {

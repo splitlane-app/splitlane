@@ -126,6 +126,9 @@ export const ru = {
   'banner.restoreHint': 'Выполните в командной строке:',
   'banner.error': 'Не удалось включить: {reason}',
   'banner.errorUnknown': 'Не удалось включить',
+  // under a failed tunnel check of a server: {protocol} is its name, such as Shadowsocks
+  'banner.proxyMaybeBlocked': 'Если сервер работает, провайдер может блокировать {protocol}. Попробуйте VLESS + Reality или Hysteria2',
+  'banner.proxyCheckServer': 'Проверьте, что сервер работает и его порты открыты',
   'banner.allDirect': 'Включён режим «всё напрямую»: все программы идут без VPN',
   'banner.restarting': 'Служебный процесс перезапускается…',
   'banner.unresponsive': 'Служебный процесс не отвечает',
@@ -345,7 +348,7 @@ export const ru = {
 
   // keys, subscriptions and WireGuard files (stage 3 spec 6); a number follows its label, so no plural forms
   'proxy.textLabel': 'Ссылки или адрес подписки',
-  'proxy.textHint': 'По одной ссылке в строке или один адрес подписки https://',
+  'proxy.textHint': 'Ссылки по одной в строке и текст файла WireGuard, или один адрес подписки https://',
   'proxy.add': 'Добавить',
   'proxy.adding': 'Добавляю…',
   'proxy.chooseFile': 'Выбрать файл .conf…',

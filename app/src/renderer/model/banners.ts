@@ -1,8 +1,9 @@
-import type { HelperState } from '../../shared/protocol'
+import type { HelperState, ProxyProtocol } from '../../shared/protocol'
 import type { LastExitNode } from '../../shared/settings'
 import type { LinkStatus } from '../../shared/status'
 import { t } from '../i18n/t'
-import { laneServerName } from './connect'
+import { laneServerName, selectedServer } from './connect'
+import { protocolLabel } from './proxy'
 
 export { selectedExitNodeName } from './connect'
 
@@ -66,13 +67,34 @@ export function bannerFor(link: LinkStatus, state: HelperState | null, last: Las
       if (command) banner.command = command
       return banner
     }
-    case 'error':
-      return {
+    case 'error': {
+      const banner: Banner = {
         tone: 'error',
         title: state.reason
           ? t('banner.error', { reason: t(`reason.${state.reason.code}`) })
           : t('banner.errorUnknown'),
         actions: ['retry', 'saveLog']
       }
+      const hint = tunnelHint(state)
+      if (hint !== null) banner.detail = hint
+      return banner
+    }
   }
+}
+
+/**
+ * The protocols that pass for ordinary TLS or QUIC. In the live check of stage 3 a provider's DPI let
+ * these through and cut Shadowsocks and WireGuard to the same server, which a failed check can't tell
+ * from a server that is down.
+ */
+const DISGUISED: ReadonlySet<ProxyProtocol> = new Set<ProxyProtocol>(['vless', 'hysteria2'])
+
+/** The hint under a failed tunnel check of the selected server (enable or switch); null otherwise. */
+function tunnelHint(state: HelperState): string | null {
+  const code = state.reason?.code
+  if (state.connector !== 'proxy' || (code !== 'tunnel_not_proven' && code !== 'switch_check_failed')) return null
+  const server = selectedServer(state)
+  if (server === null) return null
+  if (DISGUISED.has(server.protocol)) return t('banner.proxyCheckServer')
+  return t('banner.proxyMaybeBlocked', { protocol: protocolLabel(server.protocol) })
 }
