@@ -16,7 +16,7 @@ afterEach(() => {
 const SUB: Subscription = { id: 'sub-0123456789abcdef', name: '203-0-113-10.sslip.io', updatedAt: '2026-11-16T10:00:00Z', count: 2, error: null }
 const A = proxyServer('0123456789abcdef', 'SplitLane-VLESS', { source: SUB.id })
 const B = proxyServer('fedcba9876543210', 'SplitLane-Hysteria2', { protocol: 'hysteria2', source: SUB.id })
-const DONE: VpsOutcome = { kind: 'done', servers: 2, subscriptionId: SUB.id, warnings: [] }
+const DONE: VpsOutcome = { kind: 'done', servers: 2, added: 2, subscriptionId: SUB.id, warnings: [] }
 
 const at = (s: HelperState, once = false): Snapshot => ({ ...snap(), state: s, settings: { ...DEFAULT_SETTINGS, connectedOnce: once } })
 const firstRun = (): HelperState =>

@@ -174,7 +174,7 @@ describe('the steps', () => {
       { step: 'install', state: 'start' }
     ])
     const ended = (o: VpsOutcome): string[] => views(runEnd(running, o, 5000))
-    expect(ended({ kind: 'done', servers: 2, subscriptionId: null, warnings: [] })[2]).toBe('done')
+    expect(ended({ kind: 'done', servers: 2, added: 2, subscriptionId: null, warnings: [] })[2]).toBe('done')
     expect(ended({ kind: 'cancelled' })[2]).toBe('cancelled')
     expect(ended({ kind: 'failed', code: 'kit_failed' })[2]).toBe('failed')
     // what had ended stays as it was, what never started stays waiting
@@ -347,9 +347,19 @@ describe('the texts of the end', () => {
   })
 
   it('the notice of an end that no screen showed', () => {
-    expect(vpsNotice({ kind: 'done', servers: 2, subscriptionId: 'sub-0123456789abcdef', warnings: [] }, false)).toBe(
+    expect(vpsNotice({ kind: 'done', servers: 2, added: 2, subscriptionId: 'sub-0123456789abcdef', warnings: [] }, false)).toBe(
       'Готово. Добавлено серверов: 2'
     )
+    expect(vpsNotice({ kind: 'done', servers: 2, added: 0, subscriptionId: null, warnings: [] }, false)).toBe(
+      'Готово. Эти серверы уже были в списке: 2'
+    )
+    expect(vpsNotice({ kind: 'done', servers: 3, added: 1, subscriptionId: null, warnings: [] }, false)).toBe('Готово. Добавлено серверов: 1')
+    setLang('en')
+    expect(vpsNotice({ kind: 'done', servers: 2, added: 0, subscriptionId: null, warnings: [] }, false)).toBe(
+      'Done. These servers were already in the list: 2'
+    )
+    expect(vpsNotice({ kind: 'done', servers: 3, added: 1, subscriptionId: null, warnings: [] }, false)).toBe('Done. Servers added: 1')
+    setLang('ru')
     expect(vpsNotice({ kind: 'cancelled' }, false)).toBe('Настройка отменена')
     expect(vpsNotice(failed('ssh_auth'), true)).toBe('Сервер не принял логин или ключ')
   })

@@ -388,6 +388,6 @@ export class VpsSetup {
     if (!sel.ok) return fail(sel.error.code)
     const warnings = done.subscription !== null && viaLinks ? [...new Set([...done.warnings, 'sub_unreachable'])] : done.warnings
     this.d.emit({ step: 'add', state: 'done' })
-    return { kind: 'done', servers: servers.length, subscriptionId: subscription, warnings }
+    return { kind: 'done', servers: servers.length, added: added.result.added.length, subscriptionId: subscription, warnings }
   }
 }

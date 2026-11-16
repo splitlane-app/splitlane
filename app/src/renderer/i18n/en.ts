@@ -455,6 +455,7 @@ export const en: Record<Key, string> = {
   'vps.retry': 'Try again',
   // the result; a number follows its label, so no plural forms
   'vps.done': 'Done. Servers added: {n}',
+  'vps.done.existing': 'Done. These servers were already in the list: {n}',
   'vps.warn.harden_failed': "Couldn't set up the server protection. The VPN works without it",
   'vps.warn.sub_unreachable':
     "Couldn't connect a phone: the subscription on the server didn't answer in time. Your hosting provider may be blocking port 80 or the subscription port. This PC can connect without it",

@@ -217,9 +217,14 @@ export function vpsErrorText(code: string, detail: string | undefined, useKey: b
   return t(`vps.error.${code}` as Key)
 }
 
+/** The result line of a done setup: the servers added, or, when every one was in the list already, how many those are. */
+export function vpsDoneText(o: { servers: number; added: number }): string {
+  return o.added > 0 ? t('vps.done', { n: o.added }) : t('vps.done.existing', { n: o.servers })
+}
+
 /** The notice of an end that no screen showed (the screen went meanwhile): the number of servers, or what went wrong. */
 export function vpsNotice(o: VpsOutcome, useKey: boolean): string {
-  if (o.kind === 'done') return t('vps.done', { n: o.servers })
+  if (o.kind === 'done') return vpsDoneText(o)
   if (o.kind === 'cancelled') return t('vps.error.cancelled')
   return vpsErrorText(o.code, o.detail, useKey)
 }

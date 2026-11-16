@@ -85,7 +85,7 @@ function start(addr = '203.0.113.10'): void {
   fireEvent.click(setUp())
 }
 
-const DONE: VpsOutcome = { kind: 'done', servers: 2, subscriptionId: 'sub-0123456789abcdef', warnings: [] }
+const DONE: VpsOutcome = { kind: 'done', servers: 2, added: 2, subscriptionId: 'sub-0123456789abcdef', warnings: [] }
 
 test('the form: the hint of the hosting, the fields, root as the login, the password way in', () => {
   const { bridge } = vpsBridge()
@@ -215,7 +215,7 @@ test('the progress: six steps, each waiting, in progress, done, skipped or not w
   await act(async () => {
     vi.advanceTimersByTime(3_000)
   })
-  await v.answer({ kind: 'done', servers: 2, subscriptionId: null, warnings: ['harden_failed', 'sub_skipped'] })
+  await v.answer({ kind: 'done', servers: 2, added: 2, subscriptionId: null, warnings: ['harden_failed', 'sub_skipped'] })
   // no subscription, no button
   expect(screen.queryByRole('button', { name: 'Подключить телефон' })).toBeNull()
   expect(items()).toEqual([
@@ -263,6 +263,17 @@ test('the result with a subscription: the number of servers, no warning, and the
   expect(screen.queryByRole('button', { name: 'Отменить' })).toBeNull()
 })
 
+test('a re-setup that added nothing says the servers were already in the list', async () => {
+  const v = vpsBridge()
+  const listed = proxyState([proxyServer('0123456789abcdef', 'a')], null, [], { phase: 'off' })
+  renderWith(<VpsPanel />, servicesFor(v.bridge, { ...snap(), state: listed }))
+  start()
+  await v.answer({ kind: 'done', servers: 2, added: 0, subscriptionId: null, warnings: [] })
+  const status = screen.getByRole('status')
+  expect(within(status).getByText('Готово. Эти серверы уже были в списке: 2')).toBeTruthy()
+  expect(within(status).queryByText(/Добавлено серверов/)).toBeNull()
+})
+
 test('the result without a subscription says why the phone cannot connect; the wizard shows no list', async () => {
   for (const [warning, part] of [
     ['sub_unreachable', 'подписка на сервере не ответила вовремя'],
@@ -273,7 +284,7 @@ test('the result without a subscription says why the phone cannot connect; the w
     const listed = proxyState([proxyServer('0123456789abcdef', 'a')], null, [], { phase: 'off' })
     renderWith(<VpsPanel />, servicesFor(v.bridge, { ...snap(), state: listed }))
     start()
-    await v.answer({ kind: 'done', servers: 1, subscriptionId: null, warnings: [warning, 'harden_failed'] })
+    await v.answer({ kind: 'done', servers: 1, added: 1, subscriptionId: null, warnings: [warning, 'harden_failed'] })
     const status = screen.getByRole('status')
     expect(within(status).getByText('Готово. Добавлено серверов: 1')).toBeTruthy()
     expect(within(status).getByText(/^Телефон подключить не получилось: /).textContent, warning).toContain(part)

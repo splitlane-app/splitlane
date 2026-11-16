@@ -143,7 +143,7 @@ describe('a successful setup', () => {
     t.c.line({ step: 'subscription', state: 'skip' })
     t.c.line(DONE)
     t.c.close(0)
-    expect(await p).toEqual({ kind: 'done', servers: 2, subscriptionId: SUB, warnings: ['sub_unreachable'] })
+    expect(await p).toEqual({ kind: 'done', servers: 2, added: 1, subscriptionId: SUB, warnings: ['sub_unreachable'] })
     expect(t.events).toEqual([
       { step: 'connect', state: 'start' },
       { step: 'connect', state: 'done', detail: 'ok' },
@@ -166,7 +166,7 @@ describe('a successful setup', () => {
     await t.started(p)
     t.c.line({ done: { subscription: null, links: LINKS, warnings: [] } })
     t.c.close(0)
-    expect(await p).toEqual({ kind: 'done', servers: 1, subscriptionId: null, warnings: [] })
+    expect(await p).toEqual({ kind: 'done', servers: 1, added: 1, subscriptionId: null, warnings: [] })
     expect(t.calls[0]).toEqual(['proxy.add', { text: LINKS }])
   })
 
@@ -180,7 +180,7 @@ describe('a successful setup', () => {
     await t.started(p)
     t.c.line({ done: { subscription: null, links: LINKS, warnings: [] } })
     t.c.close(0)
-    expect(await p).toMatchObject({ kind: 'done', servers: 2 })
+    expect(await p).toEqual({ kind: 'done', servers: 2, added: 0, subscriptionId: null, warnings: [] })
     expect(t.calls[1]).toEqual(['proxy.select', { id: SRV_A }])
   })
 
@@ -273,7 +273,7 @@ describe('the subscription falls back to the links (ruling 17)', () => {
     await t.started(p)
     t.c.line({ done: { subscription: SUB_URL, links: LINKS, warnings: ['harden_failed', 'sub_unreachable'] } })
     t.c.close(0)
-    expect(await p).toEqual({ kind: 'done', servers: 1, subscriptionId: null, warnings: ['harden_failed', 'sub_unreachable'] })
+    expect(await p).toEqual({ kind: 'done', servers: 1, added: 1, subscriptionId: null, warnings: ['harden_failed', 'sub_unreachable'] })
     expect(t.calls).toEqual([
       ['proxy.add', { text: SUB_URL }],
       ['proxy.add', { text: LINKS }],
@@ -292,7 +292,23 @@ describe('the subscription falls back to the links (ruling 17)', () => {
     await t.started(p)
     t.c.line({ done: { subscription: SUB_URL, links: LINKS, warnings: [] } })
     t.c.close(0)
-    expect(await p).toEqual({ kind: 'done', servers: 1, subscriptionId: null, warnings: ['sub_unreachable'] })
+    expect(await p).toEqual({ kind: 'done', servers: 1, added: 1, subscriptionId: null, warnings: ['sub_unreachable'] })
+  })
+
+  test('the links fallback counts what its own proxy.add added (nothing new: added 0)', async () => {
+    const t = setup()
+    t.link.call.mockImplementation(async (m: string, p?: object) => {
+      t.calls.push([m, p])
+      if (m !== 'proxy.add') return {}
+      return (p as { text: string }).text === SUB_URL
+        ? result({ added: [], servers: [], subscription: null })
+        : result({ added: [], existing: 1, servers: [SRV_B] })
+    })
+    const p = t.vs.setup({ ...req })
+    await t.started(p)
+    t.c.line({ done: { subscription: SUB_URL, links: LINKS, warnings: [] } })
+    t.c.close(0)
+    expect(await p).toEqual({ kind: 'done', servers: 1, added: 0, subscriptionId: null, warnings: ['sub_unreachable'] })
   })
 
   test('both refused: add_failed with the code of the links attempt', async () => {

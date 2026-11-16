@@ -65,7 +65,7 @@ export interface VpsRequest {
   keyPassphrase?: string
 }
 export type VpsOutcome =
-  | { kind: 'done'; servers: number; subscriptionId: string | null; warnings: string[] }
+  | { kind: 'done'; servers: number; added: number; subscriptionId: string | null; warnings: string[] }
   | { kind: 'failed'; code: string; detail?: string }
   | { kind: 'cancelled' }
 

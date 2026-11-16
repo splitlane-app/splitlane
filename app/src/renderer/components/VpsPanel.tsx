@@ -11,6 +11,7 @@ import {
   runEnd,
   runEvent,
   runMoved,
+  vpsDoneText,
   vpsErrorText,
   vpsNotice,
   vpsRequest,
@@ -262,7 +263,7 @@ export function VpsPanel({ showList = false }: { showList?: boolean }): React.JS
         {outcome?.kind === 'done' && (
           <>
             <div ref={at('result')} className={styles.result} role="status" tabIndex={-1}>
-              <p className={styles.done}>{t('vps.done', { n: outcome.servers })}</p>
+              <p className={styles.done}>{vpsDoneText(outcome)}</p>
               {warningTexts(outcome.warnings).map((w) => (
                 <p key={w} className={styles.warning}>
                   {w}
