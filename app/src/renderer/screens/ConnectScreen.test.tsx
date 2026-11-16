@@ -114,6 +114,28 @@ test('a login request waits for its link, and a failure or a logout drops it', a
   expect(openLogin).toHaveBeenCalledTimes(1)
 })
 
+test('a Tailscale user whose routing is stopping with the login gone sees the note, not a login answered busy', () => {
+  // «Выключить деление и войти»: the login comes once routing is off
+  const stopping = withTs(
+    { backend: 'stopped', exitNodes: [], selectedExitNode: null, path: null },
+    { phase: 'stopping', reason: { code: 'login_expired', params: {} } },
+    true
+  )
+  for (const ui of [<ConnectionScreen key="c" />, <ConnectScreen key="w" />]) {
+    const { bridge, commands } = fakeBridge()
+    renderWith(ui, servicesFor(bridge, stopping))
+    expect(screen.getByText('Войти в Tailscale можно, когда деление выключено')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Войти в Tailscale' })).toBeNull()
+    expect(commands).toEqual([])
+    cleanup()
+  }
+  // once routing is off the button is back
+  const { bridge } = fakeBridge()
+  renderWith(<ConnectScreen />, servicesFor(bridge, { ...stopping, state: { ...stopping.state!, phase: 'off' } }))
+  expect(screen.getByRole('button', { name: 'Войти в Tailscale' })).toBeTruthy()
+  expect(screen.queryByText('Войти в Tailscale можно, когда деление выключено')).toBeNull()
+})
+
 test('ConnectScreen waits for the approval of the node', () => {
   const { bridge } = fakeBridge()
   renderWith(<ConnectScreen />, servicesFor(bridge, withTs({ backend: 'needs_approval' })))

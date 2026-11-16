@@ -50,7 +50,7 @@ const (
 	CodeMissingField         = "missing_field"         // a required part is absent
 	CodeBadWireGuard         = "bad_wireguard"         // a malformed .conf
 	CodeAmneziaWG            = "amneziawg"             // AmneziaWG parameters in a .conf
-	CodeWireGuardPartial     = "wireguard_partial"     // a .conf whose AllowedIPs leave part of IPv4 off the tunnel
+	CodeWireGuardPartial     = "wireguard_partial"     // a .conf whose AllowedIPs leave part of public IPv4 off the tunnel
 	CodePlugin               = "plugin"                // a Shadowsocks plugin (SIP003)
 	CodeTooLong              = "too_long"              // over a size limit
 )

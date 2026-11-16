@@ -1,9 +1,11 @@
 package connector
 
 import (
+	"encoding/binary"
 	"errors"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -82,8 +84,68 @@ func TestParseWireGuardConf(t *testing.T) {
 	}
 }
 
-// The AllowedIPs of a .conf must together cover all of IPv4: the ranges are joined, not matched as text.
-func TestCoversIPv4(t *testing.T) {
+// androidExcludePrivate is the AllowedIPs the WireGuard apps write with "Exclude private IPs": every
+// public range, without 10/8, 172.16/12, 192.168/16, 224/3 and the like.
+var androidExcludePrivate = []string{"0.0.0.0/5", "8.0.0.0/7", "11.0.0.0/8", "12.0.0.0/6", "16.0.0.0/4", "32.0.0.0/3",
+	"64.0.0.0/2", "128.0.0.0/3", "160.0.0.0/5", "168.0.0.0/6", "172.0.0.0/12", "172.32.0.0/11", "172.64.0.0/10",
+	"172.128.0.0/9", "173.0.0.0/8", "174.0.0.0/7", "176.0.0.0/4", "192.0.0.0/9", "192.128.0.0/11", "192.160.0.0/13",
+	"192.169.0.0/16", "192.170.0.0/15", "192.172.0.0/14", "192.176.0.0/12", "192.192.0.0/10", "193.0.0.0/8",
+	"194.0.0.0/7", "196.0.0.0/6", "200.0.0.0/5", "208.0.0.0/4"}
+
+// reversed is a reversed copy of list.
+func reversed(list []string) []string {
+	out := slices.Clone(list)
+	slices.Reverse(out)
+	return out
+}
+
+// without is list with the prefix p left out.
+func without(list []string, p string) []string {
+	var out []string
+	for _, x := range list {
+		if x != p {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// allBut is the fewest prefixes that cover all of IPv4 but the one address a.
+func allBut(a string) []netip.Prefix {
+	x := uint64(binary.BigEndian.Uint32(netip.MustParseAddr(a).AsSlice()))
+	var out []netip.Prefix
+	if x > 0 {
+		out = append(out, spanPrefixes(0, x-1)...)
+	}
+	if x < 1<<32-1 {
+		out = append(out, spanPrefixes(x+1, 1<<32-1)...)
+	}
+	return out
+}
+
+// spanPrefixes is the fewest prefixes that cover the addresses from..to.
+func spanPrefixes(from, to uint64) []netip.Prefix {
+	var out []netip.Prefix
+	for from <= to {
+		bits := 32
+		for bits > 0 {
+			size := uint64(1) << (33 - bits)
+			if from%size != 0 || from+size-1 > to {
+				break
+			}
+			bits--
+		}
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], uint32(from))
+		out = append(out, netip.PrefixFrom(netip.AddrFrom4(b), bits))
+		from += 1 << (32 - bits)
+	}
+	return out
+}
+
+// The AllowedIPs of a .conf must together cover all public IPv4: the ranges are joined, not matched as
+// text, and the private, shared, loopback, link-local, multicast and reserved ranges may be left out.
+func TestCoversPublicIPv4(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		prefixes []string
@@ -95,29 +157,79 @@ func TestCoversIPv4(t *testing.T) {
 		{"the /1 halves the other way round", []string{"128.0.0.0/1", "0.0.0.0/1"}, true},
 		{"the quarters", []string{"192.0.0.0/2", "0.0.0.0/2", "128.0.0.0/2", "64.0.0.0/2"}, true},
 		{"overlapping prefixes", []string{"0.0.0.0/1", "10.0.0.0/8", "64.0.0.0/2", "128.0.0.0/1", "255.255.255.255/32"}, true},
+		{`"Exclude private IPs" of the WireGuard apps`, androidExcludePrivate, true},
+		{"the same, the other way round, with IPv6", append([]string{"::/1", "8000::/1"}, reversed(androidExcludePrivate)...), true},
+		{"the same without a public /7", without(androidExcludePrivate, "8.0.0.0/7"), false},
+		{"the same without a public /8", without(androidExcludePrivate, "193.0.0.0/8"), false},
+		{"the same without 169.254-171.255", without(androidExcludePrivate, "168.0.0.0/6"), false},
 		{"everything but 10.0.0.0/8", []string{"0.0.0.0/5", "8.0.0.0/7", "11.0.0.0/8", "12.0.0.0/6",
-			"16.0.0.0/4", "32.0.0.0/3", "64.0.0.0/2", "128.0.0.0/1"}, false},
+			"16.0.0.0/4", "32.0.0.0/3", "64.0.0.0/2", "128.0.0.0/1"}, true},
+		{"everything below 224.0.0.0", []string{"0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/3"}, true},
 		{"one half", []string{"0.0.0.0/1"}, false},
-		{"the last address left out", []string{"0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/3", "224.0.0.0/4", "240.0.0.0/5", "248.0.0.0/6",
-			"252.0.0.0/7", "254.0.0.0/8", "255.0.0.0/9", "255.128.0.0/10", "255.192.0.0/11", "255.224.0.0/12", "255.240.0.0/13",
-			"255.248.0.0/14", "255.252.0.0/15", "255.254.0.0/16", "255.255.0.0/17", "255.255.128.0/18", "255.255.192.0/19",
-			"255.255.224.0/20", "255.255.240.0/21", "255.255.248.0/22", "255.255.252.0/23", "255.255.254.0/24", "255.255.255.0/25",
-			"255.255.255.128/26", "255.255.255.192/27", "255.255.255.224/28", "255.255.255.240/29", "255.255.255.248/30",
-			"255.255.255.252/31", "255.255.255.254/32"}, false},
-		{"the same with the last address", []string{"0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/3", "224.0.0.0/4", "240.0.0.0/5",
-			"248.0.0.0/6", "252.0.0.0/7", "254.0.0.0/8", "255.0.0.0/9", "255.128.0.0/10", "255.192.0.0/11", "255.224.0.0/12",
-			"255.240.0.0/13", "255.248.0.0/14", "255.252.0.0/15", "255.254.0.0/16", "255.255.0.0/17", "255.255.128.0/18",
-			"255.255.192.0/19", "255.255.224.0/20", "255.255.240.0/21", "255.255.248.0/22", "255.255.252.0/23", "255.255.254.0/24",
-			"255.255.255.0/25", "255.255.255.128/26", "255.255.255.192/27", "255.255.255.224/28", "255.255.255.240/29",
-			"255.255.255.248/30", "255.255.255.252/31", "255.255.255.254/32", "255.255.255.255/32"}, true},
+		{"the upper half", []string{"128.0.0.0/1"}, false},
 		{"a private network", []string{"10.0.0.0/8"}, false},
+		{"all the private networks", []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}, false},
 		{"IPv6 only", []string{"::/0"}, false},
 		{"IPv4 written as IPv6", []string{"::ffff:0.0.0.0/96"}, false},
 		{"none", nil, false},
 	} {
-		if got := coversIPv4(prefixes(c.prefixes...)); got != c.want {
+		if got := coversPublicIPv4(prefixes(c.prefixes...)); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
+	}
+	// one address left out: a public one is a gap, one of the ranges that need not go through the server is not
+	for _, c := range []struct {
+		address string
+		want    bool
+	}{
+		{"8.8.8.8", false},
+		{"1.0.0.0", false},
+		{"9.255.255.255", false},
+		{"11.0.0.0", false},
+		{"100.63.255.255", false},
+		{"100.128.0.0", false},
+		{"126.255.255.255", false},
+		{"128.0.0.0", false},
+		{"169.253.255.255", false},
+		{"169.255.0.0", false},
+		{"172.15.255.255", false},
+		{"172.32.0.0", false},
+		{"192.167.255.255", false},
+		{"192.169.0.0", false},
+		{"223.255.255.255", false},
+		{"0.0.0.0", true},
+		{"0.255.255.255", true},
+		{"10.1.2.3", true},
+		{"100.64.0.1", true},
+		{"127.0.0.1", true},
+		{"169.254.1.1", true},
+		{"172.16.0.0", true},
+		{"172.31.255.255", true},
+		{"192.168.1.1", true},
+		{"224.0.0.1", true},
+		{"240.0.0.1", true},
+		{"255.255.255.255", true},
+	} {
+		ps := allBut(c.address)
+		if got := coversPublicIPv4(ps); got != c.want {
+			t.Errorf("all but %s (%d prefixes): %v, want %v", c.address, len(ps), got, c.want)
+		}
+	}
+	if got := coversPublicIPv4(spanPrefixes(0, 1<<32-1)); !got {
+		t.Error("the helper of this test: all of IPv4")
+	}
+}
+
+// A file made with "Exclude private IPs" of the WireGuard apps is full-tunnel for SplitLane: it is taken
+// with its AllowedIPs as written.
+func TestParseWireGuardConfExcludePrivateIPs(t *testing.T) {
+	conf := strings.Replace(wgConf, "AllowedIPs = 0.0.0.0/0, ::/0", "AllowedIPs = "+strings.Join(androidExcludePrivate, ", ")+", ::/0", 1)
+	s, err := ParseWireGuardConf([]byte(conf), "phone.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.WireGuard.Peer.AllowedIPs; len(got) != len(androidExcludePrivate)+1 || got[0] != netip.MustParsePrefix("0.0.0.0/5") {
+		t.Fatalf("AllowedIPs %v", got)
 	}
 }
 
@@ -158,6 +270,8 @@ func TestParseWireGuardConfRejects(t *testing.T) {
 		{"split tunnel", strings.Replace(iface+peer, "0.0.0.0/0", "10.8.0.0/24, 192.168.0.0/16", 1), CodeWireGuardPartial, 0},
 		{"one half of IPv4", strings.Replace(iface+peer, "0.0.0.0/0", "0.0.0.0/1, ::/0", 1), CodeWireGuardPartial, 0},
 		{"IPv6 only", strings.Replace(iface+peer, "0.0.0.0/0", "::/0", 1), CodeWireGuardPartial, 0},
+		{`"Exclude private IPs" without 8.0.0.0/7`,
+			strings.Replace(iface+peer, "0.0.0.0/0", strings.Join(without(androidExcludePrivate, "8.0.0.0/7"), ", "), 1), CodeWireGuardPartial, 0},
 		{"the halves on two lines with a gap", strings.Replace(iface+peer, "AllowedIPs = 0.0.0.0/0", "AllowedIPs = 0.0.0.0/1\nAllowedIPs = 128.0.0.0/2", 1),
 			CodeWireGuardPartial, 0},
 		{"bad mtu", iface + "MTU = 10\n" + peer, CodeBadWireGuard, 4},

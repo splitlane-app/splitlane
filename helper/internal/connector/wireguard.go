@@ -27,8 +27,9 @@ var ignoredInterfaceKeys = map[string]bool{
 
 // ParseWireGuardConf parses a WireGuard .conf with one [Interface] and exactly one [Peer]. Keys and
 // section names are case-insensitive, '#' starts a comment, Address and AllowedIPs may repeat and
-// hold comma lists, a bare address is a host prefix; the AllowedIPs must together cover all of IPv4
-// (wireguard_partial otherwise: the lane sends everything through the server). name is the file's
+// hold comma lists, a bare address is a host prefix; the AllowedIPs must together cover all public
+// IPv4 (wireguard_partial otherwise: the lane sends everything through the server; see
+// notPublicIPv4 for the ranges a file may leave out). name is the file's
 // base name (".conf" is cut, and so is anything up to a '/' or '\'); when it is empty the server is
 // called host:port. The error is always a *Rejection; Line is the line of the problem, 0 when it is
 // the whole file.
@@ -170,7 +171,7 @@ func parseConf(text []byte, name string) (Server, *Rejection) {
 		return fail(0, CodeMissingField, "Endpoint")
 	case len(wg.Peer.AllowedIPs) == 0:
 		return fail(0, CodeMissingField, "AllowedIPs")
-	case !coversIPv4(wg.Peer.AllowedIPs):
+	case !coversPublicIPv4(wg.Peer.AllowedIPs):
 		return fail(0, CodeWireGuardPartial, "AllowedIPs")
 	}
 	if name = confBaseName(name); name == "" {
@@ -179,15 +180,33 @@ func parseConf(text []byte, name string) (Server, *Rejection) {
 	return Server{Name: name, Protocol: ProtocolWireGuard, Host: host, Port: port, Text: normalize(src), WireGuard: &wg}, nil
 }
 
-// coversIPv4 tells whether the IPv4 prefixes among ps together cover all of IPv4, as 0.0.0.0/0 does: the
-// ranges of the prefixes, sorted by their first address and joined, must run from 0.0.0.0 to
-// 255.255.255.255 without a gap (0.0.0.0/1 with 128.0.0.0/1 does; overlaps are fine). A split-tunnel file
-// sends only some addresses through the server, and the lane's other traffic would fail its proof. IPv6
-// prefixes do not count: the lane needs no IPv6 through the server.
-func coversIPv4(ps []netip.Prefix) bool {
+// notPublicIPv4 are the IPv4 ranges a .conf need not send through the server: "this network",
+// private, shared (CGNAT and Tailscale), loopback, link-local, multicast and reserved. SplitLane
+// never sends them through the VPN lane anyway: private, loopback and link-local addresses go direct
+// by a route rule (ip_is_private), 100.64.0.0/10 is kept off its adapter, and 0.0.0.0/8 and
+// 224.0.0.0/3 are not reached over the internet. So a file made with "Exclude private IPs" of the
+// WireGuard apps, which lists every public range but these, is full-tunnel for SplitLane.
+var notPublicIPv4 = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("224.0.0.0/3"),
+}
+
+// coversPublicIPv4 tells whether the IPv4 prefixes among ps together cover all public IPv4, all of
+// IPv4 but notPublicIPv4: the ranges of the prefixes and of notPublicIPv4, sorted by their first
+// address and joined, must run from 0.0.0.0 to 255.255.255.255 without a gap (0.0.0.0/1 with
+// 128.0.0.0/1 does; overlaps are fine). A split-tunnel file sends only some addresses through the
+// server, and the lane's other traffic would fail its proof. IPv6 prefixes do not count: the lane
+// needs no IPv6 through the server.
+func coversPublicIPv4(ps []netip.Prefix) bool {
 	type span struct{ from, to uint64 } // inclusive; uint64, so that the end of IPv4 plus one fits
 	var spans []span
-	for _, p := range ps {
+	for _, p := range append(slices.Clip(ps), notPublicIPv4...) {
 		if !p.Addr().Is4() {
 			continue
 		}

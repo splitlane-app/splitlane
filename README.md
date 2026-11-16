@@ -74,7 +74,7 @@ Links, WireGuard files and subscription addresses are secrets. SplitLane keeps t
 **Limits.**
 
 - Only the protocols and transports listed above. AmneziaWG and OpenVPN aren't supported yet. The `xhttp`, `splithttp` and `kcp` transports, the `http` header over TCP, Shadowsocks plugins and Clash or sing-box subscriptions are rejected with a reason.
-- A WireGuard file must send all addresses through the server: one whose `AllowedIPs` don't cover all of IPv4 (`0.0.0.0/0`, or ranges that add up to it) is rejected.
+- A WireGuard file must send all public addresses through the server: one whose `AllowedIPs` don't cover all public IPv4 is rejected. `0.0.0.0/0` does, and so does the list the WireGuard apps write with "Exclude private IPs" (SplitLane sends local and private addresses directly anyway).
 - Subscriptions are refreshed only when you click **Refresh**, not on a schedule.
 - A server without UDP can't carry the UDP traffic of programs on the VPN lane (games, calls).
 - There is no latency test and no automatic choice of server; one server leads the VPN lane at a time.

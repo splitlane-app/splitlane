@@ -20,9 +20,10 @@ function openLogin({ bridge, store }: Services, url: string): void {
  * The login to Tailscale (spec 9.5, 7), the same on «Подключите VPN» and on «Подключение»: «Войти в Tailscale», then
  * the wait for the browser with «Открыть ссылку снова», then the wait for the approval of the node. The link of a login
  * this page sent goes to the browser by itself, once; any other link (the one the helper keeps after a logout) waits
- * for «Открыть ссылку снова». While routing runs on a server of the proxy list the helper does not start the login (the
- * setup core never runs beside the main core: tailscale.login is wrong_phase, busy while starting or stopping), so a
- * note says when it can instead of the button.
+ * for «Открыть ссылку снова». While routing is not off the helper does not start the login (the setup core never runs
+ * beside the main core: tailscale.login is wrong_phase while live, busy while starting or stopping), so a note says when
+ * it can instead of the button: for a user of the proxy list while routing runs on a server, and for a Tailscale user
+ * whose routing is stopping with the login gone.
  */
 export function TailscaleLogin({ state, step }: { state: HelperState; step: LoginStep }): React.JSX.Element {
   const services = useServices()
@@ -45,7 +46,7 @@ export function TailscaleLogin({ state, step }: { state: HelperState; step: Logi
   }
 
   if (step === 'login') {
-    if (state.connector === 'proxy' && routingLive(state.phase)) {
+    if (routingLive(state.phase)) {
       return (
         <p className={styles.lead} role="note">
           {t('connect.loginBlocked')}
