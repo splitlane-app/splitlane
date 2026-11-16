@@ -52,6 +52,7 @@ import (
 	"splitlane/helper/internal/place"
 	"splitlane/helper/internal/probe"
 	"splitlane/helper/internal/protocol"
+	"splitlane/helper/internal/serversetup"
 	"splitlane/helper/internal/session"
 	"splitlane/helper/internal/singbox"
 	"splitlane/helper/internal/store"
@@ -173,6 +174,11 @@ func (realClock) Now() time.Time                         { return time.Now() }
 func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 func run(args []string) int {
+	if len(args) == 1 && args[0] == "server-setup" {
+		return serverSetup(os.Stdin, os.Stdout, func(ctx context.Context, r serversetup.Request, emit func(serversetup.Event)) (serversetup.Done, *serversetup.Failure) {
+			return serversetup.Run(ctx, r, serversetup.DefaultDeps(version), emit)
+		})
+	}
 	if len(args) > 0 && adminCommands[args[0]] != nil {
 		return admin(args[0], args[1:], os.Stdout)
 	}
