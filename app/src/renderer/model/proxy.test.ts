@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'vitest'
-import { LIMITS, PROXY_PROTOCOLS, PROXY_REJECT_CODES } from '../../shared/protocol'
+import { LIMITS, PROXY_PROTOCOLS, PROXY_REJECT_CODES, type ProxyProtocol } from '../../shared/protocol'
 import { LIMIT_PARAMS, setLang, t } from '../i18n/t'
 import { errorText } from '../store/appStore'
 import { proxyServer, proxyState } from '../testing'
@@ -9,6 +9,7 @@ import {
   FILE_REQUEST,
   isSubscriptionAddress,
   outcomeNotice,
+  nameWithProtocol,
   protocolLabel,
   proxyCall,
   proxyErrorText,
@@ -225,4 +226,21 @@ test('a bridge call that throws is a lost link', async () => {
       throw new Error('gone')
     })
   ).toEqual({ kind: 'failed', error: { code: 'internal', message: 'gone' } })
+})
+
+test('nameWithProtocol appends the protocol unless the name already has its label as a whole word', () => {
+  const name = (n: string, protocol: ProxyProtocol): string =>
+    nameWithProtocol(proxyServer('1', n, { protocol }), ' · ')
+  expect(name('203.0.113.10 VLESS', 'vless')).toBe('203.0.113.10 VLESS')
+  expect(name('Germany vless', 'vless')).toBe('Germany vless')
+  expect(name('VLESS-Reality', 'vless')).toBe('VLESS-Reality')
+  expect(name('Vlessy', 'vless')).toBe('Vlessy · VLESS')
+  expect(name('Germany', 'vless')).toBe('Germany · VLESS')
+  expect(name('203.0.113.10 Hysteria2', 'hysteria2')).toBe('203.0.113.10 Hysteria2')
+  expect(name('Hysteria', 'hysteria2')).toBe('Hysteria · Hysteria2')
+  expect(name('node Shadowsocks', 'shadowsocks')).toBe('node Shadowsocks')
+  expect(name('node WireGuard 2', 'wireguard')).toBe('node WireGuard 2')
+  expect(name('wg', 'wireguard')).toBe('wg · WireGuard')
+  expect(name('VLESS', 'trojan')).toBe('VLESS · Trojan')
+  expect(nameWithProtocol(proxyServer('abc', '', { protocol: 'tuic' }), ' · ')).toBe('abc · TUIC')
 })

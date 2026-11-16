@@ -2,18 +2,19 @@ import type { HelperState } from '../../shared/protocol'
 import type { LastExitNode } from '../../shared/settings'
 import { t } from '../i18n/t'
 import { knownExitNodeName, selectedServer } from '../model/connect'
-import { protocolLabel } from '../model/proxy'
+import { nameWithProtocol } from '../model/proxy'
 import styles from './ConnectionPill.module.css'
 
 /**
  * The parts of the pill (spec 9.1, stage 3 spec 6): «Tailscale · <exit node> · прямое соединение | через
- * ретранслятор», or for the proxy «<server> · <protocol>».
+ * ретранслятор», or for the proxy «<server> · <protocol>»
+ * (the protocol left out when the name already has it).
  */
 export function pillText(state: HelperState, last: LastExitNode | null = null): string {
   if (state.connector === 'proxy') {
     const server = selectedServer(state)
     if (server === null) return t('pill.noServer')
-    return [server.name || server.id, protocolLabel(server.protocol)].join(t('sep'))
+    return nameWithProtocol(server)
   }
   const { selectedExitNode, path } = state.tailscale
   const parts = [t('pill.tailscale'), knownExitNodeName(state, last) ?? selectedExitNode ?? t('pill.noExitNode')]

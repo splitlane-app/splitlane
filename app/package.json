@@ -11,7 +11,9 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run",
     "pack": "electron-builder --win --dir",
-    "dist": "electron-builder --win nsis --publish never"
+    "dist": "electron-builder --win nsis --publish never",
+    "demo:build": "vite build --config vite.demo.config.ts",
+    "demo:capture": "electron scripts/capture-screens.mjs"
   },
   "devDependencies": {
     "@dnd-kit/abstract": "0.5.3",

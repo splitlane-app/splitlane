@@ -27,6 +27,18 @@ export function protocolLabel(protocol: ProxyProtocol): string {
 }
 
 /**
+ * The name of a server with its protocol for one line («name · protocol»): the protocol is left out when the name
+ * already holds its label as a whole word, ignoring case («203.0.113.10 VLESS», «VLESS-Reality»; not «Vlessy»).
+ */
+export function nameWithProtocol(server: ProxyServer, sep: string = t('sep')): string {
+  const name = server.name || server.id
+  const label = protocolLabel(server.protocol)
+  const word = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const named = new RegExp(`(?<![A-Za-z0-9_])${word}(?![A-Za-z0-9_])`, 'i').test(name)
+  return named ? name : [name, label].join(sep)
+}
+
+/**
  * Where a server came from: «вручную», «файл» or the name of its subscription; null for a server whose subscription
  * is no longer in the list (the helper may keep such an orphan for a moment).
  */

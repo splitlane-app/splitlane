@@ -21,3 +21,7 @@ node_modules/
 
 # Windows version resource of the helper, made by scripts/build-helper.ps1 for the build only.
 /helper/cmd/splitlane-helper/*.syso
+
+# The demo window of the screenshots (app/vite.demo.config.ts) and the icons extracted for it from this PC.
+/app/out-demo/
+/app/src/renderer/demo/icons.local.json

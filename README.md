@@ -4,6 +4,10 @@
 
 SplitLane is a Windows app for split routing by program. It puts programs on two lanes, **Via VPN** and **Direct**: programs on the VPN lane go through your VPN, everything else goes directly through your normal connection. The VPN is a Tailscale exit node, a server from a key (a share link), a subscription or a WireGuard file, or a VPS you rent, which SplitLane sets up itself. It is for people who want only some programs to use the VPN, for example because some websites are slow or don't work through it. You arrange programs by dragging them from one lane to the other.
 
+<p align="center"><img src="docs/screens/board-dark.png" width="800" alt="The SplitLane window. On the Via VPN lane, the main one: Steam, Epic Games Launcher, Discord and Firefox. On the Direct lane: Counter-Strike 2, Fortnite and Microsoft Edge. Each program shows its current speed."></p>
+
+Website: [splitlane-app.github.io](https://splitlane-app.github.io/) — what SplitLane does, in one page with screenshots, and the download.
+
 This is a beta.
 
 ## How it works
@@ -49,7 +53,7 @@ winget: coming soon.
 1. If the window shows **First-time setup**, click **Install the service** and confirm the Windows prompt. The installer normally does this for you, so this screen appears only when the service needs to be repaired.
 2. On **Connect a VPN**, choose how you connect: **Tailscale**, **Key or subscription**, **Configuration file** or **Your own VPS**. For a key, a subscription or a WireGuard file, see [Keys, subscriptions and WireGuard](#keys-subscriptions-and-wireguard); for a VPS you rent, see [Your own VPS](#your-own-vps). For Tailscale, click **Log in to Tailscale**. SplitLane's window opens the login page in your browser: log in to the tailnet that has your exit node. This logs in SplitLane's embedded node, a new device `<PC name>-splitlane`; the Tailscale app isn't involved. If your tailnet requires device approval, approve the device in the Tailscale admin console; the window continues by itself.
 3. Choose an exit node or a server, then click **Turn on split routing**.
-4. Drag programs onto the lanes. You can move a card from one lane to the other, drop an `.exe` file or a shortcut from Explorer onto a lane, or click **+ Add** to pick a program that is online now, an installed program or a file. The same actions are in the context menu of a card (**Send via VPN**, **Send direct**, **Unpin**) and work from the keyboard.
+4. Drag programs onto the lanes. You can move a card from one lane to the other, drop an `.exe` file or a shortcut from Explorer onto a lane, or click **+ Add** to pick a program that is online now, an installed program or a file. **Installed** also lists your Steam and Epic games, read from the launchers' own files (the Steam libraries and the Epic launcher's manifests), and a game's shortcut that Steam or Epic put on the desktop can be dropped onto a lane too. The same actions are in the context menu of a card (**Send via VPN**, **Send direct**, **Unpin**) and work from the keyboard.
 
 A pinned program stays on its lane; other programs follow the main lane (**make main** on the other lane switches it). By default a program means its whole folder, so its updaters and helper processes go the same way; you can change this in the program card. **Settings and connection** in the header (or **Settings…** in the tray menu) opens the **Connection** screen: the exit node, logging out of Tailscale, the servers and subscriptions of keys and WireGuard files, the language and the settings **Start when I sign in to Windows**, **Turn on split routing at startup**, **Check for updates automatically** and **Show notifications**.
 
@@ -223,5 +227,14 @@ Code signing: see the [Code signing policy](CODE_SIGNING_POLICY.md). Security is
 
   `.dev\` isn't committed. In dev mode the service doesn't check which program connects to its pipe, so `slctl` and the scenario check `node scripts/scenario.mjs` work against it.
 - **Update feed for tests.** `SPLITLANE_UPDATE_FEED=http://127.0.0.1:<port>` makes the window take releases from a local server instead of GitHub.
+- **Screenshots.** The pictures in `docs/screens` (and on the website) come from a demo mode of the window, `app/src/renderer/demo`: the real interface with invented data (the documentation address `203.0.113.10`) and a fake bridge, so it never starts the service, the pipe or the network. Its build goes to `app\out-demo`, never into `app\out` or the installer. To make them again, with the packages of `app` installed:
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File app\scripts\demo-icons.ps1
+  pnpm --dir app demo:build
+  pnpm --dir app demo:capture
+  ```
+
+  The first command extracts the icons of the demo programs installed on this PC into `app\src\renderer\demo\icons.local.json` (git-ignored, never committed or shipped); a program that isn't installed gets a letter tile. The last one loads each scene (`board`, `connection`, `vps-progress`, `vps-done`, `phone`) in a hidden Electron window, without SplitLane's main process, and writes `docs\screens\<scene>-dark.png`, 2400 px wide (1200 CSS px at zoom 2). Look at every picture before you commit it.
 - **CI.** `.github/workflows/build.yml` runs on every push to any branch, on pull requests, on `v*` tags and by hand (Actions → build → Run workflow), on `windows-latest`: the core with its SHA-256 checked, `go vet` and `go test` of the service, `scripts\build-installer.ps1`, then `scripts\test-installer.ps1` and the artifact `SplitLane-Setup-<version>` (the installer and its `.sha256`, kept 2 days, not made for pull requests). After a failure there is a small `test-installer-logs` artifact. The run summary shows the SHA-256 of the installer and the result of the check. On a tag `v<version>`, which must match `version` in `app/package.json`, the `release` job creates a draft release "SplitLane <version>" with the installer and its `.sha256`. To download an artifact: `gh run download <run id> -n SplitLane-Setup-<version>`.
 - **Installer check.** `scripts\test-installer.ps1 -Installer <path>` installs, reinstalls and uninstalls SplitLane silently and checks files, the task, the access list of the data folder, the Electron fuses and the result file `%ProgramData%\SplitLane\export\last-install.txt`. The last line is `TEST-OK`, `TEST-FAIL <step>: <what>` or `TEST-REFUSED: <reason>`. It changes the system and is meant for a CI runner: on a PC that already has SplitLane or Tailscale, it refuses without changing anything.
