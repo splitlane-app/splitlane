@@ -150,9 +150,8 @@ export function ConnectScreen(): React.JSX.Element | null {
  * «Подключение» (spec 9.5, 9.6, stage 3 spec 6), opened from the connection pill: the tiles of the methods, opened on
  * the connector in force, and the part of the chosen one. Tailscale: the device, the exit node and its change, logout
  * (only while routing is off); before the login (a user of the proxy list), the login as on «Подключите VPN». A key
- * or a file: the add, the servers with their choice and removal, the
- * subscriptions with their refresh and removal. Switching the connector is choosing a server or an exit node. Then
- * the settings of the window, «Язык» among them.
+ * or a file: the add, the servers with their choice and removal, the subscriptions with their refresh and removal.
+ * Switching the connector is choosing a server or an exit node. Then the settings of the window, «Язык» among them.
  */
 export function ConnectionScreen(): React.JSX.Element | null {
   const services = useServices()
