@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -90,8 +91,52 @@ func DefaultDeps(version string) Deps {
 	}
 }
 
-// kitArgs are the flags SplitLane runs the kit with (plan, Global Constraints).
+// kitArgs are the flags SplitLane runs the kit with (plan, Global Constraints); kitCommand adds --host
+// to them.
 const kitArgs = "--json --default-protocols vless,hy2 --auto-ports --harden --subscription"
+
+// notPublicIPv4 are the IPv4 ranges whose address is not the server's on the internet: "this
+// network", private, CGNAT (shared), loopback, link-local, multicast and reserved (the same ranges as
+// connector's notPublicIPv4).
+var notPublicIPv4 = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("224.0.0.0/3"),
+}
+
+// publicIPv4 is host as an IPv4 address on the internet, when it is an IPv4 literal outside
+// notPublicIPv4 (not a name, not IPv6).
+func publicIPv4(host string) (string, bool) {
+	a, err := netip.ParseAddr(host)
+	if err != nil || !a.Is4() {
+		return "", false
+	}
+	for _, p := range notPublicIPv4 {
+		if p.Contains(a) {
+			return "", false
+		}
+	}
+	return a.String(), true
+}
+
+// kitCommand is the command that runs the kit in the file name for a server at host: kitArgs, and
+// --host with the address typed when it is a public IPv4 address. The kit then takes that address for
+// its links instead of asking api.ipify.org, which a server without a public IPv4 address of its own
+// to go out from cannot answer, and whose error tells a novice to give --host. Any other host (a
+// name, an IPv6 or a private address) leaves the kit to find the address itself. The address is
+// netip's form of it, digits and dots only, so it needs no quotes.
+func kitCommand(name, host string) string {
+	cmd := "bash " + name + " " + kitArgs
+	if a, ok := publicIPv4(host); ok {
+		cmd += " --host " + a
+	}
+	return cmd
+}
 
 // tempName is what mktemp may answer. The name goes into command lines unquoted, so nothing else is
 // accepted.
@@ -291,7 +336,7 @@ func (s *setup) install(a admin) (*kitResult, *Failure) {
 // runKit runs the kit and reads its lines: steps go to the window, the result or the error line ends
 // it. The kit runs from a file, so bash takes its script from there and stdin is only sudo's.
 func (s *setup) runKit(a admin, name string) (*kitResult, *Failure) {
-	cmd := "bash " + name + " " + kitArgs
+	cmd := kitCommand(name, s.req.Host)
 	var stdin []byte
 	switch a {
 	case adminSudo:

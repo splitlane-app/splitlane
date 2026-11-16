@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,9 @@ const tempFile = "/tmp/splitlane-kit.Ab12Cd"
 
 // kitFlags are the flags SplitLane runs the kit with (plan, Global Constraints).
 const kitFlags = " --json --default-protocols vless,hy2 --auto-ports --harden --subscription"
+
+// hostFlag is what Run may add after kitFlags: --host with an IPv4 address.
+var hostFlag = regexp.MustCompile(`^ --host \d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$`)
 
 const osDebian12 = `PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
 NAME="Debian GNU/Linux"
@@ -481,7 +485,8 @@ func (f *fakeServer) remove(cmd string, _ []byte) fakeReply {
 // runKit plays sudo in front of the kit, then the kit.
 func (f *fakeServer) runKit(cmd string, stdin []byte) fakeReply {
 	prefix, rest, _ := strings.Cut(cmd, "bash ")
-	if rest != tempFile+kitFlags {
+	// the flags, and --host with a public IPv4 address typed for the server (TestRunKitHost)
+	if host, ok := strings.CutPrefix(rest, tempFile+kitFlags); !ok || host != "" && !hostFlag.MatchString(host) {
 		f.t.Errorf("the kit runs as %q", cmd)
 	}
 	switch prefix {

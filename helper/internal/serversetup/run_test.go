@@ -661,6 +661,66 @@ func TestRunPrivileges(t *testing.T) {
 	}
 }
 
+// TestRunKitHost: a public IPv4 address typed for the server goes to the kit as --host, so the kit
+// asks no api.ipify.org and its links have that address; a loopback or private address, a name and an
+// IPv6 address leave the kit to find the address itself.
+func TestRunKitHost(t *testing.T) {
+	cases := []struct{ host, flags string }{
+		{"203.0.113.7", kitFlags + " --host 203.0.113.7"},
+		{"8.8.8.8", kitFlags + " --host 8.8.8.8"},
+		{"127.0.0.1", kitFlags},
+		{"10.1.2.3", kitFlags},
+		{"192.168.1.10", kitFlags},
+		{"vps.example.com", kitFlags},
+		{"2001:db8::7", kitFlags},
+	}
+	for _, c := range cases {
+		t.Run(c.host, func(t *testing.T) {
+			f := newFakeServer(t, nil)
+			d := testDeps(t, nil)
+			d.Dial = func(ctx context.Context, network, _ string) (net.Conn, error) {
+				var dialer net.Dialer // every server of this test is the fake one
+				return dialer.DialContext(ctx, network, net.JoinHostPort("127.0.0.1", strconv.Itoa(f.port)))
+			}
+			req := passwordRequest(f, f.password)
+			req.Host = c.host
+			if _, _, fail := setupRun(context.Background(), req, d); fail != nil {
+				t.Fatalf("%+v", *fail)
+			}
+			var got []string
+			for _, cmd := range f.commands() {
+				if strings.HasPrefix(cmd, "bash ") {
+					got = append(got, cmd)
+				}
+			}
+			if want := []string{"bash " + tempFile + c.flags}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("the kit ran as %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestPublicIPv4: the ranges that are not the server's address on the internet, at their edges.
+func TestPublicIPv4(t *testing.T) {
+	public := []string{"1.1.1.1", "8.8.8.8", "9.255.255.255", "11.0.0.0", "100.63.255.255", "100.128.0.0",
+		"126.255.255.255", "128.0.0.1", "169.253.255.255", "169.255.0.0", "172.15.255.255", "172.32.0.0",
+		"192.0.2.10", "192.167.255.255", "192.169.0.0", "198.51.100.7", "203.0.113.7", "223.255.255.255"}
+	notPublic := []string{"0.0.0.0", "0.1.2.3", "10.0.0.0", "10.255.255.255", "100.64.0.0", "100.127.255.255",
+		"127.0.0.1", "127.255.255.255", "169.254.0.1", "172.16.0.0", "172.31.255.255", "192.168.0.0",
+		"192.168.255.255", "224.0.0.1", "239.255.255.255", "240.0.0.1", "255.255.255.255",
+		"vps.example.com", "2001:db8::7", "::ffff:203.0.113.7", "::1", ""}
+	for _, h := range public {
+		if a, ok := publicIPv4(h); !ok || a != h {
+			t.Errorf("publicIPv4(%q) = %q, %v; want the address, true", h, a, ok)
+		}
+	}
+	for _, h := range notPublic {
+		if a, ok := publicIPv4(h); ok {
+			t.Errorf("publicIPv4(%q) = %q, true; want false", h, a)
+		}
+	}
+}
+
 func TestRunKitResult(t *testing.T) {
 	body := testLinkHy2 + "\n"
 	if servers, _ := connector.ParseSubscription([]byte(body)); len(servers) == 0 {
