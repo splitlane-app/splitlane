@@ -168,7 +168,7 @@ Details, and how to delete everything: [PRIVACY.md](PRIVACY.md).
 - There is no kill switch. When the core crashes, traffic goes directly until SplitLane turns the exit node of the Tailscale app back on (about a second), then through that exit node until the core restarts. When SplitLane restarts the core itself (after a network change, when you change the exit node or the server), traffic goes through the exit node of the Tailscale app meanwhile. If the Tailscale app isn't installed or had no exit node selected, traffic goes directly in both cases.
 - An exit node or a server that reaches the internet from the same address as this PC can't be used.
 - If the Tailscale app used automatic exit node selection, a specific exit node is selected there after split routing is turned off.
-- If the Tailscale app is installed, SplitLane reads one of its settings through a debug command whose format can change. After you update Tailscale, turn split routing on and off once.
+- If the Tailscale app is installed, SplitLane reads some of its settings through a debug command whose format can change. After you update Tailscale, turn split routing on and off once.
 - Messages of the service (its log, the reasons the installer shows when it stops) are in English in both languages.
 
 ## Building from source
