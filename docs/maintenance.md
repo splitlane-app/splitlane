@@ -36,6 +36,8 @@ CI builds the service with the Go of `go-version` in `.github/workflows/build.ym
 
 Dependabot's grouped minor/patch PR is merged when CI is green. A major update of Electron comes alone: read its breaking changes, build the window and try it (the tray, the update banner, drag and drop, the Connection screen). When the upstream check reports the pinned Electron major out of support, that update is due: an unsupported Electron gets no Chromium security fixes.
 
+`@types/node` stays at the major of the Node inside Electron, which is also the major of `node-version` in `.github/workflows/build.yml`: types of a newer Node describe an API the window does not run on. Dependabot ignores its major updates (`.github/dependabot.yml`); raise it by hand together with the Electron major that brings a newer Node.
+
 ## Security alerts
 
 A Dependabot alert or a security release of a pinned project goes before other work: a fixed release of SplitLane, with a line about it in the release notes.
