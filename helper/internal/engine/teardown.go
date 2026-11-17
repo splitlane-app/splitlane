@@ -12,6 +12,8 @@ import (
 // stopping with reason restore_pending. It returns only after the confirmation or after the
 // user's explicit "disable without restore"; until then the core is not stopped.
 // An exit node the user selected himself in the meantime stays, and the journal goes (5.7).
+// A client the user disconnected never shows an exit node in its status: there the exit node back in
+// its settings is the confirmation (disconnectedHolds), and it works again once the client connects.
 func (e *Engine) restoreSystem() {
 	e.mu.Lock()
 	j := e.journal
@@ -38,6 +40,14 @@ func (e *Engine) restoreSystem() {
 			st, statusErr = e.d.Sys.Status(ctx)
 		}
 		cancel()
+		if setErr == nil && (statusErr != nil || !st.ExitNodeOn) && e.disconnectedHolds() {
+			e.mu.Lock()
+			e.st.SystemTailscale.Installed, e.st.SystemTailscale.ExitNodeOn = true, false
+			e.dropJournal()
+			e.mu.Unlock()
+			e.d.Log("the system client is disconnected: the exit node is back in its settings and works once it connects")
+			return
+		}
 		if statusErr == nil && st.ExitNodeOn {
 			e.mu.Lock()
 			e.st.SystemTailscale.Installed, e.st.SystemTailscale.ExitNodeOn = true, true
@@ -65,6 +75,16 @@ func (e *Engine) restoreSystem() {
 		case <-e.d.Clock.After(restoreEvery):
 		}
 	}
+}
+
+// disconnectedHolds reports whether the user disconnected the system client and its settings hold an
+// exit node (`tailscale debug prefs`, with its own time limit). Settings that cannot be read and a
+// client that is to connect but does not run yet say no: the status of the latter will confirm.
+func (e *Engine) disconnectedHolds() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	p, err := e.d.Sys.Prefs(ctx)
+	return err == nil && !p.WantRunning && p.ExitNode
 }
 
 // retryRestore wakes the restore loop for an attempt now ("Повторить"); skip asks it to give up.

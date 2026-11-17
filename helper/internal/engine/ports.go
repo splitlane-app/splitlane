@@ -174,9 +174,16 @@ type SysStatus struct {
 	ExitNodeIP string // IPv4 address of the selected exit node
 }
 
+// SysPrefs is what the saved settings of the system client say (spec 5.4 step 1).
+type SysPrefs struct {
+	WantRunning bool // false: the user disconnected the client; its status then never shows an exit node
+	ExitNode    bool // an exit node is selected in the settings, by address or by id
+}
+
 // SystemTailscale is the official client, called by its full path (package systs).
 type SystemTailscale interface {
 	Status(ctx context.Context) (SysStatus, error)
+	Prefs(ctx context.Context) (SysPrefs, error)
 	AllowLAN(ctx context.Context) (bool, error)
 	SetExitNode(ctx context.Context, ip string, allowLAN bool) error
 	ClearExitNode(ctx context.Context) error

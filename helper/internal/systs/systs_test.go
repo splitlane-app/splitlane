@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/windows"
+
+	"splitlane/helper/internal/engine"
 )
 
 // Shapes of the real output of Tailscale 1.104 (values replaced by documentation ones).
@@ -19,6 +21,12 @@ const (
 	statusOff     = `{"BackendState":"Running","ExitNodeStatus":null}`
 	statusStopped = `{"BackendState":"Stopped","ExitNodeStatus":{"TailscaleIPs":["100.64.0.1/32"]}}`
 	prefs         = `{"ControlURL":"https://controlplane.tailscale.com","ExitNodeID":"nX","ExitNodeIP":"","ExitNodeAllowLANAccess":true,"CorpDNS":false}`
+	// A client the user disconnected keeps the exit node in its settings: by address until it has
+	// resolved it, by id after.
+	prefsDownByIP = `{"RouteAll":false,"ExitNodeID":"","ExitNodeIP":"100.64.0.1","ExitNodeAllowLANAccess":true,"WantRunning":false,"LoggedOut":false}`
+	prefsDownByID = `{"RouteAll":false,"ExitNodeID":"nX","ExitNodeIP":"","ExitNodeAllowLANAccess":true,"WantRunning":false,"LoggedOut":false}`
+	prefsDownNone = `{"RouteAll":false,"ExitNodeID":"","ExitNodeIP":"","ExitNodeAllowLANAccess":true,"WantRunning":false,"LoggedOut":false}`
+	prefsUp       = `{"RouteAll":true,"ExitNodeID":"nX","ExitNodeIP":"","ExitNodeAllowLANAccess":true,"WantRunning":true,"LoggedOut":false}`
 )
 
 type call struct{ args []string }
@@ -140,6 +148,34 @@ func TestStatusNotInstalledOrFailing(t *testing.T) {
 	st, err := failing.Status(context.Background())
 	if err == nil || !st.Installed || st.ExitNodeOn {
 		t.Fatalf("a failing client counts as no exit node: %+v %v", st, err)
+	}
+}
+
+// Spec 5.4 step 1: the settings tell a client the user disconnected (its status never shows an exit
+// node) and whether an exit node is selected there.
+func TestPrefs(t *testing.T) {
+	cases := map[string]struct {
+		out  string
+		want engine.SysPrefs
+	}{
+		"disconnected, by address": {prefsDownByIP, engine.SysPrefs{WantRunning: false, ExitNode: true}},
+		"disconnected, by id":      {prefsDownByID, engine.SysPrefs{WantRunning: false, ExitNode: true}},
+		"disconnected, none":       {prefsDownNone, engine.SysPrefs{WantRunning: false, ExitNode: false}},
+		"connected":                {prefsUp, engine.SysPrefs{WantRunning: true, ExitNode: true}},
+	}
+	for name, c := range cases {
+		client, _ := fake(t, map[string]string{"debug prefs": c.out}, nil)
+		if got, err := client.Prefs(context.Background()); err != nil || got != c.want {
+			t.Errorf("%s: %+v %v", name, got, err)
+		}
+	}
+	broken, _ := fake(t, map[string]string{"debug prefs": `{"CorpDNS":false}`}, nil)
+	if _, err := broken.Prefs(context.Background()); err == nil {
+		t.Fatal("a missing WantRunning must be an error, not a disconnected client")
+	}
+	failing, _ := fake(t, nil, errors.New("service stopped"))
+	if _, err := failing.Prefs(context.Background()); err == nil {
+		t.Fatal("a failing client must be an error")
 	}
 }
 

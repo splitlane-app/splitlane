@@ -79,6 +79,54 @@ func TestRestoreConfirmedOnALaterAttempt(t *testing.T) {
 	}
 }
 
+// 5.4 step 1: a system client the user disconnected never shows an exit node in its status. The exit
+// node back in its settings is the confirmation: no restore_pending, the core stops, the journal goes.
+func TestRestoreIntoADisconnectedClientIsConfirmedByItsSettings(t *testing.T) {
+	h := newHarness(t)
+	p := h.running()
+	h.sys.set(func(s *fakeSys) { s.stopped = true })
+	disable(h)
+	h.waitPhase(protocol.PhaseOff)
+	if h.sawReason(protocol.ReasonRestorePending) || h.rec.count("sys:set") != 1 {
+		t.Fatalf("one restore command and no restore_pending: %v", h.rec.list())
+	}
+	if p.alive() || h.store.hasJournal() {
+		t.Fatal("the core stops and the journal is deleted")
+	}
+	if on, ip := systemExitNode(h); !on || ip != exitNode {
+		t.Fatalf("the exit node must be back in the client's settings: %v %s", on, ip)
+	}
+	if h.e.State().SystemTailscale.ExitNodeOn {
+		t.Fatal("a disconnected client has no exit node on")
+	}
+}
+
+// The settings confirm only a disconnected client that holds the exit node: one where the command
+// changed nothing, one whose settings cannot be read and one that is to connect but does not run yet
+// (its status will confirm) keep the restore unconfirmed and the core running.
+func TestSettingsDoNotConfirmWithoutADisconnectedClientHoldingTheExitNode(t *testing.T) {
+	cases := map[string]func(s *fakeSys){
+		"the command changed nothing": func(s *fakeSys) { s.stopped, s.ignoreSet = true, true },
+		"settings not read":           func(s *fakeSys) { s.stopped, s.prefsErr = true, errBoom },
+		"the client still starts":     func(s *fakeSys) { s.starting = true },
+	}
+	for name, set := range cases {
+		h := newHarness(t)
+		p := h.running()
+		h.sys.set(set)
+		disable(h)
+		h.waitFor(name+": restore_pending", func() bool {
+			s := h.e.State()
+			return s.Phase == protocol.PhaseStopping && s.Reason != nil && s.Reason.Code == protocol.ReasonRestorePending
+		})
+		if !p.alive() || !h.store.hasJournal() {
+			t.Fatalf("%s: the core must keep running and the journal must stay", name)
+		}
+		h.e.retryRestore(true)
+		h.waitPhase(protocol.PhaseOff)
+	}
+}
+
 // 5.7: an exit node the user selected himself (phase blocked) stays as it is; the journal goes.
 func TestUsersOwnExitNodeIsKept(t *testing.T) {
 	h := newHarness(t)

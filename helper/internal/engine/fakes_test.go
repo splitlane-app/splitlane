@@ -699,10 +699,13 @@ type fakeSys struct {
 	rec       *recorder
 	store     *fakeStore
 	installed bool
-	on        bool
+	on        bool // the exit node of the settings; the status shows it unless stopped or starting
 	ip        string
 	allowLAN  bool
+	stopped   bool // the user disconnected the client: the exit node stays in the settings only
+	starting  bool // the client is to connect but does not run yet: the status shows no exit node
 	statusErr error
+	prefsErr  error
 	setErr    error
 	ignoreSet bool // `tailscale set` reports success but nothing changes
 	clearErr  error
@@ -715,11 +718,22 @@ func (s *fakeSys) Status(ctx context.Context) (SysStatus, error) {
 	if s.statusErr != nil {
 		return SysStatus{Installed: s.installed}, s.statusErr
 	}
-	st := SysStatus{Installed: s.installed, ExitNodeOn: s.on}
-	if s.on {
+	on := s.on && !s.stopped && !s.starting
+	st := SysStatus{Installed: s.installed, ExitNodeOn: on}
+	if on {
 		st.ExitNodeIP = s.ip
 	}
 	return st, nil
+}
+
+func (s *fakeSys) Prefs(ctx context.Context) (SysPrefs, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rec.add("sys:prefs")
+	if s.prefsErr != nil {
+		return SysPrefs{}, s.prefsErr
+	}
+	return SysPrefs{WantRunning: !s.stopped, ExitNode: s.on}, nil
 }
 
 func (s *fakeSys) AllowLAN(ctx context.Context) (bool, error) {

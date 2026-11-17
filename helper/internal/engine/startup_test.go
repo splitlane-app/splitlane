@@ -48,6 +48,24 @@ func TestStartAfterHelperDiedBetweenSteps6And9(t *testing.T) {
 	}
 }
 
+// The owner's PC, 2026-11-17: routing was on at the shutdown, and the user had disconnected the
+// system client before it. The start-up found the journal and waited an hour in stopping for a
+// status that a disconnected client never gives. The exit node in the client's settings confirms the
+// restore: the start-up ends in off at once, where the window's "enable on start" takes over.
+func TestStartWithJournalAndDisconnectedSystemClientEndsInOff(t *testing.T) {
+	h := newHarness(t)
+	h.store.journal = &store.Journal{ExitNode: exitNode, AllowLAN: true}
+	h.sys.set(func(s *fakeSys) { s.stopped = true }) // the session end has put the exit node back into the settings
+	h.e.Start()
+	h.waitPhase(protocol.PhaseOff)
+	if got := strings.Join(h.phases(), ","); got != "stopping,off" || h.sawReason(protocol.ReasonRestorePending) {
+		t.Fatalf("phases %s, events %v", got, h.rec.list())
+	}
+	if h.store.hasJournal() {
+		t.Fatal("journal must be deleted")
+	}
+}
+
 // The previous helper failed while on ("was on" set): restore, stop the old core, enable again.
 func TestStartAfterCrashWhileOn(t *testing.T) {
 	h := newHarness(t)

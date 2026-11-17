@@ -170,6 +170,25 @@ func ParseStatus(out []byte) (engine.SysStatus, error) {
 	return st, nil
 }
 
+// Prefs reads WantRunning and the exit node of the settings from `tailscale debug prefs` (5.4 step 1):
+// a client the user disconnected keeps the exit node there, by address (ExitNodeIP) until it has
+// resolved it, by id (ExitNodeID) after, and never shows it in its status.
+func (c *Client) Prefs(ctx context.Context) (engine.SysPrefs, error) {
+	out, err := c.Run(ctx, c.Exe, "debug", "prefs")
+	if err != nil {
+		return engine.SysPrefs{}, err
+	}
+	var p struct {
+		WantRunning *bool
+		ExitNodeID  string
+		ExitNodeIP  string
+	}
+	if err := json.Unmarshal(out, &p); err != nil || p.WantRunning == nil {
+		return engine.SysPrefs{}, fmt.Errorf("tailscale debug prefs: no WantRunning (%v)", err)
+	}
+	return engine.SysPrefs{WantRunning: *p.WantRunning, ExitNode: p.ExitNodeID != "" || p.ExitNodeIP != ""}, nil
+}
+
 // AllowLAN reads ExitNodeAllowLANAccess from `tailscale debug prefs` (it is not in status, 5.3 step 2).
 func (c *Client) AllowLAN(ctx context.Context) (bool, error) {
 	out, err := c.Run(ctx, c.Exe, "debug", "prefs")
