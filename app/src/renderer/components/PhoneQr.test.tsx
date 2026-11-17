@@ -53,7 +53,8 @@ test('Esc closes it, focus goes back to the button and the address is gone from 
   button().focus()
   fireEvent.click(button())
   const dialog = await screen.findByRole('dialog')
-  expect(dialog.contains(document.activeElement)).toBe(true)
+  // the focus moves in an effect (useDialog), which can run after the dialog is already in the DOM
+  await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
   fireEvent.keyDown(dialog, { key: 'Escape' })
   expect(screen.queryByRole('dialog')).toBeNull()
   expect(document.activeElement).toBe(button())
