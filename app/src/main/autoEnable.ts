@@ -9,11 +9,16 @@ export interface AutoEnableDeps {
 const RETRY_MS = 10_000
 const WINDOW_MS = 120_000
 
-/** "Enable splitting on start": one cycle per window run (spec 9.6). */
+/**
+ * "Enable splitting on start": one cycle per window run (spec 9.6). A helper that is still in the
+ * stopping of its own start-up (it gives the system exit node back, spec 5.7) is waited for, up to
+ * 2 minutes: the cycle begins when that stopping ends in off.
+ */
 export class AutoEnable {
   private started = false
   private active = false
   private startedAt = 0
+  private waitingSince: number | null = null
   private cancel: (() => void) | null = null
 
   constructor(private readonly d: AutoEnableDeps) {}
@@ -21,13 +26,22 @@ export class AutoEnable {
   onReady(state: HelperState, setting: boolean): void {
     if (!setting || this.started) return
     this.started = true
+    if (state.phase === 'stopping') {
+      this.waitingSince = this.d.now()
+      return
+    }
     if (state.phase !== 'off') return
-    this.active = true
-    this.startedAt = this.d.now()
-    this.attempt()
+    this.begin()
   }
 
   onState(state: HelperState): void {
+    if (this.waitingSince !== null) {
+      if (state.phase === 'stopping') return
+      const waited = this.d.now() - this.waitingSince
+      this.waitingSince = null
+      if (state.phase === 'off' && waited < WINDOW_MS) this.begin()
+      return
+    }
     if (!this.active) return
     if (state.phase === 'error' && state.reason?.code === 'no_default_route') {
       if (this.cancel || this.d.now() - this.startedAt >= WINDOW_MS) {
@@ -51,8 +65,15 @@ export class AutoEnable {
 
   stop(): void {
     this.active = false
+    this.waitingSince = null
     this.cancel?.()
     this.cancel = null
+  }
+
+  private begin(): void {
+    this.active = true
+    this.startedAt = this.d.now()
+    this.attempt()
   }
 
   private attempt(): void {

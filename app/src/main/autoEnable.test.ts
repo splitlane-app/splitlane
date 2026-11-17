@@ -60,6 +60,56 @@ describe('AutoEnable', () => {
     expect(t.calls()).toBe(0)
   })
 
+  // The owner's PC, 2026-11-17: the window started at logon while the helper's start-up was still
+  // giving the system exit node back (phase stopping, spec 5.7), and the setting did nothing.
+  it('waits for the stopping of the helper start-up to end in off, then enables once', () => {
+    const s = setup()
+    s.a.onReady(st('stopping'), true)
+    expect(s.calls()).toBe(0)
+    s.a.onState(st('stopping', 'restore_pending'))
+    expect(s.calls()).toBe(0)
+    expect(s.a.retrying()).toBe(false)
+    s.at(60_000)
+    s.a.onState(st('off'))
+    expect(s.calls()).toBe(1)
+    s.a.onState(st('starting'))
+    s.a.onState(st('on'))
+    s.a.onState(st('off'))
+    expect(s.calls()).toBe(1)
+  })
+
+  it('gives the wait up when stopping ends in another phase, lasts 2 minutes, or on stop', () => {
+    const failed = setup()
+    failed.a.onReady(st('stopping'), true)
+    failed.a.onState(st('error', 'adapter_left'))
+    failed.a.onState(st('off'))
+    expect(failed.calls()).toBe(0)
+
+    const late = setup()
+    late.a.onReady(st('stopping'), true)
+    late.at(120_000)
+    late.a.onState(st('off'))
+    expect(late.calls()).toBe(0)
+
+    const stopped = setup()
+    stopped.a.onReady(st('stopping'), true)
+    stopped.a.stop()
+    stopped.a.onState(st('off'))
+    expect(stopped.calls()).toBe(0)
+  })
+
+  it('retries no_default_route after the wait as after a plain start', () => {
+    const s = setup()
+    s.a.onReady(st('stopping'), true)
+    s.at(30_000)
+    s.a.onState(st('off'))
+    s.a.onState(st('error', 'no_default_route'))
+    expect(s.pending()).toBe(true)
+    s.at(40_000)
+    s.fire()
+    expect(s.calls()).toBe(2)
+  })
+
   it('retries no_default_route every 10 s for 2 minutes', () => {
     const s = setup()
     s.a.onReady(st('off'), true)
