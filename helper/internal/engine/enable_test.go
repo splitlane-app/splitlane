@@ -109,12 +109,16 @@ func TestEnableWithoutSystemExitNode(t *testing.T) {
 // 5.3 step 1 and section 10 row 1: a refusal leaves the system untouched.
 func TestPreflightRefusals(t *testing.T) {
 	cases := map[string]func(h *harness){
-		protocol.ReasonNotLoggedIn:       func(h *harness) { h.store.state.LoggedIn = false },
-		protocol.ReasonNoExitNode:        func(h *harness) { h.store.state.SelectedExitNode = "" },
-		protocol.ReasonNoDefaultRoute:    func(h *harness) { h.host.noRoute = 1 },
-		protocol.ReasonIPForwarding:      func(h *harness) { h.host.forwarding = true },
-		protocol.ReasonOtherCore:         func(h *harness) { h.host.otherCore = true },
-		protocol.ReasonSystemDNSOverride: func(h *harness) { h.host.dnsOverride = true },
+		protocol.ReasonNotLoggedIn:    func(h *harness) { h.store.state.LoggedIn = false },
+		protocol.ReasonNoExitNode:     func(h *harness) { h.store.state.SelectedExitNode = "" },
+		protocol.ReasonNoDefaultRoute: func(h *harness) { h.host.noRoute = 1 },
+		protocol.ReasonIPForwarding:   func(h *harness) { h.host.forwarding = true },
+		protocol.ReasonOtherCore:      func(h *harness) { h.host.otherCore = true },
+		// a rule for all names with no exit node of the system client behind it is the tailnet's override
+		protocol.ReasonSystemDNSOverride: func(h *harness) {
+			h.host.dnsOverride = true
+			h.sys.set(func(s *fakeSys) { s.on = false })
+		},
 	}
 	for code, change := range cases {
 		h := newHarness(t)
@@ -126,6 +130,52 @@ func TestPreflightRefusals(t *testing.T) {
 			t.Errorf("%s: the system must stay untouched: %v", code, h.rec.list())
 		}
 	}
+}
+
+// 5.3 steps 1 and 6: the system client with its DNS management on keeps a DNS rule for all names
+// while it uses an exit node and drops it when step 6 switches that exit node off (appendix A,
+// 2026-11-19). That rule is not a refusal: the enable waits for it to go, then flushes the DNS cache.
+func TestEnableWithTheDNSRuleOfTheSystemExitNode(t *testing.T) {
+	for name, linger := range map[string]int{"gone at once": 0, "gone after a few looks": 3} {
+		h := newHarness(t)
+		h.host.exitNodeDNS, h.host.dnsLinger = true, linger
+		h.load()
+		startEnable(h)
+		h.waitPhase(protocol.PhaseOn)
+		clear, gone, flush := h.rec.index("sys:clear"), h.rec.index("dns:rule gone"), h.rec.index("dns:flush")
+		if !(clear >= 0 && clear < gone && gone < flush) {
+			t.Errorf("%s: the rule must go after the switch and before the DNS flush: %v", name, h.rec.list())
+		}
+	}
+}
+
+// 5.3 step 6: a rule for all names that stays after the system exit node is off is the tailnet's own
+// override: system_dns_override, and 5.4 stops the core and gives the exit node back.
+func TestDNSRuleThatOutlivesTheSystemExitNodeIsARefusal(t *testing.T) {
+	h := newHarness(t)
+	h.host.dnsOverride = true
+	h.load()
+	startEnable(h)
+	wantError(t, h, protocol.ReasonSystemDNSOverride)
+	clear, set := h.rec.index("sys:clear"), h.rec.index("sys:set 100.64.0.1 true")
+	if !(clear >= 0 && clear < set) || h.core.last().alive() {
+		t.Fatalf("the exit node must be switched off, then given back, and the core stopped: %v", h.rec.list())
+	}
+}
+
+// 5.3 step 6: a core that exits while the enable waits for the rule to go is a crash, not an override
+// (the watcher gives the exit node back at once, and the rule comes back with it).
+func TestCrashWhileWaitingForTheDNSRule(t *testing.T) {
+	h := newHarness(t)
+	h.host.exitNodeDNS, h.host.dnsLinger = true, 5
+	h.host.onDNSLook = func(n int) {
+		if n == 3 { // look 1 is step 1; looks 2 and 3 come after the switch
+			h.core.last().crash()
+		}
+	}
+	h.load()
+	startEnable(h)
+	wantError(t, h, protocol.ReasonCoreCrashed)
 }
 
 // Unattended enable waits up to 60 s for a default route.

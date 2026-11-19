@@ -16,6 +16,8 @@ import (
 const (
 	startWait      = 30 * time.Second       // 5.3 step 4
 	proveWait      = 45 * time.Second       // 5.3 step 5
+	dnsRuleWait    = 10 * time.Second       // 5.3 step 6
+	dnsRuleEvery   = 250 * time.Millisecond // 5.3 step 6
 	switchWait     = 45 * time.Second       // 5.3 step 8
 	routeWait      = 60 * time.Second       // 5.3 step 1, unattended enable
 	restoreEvery   = 5 * time.Second        // 5.4 step 1, 5.7

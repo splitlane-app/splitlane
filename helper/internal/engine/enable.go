@@ -76,6 +76,14 @@ func (e *Engine) enable(ctx context.Context, unattended bool) *protocol.Reason {
 		}
 	}
 	cancel()
+	// The last check of step 1 needs step 2. The system client keeps a DNS rule for all names when
+	// the tailnet overrides DNS, and also while it uses an exit node with its DNS management on
+	// (appendix A, 2026-11-19). The second kind goes with the exit node at step 6, so with an exit
+	// node on the answer waits until then.
+	dnsRule := e.d.Host.DNSOverride()
+	if dnsRule && !sys.ExitNodeOn {
+		return reason(protocol.ReasonSystemDNSOverride)
+	}
 	r, directIP, why := e.startAndProve(ctx)
 	if why != nil {
 		return why
@@ -116,11 +124,35 @@ func (e *Engine) enable(ctx context.Context, unattended bool) *protocol.Reason {
 		e.st.SystemTailscale.Installed, e.st.SystemTailscale.ExitNodeOn = true, false
 		r.cleared = true // from now on the watcher of this core gives the exit node back at once (5.5)
 		e.mu.Unlock()
+		if dnsRule {
+			if why := e.waitDNSRule(ctx, r); why != nil {
+				return why
+			}
+		}
 	}
 	// Step 7.
 	e.flushDNS()
 	// Step 8.
 	return e.checkSwitch(ctx, r, directIP)
+}
+
+// waitDNSRule ends step 6 for a system client that had a DNS rule for all names at step 1: the rule
+// of its exit node goes soon after the exit node is off. A rule that is still there after dnsRuleWait
+// is the tailnet's override, under which names would go past the core's adapter and be blocked.
+func (e *Engine) waitDNSRule(ctx context.Context, r *coreRun) *protocol.Reason {
+	deadline := e.d.Clock.Now().Add(dnsRuleWait)
+	for e.d.Host.DNSOverride() {
+		if exited(r.proc) {
+			return reason(protocol.ReasonCoreCrashed)
+		}
+		if !e.d.Clock.Now().Before(deadline) {
+			return reason(protocol.ReasonSystemDNSOverride)
+		}
+		if !e.sleep(ctx, dnsRuleEvery) {
+			return errCancelled
+		}
+	}
+	return nil
 }
 
 // preflight is step 1 of 5.3. The connector decides the first checks (stage 3 part 1, section 4): the
@@ -160,8 +192,6 @@ func (e *Engine) preflight(ctx context.Context, unattended bool) *protocol.Reaso
 		return reason(protocol.ReasonIPForwarding)
 	case e.d.Host.CoreRunning():
 		return reason(protocol.ReasonOtherCore)
-	case e.d.Host.DNSOverride():
-		return reason(protocol.ReasonSystemDNSOverride)
 	}
 	return nil
 }

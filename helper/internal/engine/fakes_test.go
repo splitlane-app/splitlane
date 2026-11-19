@@ -770,6 +770,13 @@ func (s *fakeSys) ClearExitNode(ctx context.Context) error {
 	return nil
 }
 
+// exitNodeSet: the client is connected with an exit node in its settings; its DNS rules follow that.
+func (s *fakeSys) exitNodeSet() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.on && !s.stopped
+}
+
 func (s *fakeSys) RestoreCommand(ip string, allowLAN bool) string {
 	return fmt.Sprintf("tailscale set --exit-node=%s --exit-node-allow-lan-access=%v", ip, allowLAN)
 }
@@ -847,7 +854,14 @@ type fakeHost struct {
 	core         *fakeCore
 	noRoute      int // so many next checks find no default route; -1: never a route
 	forwarding   bool
-	dnsOverride  bool
+	sys          *fakeSys
+	dnsOverride  bool        // the tailnet overrides DNS for all names: the rule for all names is always there
+	exitNodeDNS  bool        // the system client manages DNS: its rule for all names is there while its exit node is on
+	dnsLinger    int         // ... and for so many more looks after that exit node went off
+	lingerLeft   int         // looks that still find the rule of an exit node that is off already
+	ruleSeen     bool        // the last look found the rule
+	dnsLooks     int         // looks so far
+	onDNSLook    func(n int) // called at look n (from 1), before the look
 	otherCore    bool
 	adapterStuck bool
 	staleAdapter bool  // a forced end of a core left its Wintun device behind; the next removal takes it
@@ -868,8 +882,37 @@ func (h *fakeHost) HasDefaultRoute() bool {
 }
 
 func (h *fakeHost) IPForwarding() bool   { h.mu.Lock(); defer h.mu.Unlock(); return h.forwarding }
-func (h *fakeHost) DNSOverride() bool    { h.mu.Lock(); defer h.mu.Unlock(); return h.dnsOverride }
 func (h *fakeHost) AdapterPresent() bool { return h.adapterStuck || h.core.anyAlive() }
+
+// DNSOverride is the system client's DNS rule for all names as it was seen on the PC (appendix A,
+// 2026-11-19): always there when the tailnet overrides DNS for all names; with the client's DNS
+// management on, also there while the client uses an exit node, and gone soon after that exit node
+// is switched off. The first look that finds the rule gone is recorded.
+func (h *fakeHost) DNSOverride() bool {
+	h.mu.Lock()
+	h.dnsLooks++
+	n, hook := h.dnsLooks, h.onDNSLook
+	h.mu.Unlock()
+	if hook != nil {
+		hook(n)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	rule := h.dnsOverride
+	if !rule && h.exitNodeDNS {
+		if h.sys.exitNodeSet() {
+			h.lingerLeft, rule = h.dnsLinger, true
+		} else if h.lingerLeft > 0 {
+			h.lingerLeft--
+			rule = true
+		}
+	}
+	if h.ruleSeen && !rule {
+		h.rec.add("dns:rule gone")
+	}
+	h.ruleSeen = rule
+	return rule
+}
 
 // CoreRunning sees a foreign sing-box.exe (otherCore) and, as the real check does, a core of the
 // setup mode that still runs: step 1 of 5.3 must never meet one (spec 7).
@@ -935,7 +978,7 @@ func newHarness(t *testing.T) *harness {
 	h.core = &fakeCore{rec: h.rec, clash: h.clash, node: newFakeNode(h.rec, h.clock)}
 	h.sys = &fakeSys{rec: h.rec, store: h.store, installed: true, on: true, ip: exitNode, allowLAN: true}
 	h.probe = &fakeProbe{vpn: []ProbeResult{atVPN}, direct: []ProbeResult{atDirect}, self: []ProbeResult{atVPN}}
-	h.host = &fakeHost{rec: h.rec, core: h.core}
+	h.host = &fakeHost{rec: h.rec, core: h.core, sys: h.sys}
 	h.fetch = &fakeFetcher{rec: h.rec, bodies: map[string]string{}, errs: map[string]error{}}
 	h.e = New(Deps{
 		Clock: h.clock, Store: h.store, Core: h.core, Sys: h.sys, Probe: h.probe, Host: h.host, Fetch: h.fetch,
