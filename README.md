@@ -160,7 +160,7 @@ Details, and how to delete everything: [PRIVACY.md](PRIVACY.md).
 - Installation only in `%ProgramFiles%\SplitLane`.
 - The embedded node is a separate device in your tailnet with its own login expiry. When it expires, SplitLane asks you to log in again.
 - DNS is shared by both lanes. While the VPN lane works, names are resolved through it, so content delivery networks may give programs on the Direct lane servers near the VPN server. When the VPN server is unreachable or **All direct** is on, all names go to your ISP's DNS.
-- If the Tailscale app manages DNS (its default), MagicDNS names don't resolve while split routing is on, and if your tailnet overrides DNS for all names, split routing doesn't turn on. It has been tested only with DNS management turned off in the Tailscale app.
+- If the Tailscale app manages DNS (its default), MagicDNS names don't resolve while split routing is on; your devices stay reachable by their Tailscale addresses. If your tailnet also overrides DNS for all names (global nameservers that override local DNS, set in the admin console), split routing doesn't turn on, and SplitLane says why. That last case hasn't been tested on a real tailnet.
 - WSL and virtual machines follow the main lane. So do connections whose program the core can't identify (for example `ping`).
 - Programs that go online through shared system processes (for example, the Edge web component) can't be separated from each other.
 - Traffic to private, local and Tailscale addresses always goes directly.
